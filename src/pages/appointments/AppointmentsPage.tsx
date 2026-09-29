@@ -8,41 +8,34 @@ import {
   Table2,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { AddClientScheduleModal } from '@/components/booking/AddClientScheduleModal'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Drawer } from '@/components/ui/Drawer'
-import { demoBranches, demoStaff, demoTreatments } from '@/constants/demoData'
 import {
-  createAppointment,
   listAppointments,
   subscribeAppointments,
   toDateKey,
   updateAppointmentStatus,
 } from '@/services/appointmentService'
-import { getClients } from '@/services/clientService'
 import type { Appointment, AppointmentStatus } from '@/types'
 import { cn } from '@/utils/cn'
 
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const
 
-const timeSlots = [
-  '09:00 AM',
-  '10:00 AM',
-  '11:00 AM',
-  '12:00 PM',
-  '01:00 PM',
-  '02:00 PM',
-  '03:00 PM',
-  '04:00 PM',
-  '05:00 PM',
-]
-
 type ScheduleLegend = 'show' | 'no_show' | 'pending'
 
 function legendForStatus(status: AppointmentStatus): ScheduleLegend {
   if (status === 'no_show' || status === 'cancelled') return 'no_show'
-  if (status === 'completed' || status === 'checked_in' || status === 'in_progress') return 'show'
+  if (
+    status === 'completed' ||
+    status === 'checked_in' ||
+    status === 'in_progress' ||
+    status === 'confirmed'
+  ) {
+    return 'show'
+  }
   return 'pending'
 }
 
@@ -93,17 +86,6 @@ export function AppointmentsPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [selectedAppt, setSelectedAppt] = useState<Appointment | null>(null)
   const [addOpen, setAddOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
-
-  const clients = useMemo(() => getClients(), [])
-  const [clientId, setClientId] = useState(clients[0]?.id ?? '')
-  const [branchId, setBranchId] = useState(demoBranches[0]?.id ?? '')
-  const [treatmentId, setTreatmentId] = useState(demoTreatments[0]?.id ?? '')
-  const [staffId, setStaffId] = useState(
-    demoStaff.find((s) => s.role === 'DOCTOR' || s.role === 'AESTHETICIAN')?.id ?? '',
-  )
-  const [scheduleTime, setScheduleTime] = useState('09:00 AM')
-  const [scheduleNotes, setScheduleNotes] = useState('')
 
   const cells = useMemo(() => buildMonthCells(monthCursor), [monthCursor])
   const today = useMemo(() => {
@@ -162,34 +144,9 @@ export function AppointmentsPage() {
     }
   }
 
-  async function handleAddSchedule() {
-    const client = clients.find((c) => c.id === clientId)
-    if (!client) {
-      toast.error('Select a client')
-      return
-    }
-    setSaving(true)
-    try {
-      await createAppointment({
-        clientId: client.id,
-        clientName: client.fullName,
-        branchId,
-        treatmentId,
-        staffId: staffId || undefined,
-        date: toDateKey(selectedDate),
-        timeLabel: scheduleTime,
-        status: 'pending',
-        notes: scheduleNotes || 'Added from Client Scheduling',
-      })
-      toast.success('Schedule added')
-      setAddOpen(false)
-      setScheduleNotes('')
-      await refresh()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save schedule')
-    } finally {
-      setSaving(false)
-    }
+  async function handleAddSaved() {
+    toast.success('Schedule added')
+    await refresh()
   }
 
   function goToday() {
@@ -588,122 +545,12 @@ export function AppointmentsPage() {
         ) : null}
       </Drawer>
 
-      <Drawer
+      <AddClientScheduleModal
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        title="Add Schedule"
-        footer={
-          <div className="flex gap-2">
-            <Button variant="secondary" className="flex-1" onClick={() => setAddOpen(false)}>
-              Cancel
-            </Button>
-            <Button className="flex-1" disabled={saving} onClick={() => void handleAddSchedule()}>
-              {saving ? 'Saving…' : 'Save Schedule'}
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-3">
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide">Client</span>
-            <select
-              className="h-11 w-full rounded-[10px] border border-border px-3 text-sm"
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-            >
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.fullName}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide">Branch</span>
-            <select
-              className="h-11 w-full rounded-[10px] border border-border px-3 text-sm"
-              value={branchId}
-              onChange={(e) => setBranchId(e.target.value)}
-            >
-              {demoBranches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide">Treatment</span>
-            <select
-              className="h-11 w-full rounded-[10px] border border-border px-3 text-sm"
-              value={treatmentId}
-              onChange={(e) => setTreatmentId(e.target.value)}
-            >
-              {demoTreatments.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide">Specialist</span>
-            <select
-              className="h-11 w-full rounded-[10px] border border-border px-3 text-sm"
-              value={staffId}
-              onChange={(e) => setStaffId(e.target.value)}
-            >
-              <option value="">Unassigned</option>
-              {demoStaff
-                .filter((s) => s.role === 'DOCTOR' || s.role === 'AESTHETICIAN')
-                .map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.fullName}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide">Date</span>
-            <input
-              type="date"
-              className="h-11 w-full rounded-[10px] border border-border px-3 text-sm"
-              value={toDateKey(selectedDate)}
-              onChange={(e) => {
-                const [y, m, d] = e.target.value.split('-').map(Number)
-                if (y && m && d) {
-                  const next = new Date(y, m - 1, d)
-                  setSelectedDate(next)
-                  setMonthCursor(startOfMonth(next))
-                }
-              }}
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide">Time</span>
-            <select
-              className="h-11 w-full rounded-[10px] border border-border px-3 text-sm"
-              value={scheduleTime}
-              onChange={(e) => setScheduleTime(e.target.value)}
-            >
-              {timeSlots.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide">Notes</span>
-            <textarea
-              className="min-h-[80px] w-full rounded-[10px] border border-border px-3 py-2 text-sm"
-              placeholder="Optional notes..."
-              value={scheduleNotes}
-              onChange={(e) => setScheduleNotes(e.target.value)}
-            />
-          </label>
-        </div>
-      </Drawer>
+        onSaved={handleAddSaved}
+        defaultDate={selectedDate}
+      />
     </div>
   )
 }

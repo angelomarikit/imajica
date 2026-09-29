@@ -191,6 +191,7 @@ export function BookAppointmentModal({
         clientEmail: session.email,
         branchId,
         treatmentId,
+        treatmentName: selectedTreatment?.name || 'Consultation',
         date: toDateKey(selectedDate),
         timeLabel: selectedTime,
         status: 'pending',

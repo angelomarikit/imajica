@@ -235,10 +235,13 @@ export interface Appointment {
   id: string
   clientId: string
   clientName: string
+  clientPhone?: string
+  clientEmail?: string
   branchId: string
   branchName: string
   treatmentId: string
   treatmentName: string
+  treatmentName2?: string
   staffId?: string
   staffName?: string
   roomId?: string
@@ -246,6 +249,14 @@ export interface Appointment {
   endAt: string
   durationMinutes: number
   status: AppointmentStatus
+  /** Card badge: New / Pending / Paid */
+  clientStatus?: string
+  bookingDate?: string
+  clinic?: string
+  campaignPromo?: string
+  promoCode?: string
+  downPayment?: number
+  leadSource?: string
   notes?: string
   price: number
   imageUrl?: string
