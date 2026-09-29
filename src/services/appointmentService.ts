@@ -162,6 +162,25 @@ export function resolveScheduleClient(input: {
   }
 }
 
+const CORE_SELECT_FIELDS = `
+  id,
+  client_id,
+  branch_id,
+  treatment_id,
+  staff_id,
+  room_id,
+  start_at,
+  end_at,
+  duration_minutes,
+  status,
+  notes,
+  price,
+  clients ( full_name ),
+  branches ( name ),
+  treatments ( name ),
+  staff ( full_name )
+`
+
 const SELECT_FIELDS = `
   id,
   client_id,
@@ -193,14 +212,216 @@ const SELECT_FIELDS = `
   staff ( full_name )
 `
 
+function isUuid(value: string | undefined | null): boolean {
+  if (!value) return false
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  )
+}
+
+function supabaseErrorMessage(error: { message?: string; details?: string; hint?: string; code?: string }) {
+  return [error.message, error.details, error.hint].filter(Boolean).join(' — ') || 'Request failed'
+}
+
+async function ensureRemoteBranch(branch: {
+  id: string
+  name: string
+  code: string
+  address: string
+  isMain?: boolean
+  branchType?: string
+}): Promise<string> {
+  if (!supabase) throw new Error('Supabase is not configured')
+
+  if (isUuid(branch.id)) {
+    const { data: byId } = await supabase.from('branches').select('id').eq('id', branch.id).maybeSingle()
+    if (byId?.id) return byId.id
+  }
+
+  const { data: byCode } = await supabase
+    .from('branches')
+    .select('id')
+    .eq('code', branch.code)
+    .maybeSingle()
+  if (byCode?.id) return byCode.id
+
+  const payload = {
+    id: isUuid(branch.id) ? branch.id : crypto.randomUUID(),
+    name: branch.name,
+    code: branch.code,
+    address: branch.address || branch.name,
+    status: 'active' as const,
+    is_main: Boolean(branch.isMain),
+    branch_type: branch.branchType || 'company_owned',
+  }
+
+  const { data, error } = await supabase.from('branches').insert(payload).select('id').single()
+  if (!error && data?.id) return data.id
+
+  // Fall back to any clinic branch already in the project
+  const { data: fallback } = await supabase
+    .from('branches')
+    .select('id')
+    .eq('status', 'active')
+    .neq('code', 'HQ')
+    .limit(1)
+    .maybeSingle()
+  if (fallback?.id) return fallback.id
+
+  throw new Error(
+    supabaseErrorMessage(error || { message: 'No clinic branch found. Add a branch in Team → Branches first.' }),
+  )
+}
+
+async function ensureRemoteClient(input: {
+  fullName: string
+  email?: string
+  phone?: string
+  branchId: string
+}): Promise<{ id: string; fullName: string; email?: string; phone?: string }> {
+  if (!supabase) throw new Error('Supabase is not configured')
+
+  const fullName = input.fullName.trim()
+  const email = input.email?.trim() || ''
+  const phone = input.phone?.trim() || ''
+
+  if (email) {
+    const { data } = await supabase
+      .from('clients')
+      .select('id, full_name, email, phone')
+      .eq('email', email)
+      .maybeSingle()
+    if (data?.id) {
+      return {
+        id: data.id,
+        fullName: data.full_name,
+        email: data.email ?? undefined,
+        phone: data.phone ?? undefined,
+      }
+    }
+  }
+
+  if (phone) {
+    const { data } = await supabase
+      .from('clients')
+      .select('id, full_name, email, phone')
+      .eq('phone', phone)
+      .maybeSingle()
+    if (data?.id) {
+      return {
+        id: data.id,
+        fullName: data.full_name,
+        email: data.email ?? undefined,
+        phone: data.phone ?? undefined,
+      }
+    }
+  }
+
+  const id = crypto.randomUUID()
+  const code = `MJ-${Date.now().toString().slice(-8)}`
+  const { data, error } = await supabase
+    .from('clients')
+    .insert({
+      id,
+      code,
+      full_name: fullName,
+      email: email || null,
+      phone: phone || null,
+      preferred_branch_id: isUuid(input.branchId) ? input.branchId : null,
+      gender: 'prefer_not_to_say',
+      status: 'active',
+    })
+    .select('id, full_name, email, phone')
+    .single()
+
+  if (error || !data) {
+    throw new Error(supabaseErrorMessage(error || { message: 'Could not create client' }))
+  }
+
+  // Keep local registry in sync with the remote UUID
+  saveClient({
+    id: data.id,
+    code,
+    fullName: data.full_name,
+    email: data.email || email || '',
+    phone: data.phone || phone || '',
+    dateOfBirth: '',
+    gender: 'prefer_not_to_say',
+    preferredBranchId: input.branchId,
+    preferredBranchName: '',
+    status: 'active',
+    isVip: false,
+    registeredAt: new Date().toISOString().slice(0, 10),
+    totalVisits: 0,
+    totalSpent: 0,
+  })
+
+  return {
+    id: data.id,
+    fullName: data.full_name,
+    email: data.email ?? undefined,
+    phone: data.phone ?? undefined,
+  }
+}
+
+function buildAppointmentInsertPayload(
+  appointment: Appointment,
+  remoteClientId: string,
+  remoteBranchId: string,
+  includeScheduleFields: boolean,
+) {
+  const base = {
+    client_id: remoteClientId,
+    branch_id: remoteBranchId,
+    treatment_id: isUuid(appointment.treatmentId) ? appointment.treatmentId : null,
+    staff_id: isUuid(appointment.staffId) ? appointment.staffId : null,
+    start_at: appointment.startAt,
+    end_at: appointment.endAt,
+    duration_minutes: appointment.durationMinutes,
+    status: appointment.status,
+    notes: appointment.notes ?? null,
+    price: appointment.price,
+  }
+  if (!includeScheduleFields) return base
+  return {
+    ...base,
+    booking_date: appointment.bookingDate ?? null,
+    treatment_name: appointment.treatmentName,
+    treatment_name_2: appointment.treatmentName2 ?? null,
+    campaign_promo: appointment.campaignPromo ?? null,
+    promo_code: appointment.promoCode ?? null,
+    client_status: appointment.clientStatus ?? null,
+    clinic: appointment.clinic ?? null,
+    down_payment: appointment.downPayment ?? 0,
+    staff_name: appointment.staffName ?? null,
+    lead_source: appointment.leadSource ?? null,
+    client_phone: appointment.clientPhone ?? null,
+    client_email: appointment.clientEmail ?? null,
+  }
+}
+
 export async function listAppointments(): Promise<Appointment[]> {
   if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
+    const primary = await supabase
       .from('appointments')
-      .select(SELECT_FIELDS)
+      .select(SELECT_FIELDS as string)
       .order('start_at', { ascending: true })
-    if (error) throw error
-    return (data ?? []).map(mapJoinedRowToAppointment)
+
+    if (!primary.error) {
+      return (primary.data ?? []).map((row) =>
+        mapJoinedRowToAppointment(row as unknown as AppointmentJoinedRow),
+      )
+    }
+
+    const fallback = await supabase
+      .from('appointments')
+      .select(CORE_SELECT_FIELDS as string)
+      .order('start_at', { ascending: true })
+
+    if (fallback.error) throw new Error(supabaseErrorMessage(fallback.error))
+    return (fallback.data ?? []).map((row) =>
+      mapJoinedRowToAppointment(row as unknown as AppointmentJoinedRow),
+    )
   }
   return readLocal().sort(
     (a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
@@ -220,6 +441,71 @@ export async function createAppointment(input: CreateAppointmentInput): Promise<
   const durationMinutes = 60
   const timeLabel = formatTimeLabel(input.timeLabel)
   const { startAt, endAt } = buildStartEnd(input.date, timeLabel, durationMinutes)
+
+  if (isSupabaseConfigured && supabase) {
+    const remoteBranchId = await ensureRemoteBranch(branch)
+    const remoteClient = await ensureRemoteClient({
+      fullName: input.clientName,
+      email: input.clientEmail,
+      phone: input.clientPhone,
+      branchId: remoteBranchId,
+    })
+
+    const appointment: Appointment = {
+      id: `ap-${Date.now()}`,
+      clientId: remoteClient.id,
+      clientName: remoteClient.fullName,
+      clientPhone: input.clientPhone?.trim() || remoteClient.phone,
+      clientEmail: input.clientEmail?.trim() || remoteClient.email,
+      branchId: remoteBranchId,
+      branchName: branch.name,
+      treatmentId: input.treatmentId || '',
+      treatmentName,
+      treatmentName2: input.treatmentName2?.trim() || undefined,
+      staffId: input.staffId,
+      staffName: input.staffName?.trim() || undefined,
+      startAt,
+      endAt,
+      durationMinutes,
+      status: input.status ?? 'pending',
+      clientStatus: input.clientStatus?.trim() || 'New',
+      bookingDate: input.bookingDate || toDateKey(new Date()),
+      clinic: input.clinic?.trim() || undefined,
+      campaignPromo: input.campaignPromo?.trim() || undefined,
+      promoCode: input.promoCode?.trim() || undefined,
+      downPayment: input.downPayment ?? 0,
+      leadSource: input.leadSource?.trim() || undefined,
+      notes: input.notes?.trim() || undefined,
+      price: input.downPayment ?? 0,
+    }
+
+    const insertOnce = async (includeScheduleFields: boolean) => {
+      const payload = buildAppointmentInsertPayload(
+        appointment,
+        remoteClient.id,
+        remoteBranchId,
+        includeScheduleFields,
+      )
+      return supabase!
+        .from('appointments')
+        .insert(payload)
+        .select((includeScheduleFields ? SELECT_FIELDS : CORE_SELECT_FIELDS) as string)
+        .single()
+    }
+
+    let primary = await insertOnce(true)
+    if (primary.error) {
+      primary = await insertOnce(false)
+    }
+
+    if (primary.error || !primary.data) {
+      throw new Error(supabaseErrorMessage(primary.error || { message: 'Could not save schedule' }))
+    }
+
+    const saved = mapJoinedRowToAppointment(primary.data as unknown as AppointmentJoinedRow)
+    window.dispatchEvent(new Event(CHANGE_EVENT))
+    return saved
+  }
 
   const client = resolveScheduleClient({
     clientId: input.clientId,
@@ -258,41 +544,6 @@ export async function createAppointment(input: CreateAppointmentInput): Promise<
     price: input.downPayment ?? 0,
   }
 
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from('appointments')
-      .insert({
-        client_id: appointment.clientId,
-        branch_id: appointment.branchId,
-        treatment_id: input.treatmentId || null,
-        staff_id: input.staffId || null,
-        start_at: startAt,
-        end_at: endAt,
-        duration_minutes: durationMinutes,
-        status: appointment.status,
-        notes: appointment.notes ?? null,
-        price: appointment.price,
-        booking_date: appointment.bookingDate ?? null,
-        treatment_name: appointment.treatmentName,
-        treatment_name_2: appointment.treatmentName2 ?? null,
-        campaign_promo: appointment.campaignPromo ?? null,
-        promo_code: appointment.promoCode ?? null,
-        client_status: appointment.clientStatus ?? null,
-        clinic: appointment.clinic ?? null,
-        down_payment: appointment.downPayment ?? 0,
-        staff_name: appointment.staffName ?? null,
-        lead_source: appointment.leadSource ?? null,
-        client_phone: appointment.clientPhone ?? null,
-        client_email: appointment.clientEmail ?? null,
-      })
-      .select(SELECT_FIELDS)
-      .single()
-    if (error) throw error
-    const saved = mapJoinedRowToAppointment(data)
-    window.dispatchEvent(new Event(CHANGE_EVENT))
-    return saved
-  }
-
   const next = [...readLocal().filter((a) => a.id !== appointment.id), appointment]
   writeLocal(next)
   return appointment
@@ -303,15 +554,30 @@ export async function updateAppointmentStatus(
   status: AppointmentStatus,
 ): Promise<Appointment | null> {
   if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
+    const primary = await supabase
       .from('appointments')
       .update({ status, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select(SELECT_FIELDS)
+      .select(SELECT_FIELDS as string)
       .single()
-    if (error) throw error
+
+    if (!primary.error && primary.data) {
+      window.dispatchEvent(new Event(CHANGE_EVENT))
+      return mapJoinedRowToAppointment(primary.data as unknown as AppointmentJoinedRow)
+    }
+
+    const fallback = await supabase
+      .from('appointments')
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select(CORE_SELECT_FIELDS as string)
+      .single()
+
+    if (fallback.error || !fallback.data) {
+      throw new Error(supabaseErrorMessage(fallback.error || primary.error || { message: 'Update failed' }))
+    }
     window.dispatchEvent(new Event(CHANGE_EVENT))
-    return mapJoinedRowToAppointment(data)
+    return mapJoinedRowToAppointment(fallback.data as unknown as AppointmentJoinedRow)
   }
 
   const local = readLocal()
