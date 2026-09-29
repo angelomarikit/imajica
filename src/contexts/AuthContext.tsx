@@ -2,10 +2,12 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from 'react'
+import type { User as SupabaseUser } from '@supabase/supabase-js'
 import type { AuthSessionUser, UserRole } from '@/types'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 
@@ -13,7 +15,7 @@ interface AuthContextValue {
   user: AuthSessionUser | null
   loading: boolean
   isDemoMode: boolean
-  login: (email: string, password: string, roleHint?: UserRole) => Promise<void>
+  login: (email: string, password: string, roleHint?: UserRole) => Promise<AuthSessionUser>
   register: (payload: {
     email: string
     password: string
@@ -64,8 +66,59 @@ const STAFF_ROLES: UserRole[] = [
   'STAFF',
 ]
 
+const ROLE_PRIORITY: UserRole[] = [
+  'SUPER_ADMIN',
+  'HQ_ADMIN',
+  'BRANCH_ADMIN',
+  'DOCTOR',
+  'NURSE',
+  'AESTHETICIAN',
+  'RECEPTIONIST',
+  'STAFF',
+  'CLIENT',
+]
+
 export function isStaffRole(role: UserRole) {
   return STAFF_ROLES.includes(role)
+}
+
+function pickHighestRole(roleIds: string[]): UserRole {
+  for (const role of ROLE_PRIORITY) {
+    if (roleIds.includes(role)) return role
+  }
+  return 'CLIENT'
+}
+
+/** Resolve app session from Supabase auth user + profiles / user_roles (DB is source of truth). */
+async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthSessionUser> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured')
+  }
+
+  const meta = authUser.user_metadata as { full_name?: string; role?: UserRole }
+
+  const [{ data: roleRows, error: roleError }, { data: profile }] = await Promise.all([
+    supabase.from('user_roles').select('role_id, branch_id').eq('user_id', authUser.id),
+    supabase.from('profiles').select('full_name, email').eq('id', authUser.id).maybeSingle(),
+  ])
+
+  if (roleError) {
+    console.error('[auth] failed to load user_roles', roleError)
+  }
+
+  const roleIds = (roleRows ?? []).map((r) => String(r.role_id))
+  const role = roleIds.length > 0 ? pickHighestRole(roleIds) : meta.role ?? 'CLIENT'
+  const staffBranch = (roleRows ?? []).find(
+    (r) => r.branch_id && r.branch_id !== '00000000-0000-0000-0000-000000000001',
+  )
+
+  return {
+    id: authUser.id,
+    email: profile?.email || authUser.email || '',
+    fullName: profile?.full_name || meta.full_name || authUser.email || '',
+    role,
+    branchId: staffBranch?.branch_id ? String(staffBranch.branch_id) : undefined,
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -73,7 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const raw = localStorage.getItem('imajica_auth_user')
     return raw ? (JSON.parse(raw) as AuthSessionUser) : null
   })
-  const [loading] = useState(false)
+  const [loading, setLoading] = useState(isSupabaseConfigured)
 
   const persist = useCallback((next: AuthSessionUser | null) => {
     setUser(next)
@@ -81,37 +134,84 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     else localStorage.removeItem('imajica_auth_user')
   }, [])
 
+  // Refresh role from DB when a Supabase session already exists (fixes stale CLIENT in localStorage)
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setLoading(false)
+      return
+    }
+
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (cancelled) return
+        if (data.session?.user) {
+          const sessionUser = await resolveSupabaseSessionUser(data.session.user)
+          if (!cancelled) persist(sessionUser)
+        }
+      } catch (err) {
+        console.error('[auth] session restore failed', err)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      // Avoid querying Supabase inside the auth callback (can deadlock the client).
+      window.setTimeout(() => {
+        if (event === 'SIGNED_OUT' || !session?.user) {
+          persist(null)
+          return
+        }
+        void resolveSupabaseSessionUser(session.user)
+          .then(persist)
+          .catch((err) => console.error('[auth] role refresh failed', err))
+      }, 0)
+    })
+
+    return () => {
+      cancelled = true
+      sub.subscription.unsubscribe()
+    }
+  }, [persist])
+
   const login = useCallback(
     async (email: string, password: string, roleHint?: UserRole) => {
       if (isSupabaseConfigured && supabase) {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
-        const meta = data.user.user_metadata as { full_name?: string; role?: UserRole }
-        persist({
-          id: data.user.id,
-          email: data.user.email ?? email,
-          fullName: meta.full_name ?? email,
-          role: meta.role ?? roleHint ?? 'CLIENT',
-        })
-        return
+        if (!data.user) throw new Error('Sign in failed')
+        const sessionUser = await resolveSupabaseSessionUser(data.user)
+        // Keep Auth metadata in sync so older builds / JWT claims also see the staff role
+        if (sessionUser.role !== 'CLIENT') {
+          void supabase.auth.updateUser({
+            data: { role: sessionUser.role, full_name: sessionUser.fullName },
+          })
+        }
+        persist(sessionUser)
+        return sessionUser
       }
 
       const demo = DEMO_USERS[email.toLowerCase()]
       if (demo && demo.password === password) {
         const { password: _pw, ...sessionUser } = demo
         void _pw
-        persist(roleHint ? { ...sessionUser, role: roleHint } : sessionUser)
-        return
+        const next = roleHint ? { ...sessionUser, role: roleHint } : sessionUser
+        persist(next)
+        return next
       }
 
       if (roleHint) {
-        persist({
+        const next: AuthSessionUser = {
           id: `demo-${roleHint.toLowerCase()}`,
           email,
-          fullName: roleHint === 'CLIENT' ? 'Maria Santos' : 'Maria Santos',
+          fullName: 'Maria Santos',
           role: roleHint,
-        })
-        return
+        }
+        persist(next)
+        return next
       }
 
       throw new Error(

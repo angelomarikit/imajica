@@ -17,6 +17,7 @@ import loginBackground from '@/assets/auth/login-background.jpg'
 import logo from '@/assets/logo-imajica.jpg'
 import { BRAND } from '@/constants/brand'
 import { useAuth, isStaffRole } from '@/contexts/AuthContext'
+import { isSupabaseConfigured } from '@/lib/supabase'
 import type { UserRole } from '@/types'
 import { cn } from '@/utils/cn'
 
@@ -42,10 +43,11 @@ export function LoginPage() {
             ? 'staff@imajica.ph'
             : email
 
-      await login(hintEmail || email, password, roleHint)
-      const stored = localStorage.getItem('imajica_auth_user')
-      const user = stored ? (JSON.parse(stored) as { role: UserRole }) : null
-      const role = roleHint ?? user?.role ?? 'HQ_ADMIN'
+      const sessionUser = await login(hintEmail || email, password, roleHint)
+      // Prefer DB role from login; roleHint only for offline demo quick-login buttons
+      const role = isSupabaseConfigured
+        ? sessionUser.role
+        : (roleHint ?? sessionUser.role)
       toast.success('Welcome back')
       navigate(isStaffRole(role) ? '/admin/dashboard' : '/client/dashboard')
     } catch (err) {
