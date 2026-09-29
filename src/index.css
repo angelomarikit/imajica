@@ -1,0 +1,170 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Great+Vibes&family=Inter:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-display: 'Cormorant Garamond', Georgia, serif;
+  --font-script: 'Great Vibes', cursive;
+  --font-ui: 'Inter', system-ui, sans-serif;
+  --font-metric: 'Inter', system-ui, sans-serif;
+
+  --color-emerald-950: #0a2e26;
+  --color-emerald-900: #063b2a;
+  --color-emerald-800: #004225;
+  --color-emerald-700: #0d5c45;
+  --color-emerald-100: #e8f2ee;
+  --color-emerald-50: #f2f8f5;
+
+  --color-ivory: #fdfbf7;
+  --color-ivory-100: #f8f5ef;
+  --color-beige: #f5f0e8;
+
+  --color-gold: #c5a059;
+  --color-gold-600: #b8860b;
+  --color-gold-100: #f7f1e3;
+
+  --color-charcoal: #1a1a1a;
+  --color-slate-ui: #64748b;
+  --color-border: #e8e4dc;
+
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  background: var(--color-ivory);
+  color: var(--color-charcoal);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a,
+  button {
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+
+/* All interactive buttons: pointer cursor + slight hover feedback */
+button:not(:disabled),
+[role='button']:not([aria-disabled='true']),
+input[type='button']:not(:disabled),
+input[type='submit']:not(:disabled),
+input[type='reset']:not(:disabled) {
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    filter 0.2s ease,
+    opacity 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.15s ease;
+}
+
+button:disabled,
+[role='button'][aria-disabled='true'],
+input[type='button']:disabled,
+input[type='submit']:disabled,
+input[type='reset']:disabled {
+  cursor: not-allowed;
+}
+
+/* Generic hover lift for plain buttons that don't define their own hover styles */
+button:not(:disabled):hover,
+[role='button']:not([aria-disabled='true']):hover,
+input[type='submit']:not(:disabled):hover,
+input[type='button']:not(:disabled):hover {
+  filter: brightness(1.06);
+}
+
+button:not(:disabled):active,
+[role='button']:not([aria-disabled='true']):active {
+  filter: brightness(0.97);
+}
+
+a[href] {
+  cursor: pointer;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* KPI / money / counts — lining sans figures (not Cormorant old-style numerals) */
+.font-metric {
+  font-family: var(--font-ui);
+  font-variant-numeric: lining-nums tabular-nums;
+  font-feature-settings: 'tnum' 1, 'lnum' 1;
+  letter-spacing: -0.02em;
+}
+
+.font-script {
+  font-family: var(--font-script);
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #d4cfc4;
+  border-radius: 999px;
+}
+
+/* Admin page hero banner — ambient glow + soft shimmer */
+.admin-page-banner__glow {
+  animation: admin-banner-glow 5.5s ease-in-out infinite;
+}
+
+.admin-page-banner__shimmer {
+  background: linear-gradient(
+    105deg,
+    transparent 35%,
+    rgba(232, 217, 184, 0.12) 48%,
+    rgba(197, 160, 89, 0.18) 52%,
+    transparent 65%
+  );
+  background-size: 220% 100%;
+  animation: admin-banner-shimmer 7s ease-in-out infinite;
+}
+
+@keyframes admin-banner-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes admin-banner-shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -40% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-page-banner__glow,
+  .admin-page-banner__shimmer {
+    animation: none;
+  }
+}

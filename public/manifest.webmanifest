@@ -1,0 +1,21 @@
+{
+  "name": "Imajica Medical Aesthetics",
+  "short_name": "Imajica",
+  "description": "Client booking and clinic management for Imajica Medical Aesthetics",
+  "start_url": "/client/dashboard",
+  "display": "standalone",
+  "background_color": "#FDFBF7",
+  "theme_color": "#0A2E26",
+  "icons": [
+    {
+      "src": "/logo-imajica.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg"
+    },
+    {
+      "src": "/logo-imajica.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg"
+    }
+  ]
+}

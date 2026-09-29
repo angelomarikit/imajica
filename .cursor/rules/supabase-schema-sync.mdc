@@ -1,0 +1,46 @@
+---
+description: Keep Supabase SQL migrations in sync with every new app feature
+alwaysApply: true
+---
+
+# SUPABASE SCHEMA SYNC RULE
+
+Imajica will connect to a **dedicated Supabase project** later. Until then, services may use localStorage/demo data — but the **database schema must stay current**.
+
+## When building or changing any feature that stores or loads data
+
+You MUST update Supabase SQL in the same change set:
+
+1. Add or alter tables/columns in a new file under `supabase/migrations/` (timestamped, never rewrite applied history casually).
+2. Update `supabase/seed.sql` when demo/default rows are needed.
+3. Add or adjust RLS policies for new tables/columns.
+4. Match TypeScript types in `src/types` and service field names to SQL (`snake_case` in DB).
+
+## Current feature → table map (keep updated)
+
+| App area | Tables / notes |
+|---|---|
+| Auth / roles | `profiles` (+ `status`), `user_roles`, `roles`, views `v_team_user_access` / `v_user_access_directory`, RPC `set_profile_active` |
+| Branches / settings | `branches` (+ `branch_type`), `branch_hours`, `branch_rooms`, `system_settings`; RPC `set_branch_active` |
+| Team / recruitment & LMS | `recruitment_applicants`, `lms_courses`, `lms_enrollments` |
+| Customer registration & list | `clients` (+ occupation, middle_name, emergency_*, medical_*, avatar_url, admin_notes), `client_skin_profiles`, `client_notes` |
+| Client Scheduling | `appointments`, `appointment_status_history` (statuses include `no_show`, `pending`, `completed`, …) |
+| Landing Special Offers | `landing_promos` (Marketing admin → landing modal slider) |
+| Catalog services & packages | `treatments` (+ sessions, default_branch_id), `packages` (+ free_items, default_branch_id), `package_items`, `branch_treatments` |
+| Catalog products / categories / consumables | `inventory_items` (+ category_id), `product_categories`, `consumables` |
+| Administration operations | `operational_expenses`, `branch_orders`, `franchise_orders`, `waste_logs`, `warehouse_items` + `warehouse_stock_movements`, `stock_transfers`, `imajica_forms` (+ client_name, form_type, template_file, field_values, signatures) |
+| Sales / payments | `sales` (+ `invoice_number`, `payment_type`, `booking_ref`), `sale_items` (+ `unit_cost`, `sku`), `payments` |
+| Analytics reports | `v_analytics_sales_transactions`, `analytics_sales_summary`, `analytics_product_sales_report`, `analytics_best_selling_treatments`, `analytics_new_client_sales`, `imajica_transaction_fee`; `clients.lead_source` |
+| Staff / payroll | `staff` (+ first_name, last_name, birth_date, department, address, avatar_url, emergency_*, `position_id`), `staff_positions` (+ department), `commissions`, `payroll_*`; RPC `analytics_staff_sales` (rank by booking_count) |
+| Marketing campaigns | `marketing_campaigns` |
+| Inventory | `inventory_items`, `branch_inventory`, `inventory_movements` |
+
+## Do NOT
+
+- Ship a new CRUD/UI data feature with only localStorage and no migration
+- Put Imajica tables into another product’s schema without an `imajica`-safe migration plan
+- Forget RLS when adding tables readable from the public landing or client portal
+
+## After schema changes
+
+Note in the reply what migration file was added/updated so the user can `supabase db push` or run SQL in the Supabase SQL Editor when the new project is ready.

@@ -1,0 +1,74 @@
+---
+description: Strict visual fidelity to approved UI reference screenshots in reference/ui/
+alwaysApply: true
+---
+
+# STRICT VISUAL REFERENCE RULE
+
+All images inside `reference/ui/` are **APPROVED FINAL UI DESIGNS**.
+
+Treat each reference image as a **visual specification**, not inspiration.
+
+You MUST reproduce the corresponding screen as closely as possible.
+
+## Brand
+
+- Product name is **Imajica Medical Aesthetics** (logo may look like “Majica”; always spell **Imajica** / **IMAJICA** in code and copy).
+- Design system: deep emerald, warm cream/ivory, muted gold, white.
+
+## UI Reference Map
+
+| Reference file | Route |
+|---|---|
+| `reference/ui/00-landing-page.png` | `/` |
+| `reference/ui/01-login.png` | `/login` |
+| `reference/ui/02-registration.png` | `/register` |
+| `reference/ui/03-dashboard.png` | `/admin/dashboard` |
+| `reference/ui/04-appointments.png` | `/admin/appointments` |
+| `reference/ui/05-clients.png` | `/admin/clients` |
+| `reference/ui/06-client-profile.png` | `/admin/clients/:id` |
+| `reference/ui/07-treatments.png` | `/admin/treatments` |
+| `reference/ui/08-packages.png` | `/admin/packages` |
+| `reference/ui/09-inventory.png` | `/admin/inventory` |
+| `reference/ui/10-staff.png` | `/admin/staff` |
+| `reference/ui/11-payroll.png` | `/admin/payroll` |
+| `reference/ui/12-reports.png` | `/admin/reports` |
+| `reference/ui/13-marketing.png` | `/admin/marketing` |
+| `reference/ui/14-settings-branches.png` | `/admin/settings/branches` |
+| `reference/ui/15-client-pwa.png` | `/client` |
+
+Before implementing any route above, open its reference image first.
+
+## Do NOT
+
+- Redesign the screen
+- Simplify the layout without reason
+- Change the component hierarchy
+- Replace the design with a generic dashboard template
+- Invent different colors
+- Change spacing dramatically
+- Move major sections
+- Remove visible functionality
+- Turn the reference into one large background image
+
+## DO
+
+- Recreate the interface using React + TypeScript + Tailwind CSS
+- Use real HTML/UI components
+- Make buttons, forms, tables, and charts functional/dynamic
+- Connect data to Supabase (or demo data until Supabase is configured)
+- Preserve the reference’s visual hierarchy, approximate dimensions/spacing, card placement, typography hierarchy, border radius, and shadow style
+- Make the implementation responsive
+
+## Priority
+
+The screenshot determines **HOW the page should look**.  
+The system requirements determine **HOW the page should work**.  
+Do not sacrifice one for the other.
+
+## Workflow (every screen)
+
+1. Open the matching file in `reference/ui/`
+2. Study layout, navigation, cards, tables, forms, spacing, typography, colors, buttons, charts, filters, tabs, drawers/modals
+3. Implement component-by-component to match
+4. Compare against the reference before moving on
