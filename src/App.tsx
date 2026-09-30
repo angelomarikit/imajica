@@ -3,7 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import { AdminShell } from '@/components/layout/AdminShell'
 import { ClientShell } from '@/components/layout/ClientShell'
-import { PublicOnly, RequireAuth, RequireClient, RequireHqAdmin, RequireStaff } from '@/components/layout/RouteGuards'
+import { PublicOnly, RequireAuth, RequireClient, RequireHqAdmin, RequireRole, RequireStaff } from '@/components/layout/RouteGuards'
 import { AuthProvider, isStaffRole, useAuth } from '@/contexts/AuthContext'
 import { BranchProvider } from '@/contexts/BranchContext'
 import { SalesDataBootstrap } from '@/components/SalesDataBootstrap'
@@ -61,6 +61,7 @@ import { EditProductPage } from '@/pages/catalog/EditProductPage'
 import { ServiceListPage } from '@/pages/catalog/ServiceListPage'
 import { DashboardPage } from '@/pages/dashboard/DashboardPage'
 import { MyAttendancePage } from '@/pages/attendance/MyAttendancePage'
+import { BranchAttendancePage } from '@/pages/attendance/BranchAttendancePage'
 import { InventoryPage } from '@/pages/inventory/InventoryPage'
 import { MarketingPage } from '@/pages/marketing/MarketingPage'
 import { PackagesPage } from '@/pages/packages/PackagesPage'
@@ -110,6 +111,14 @@ export default function App() {
                 <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="dashboard" element={<DashboardPage />} />
                 <Route path="attendance" element={<MyAttendancePage />} />
+                <Route
+                  path="reports/branch-attendance"
+                  element={
+                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'BRANCH_ADMIN']}>
+                      <BranchAttendancePage />
+                    </RequireRole>
+                  }
+                />
                 <Route path="appointments" element={<AppointmentsPage />} />
                 <Route path="clients" element={<ClientsPage />} />
                 <Route path="clients/new" element={<NewClientPage />} />

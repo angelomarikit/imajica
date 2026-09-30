@@ -210,6 +210,11 @@ const hqNavSections: NavSection[] = [
         label: 'New Client Sales',
         icon: UserPlus,
       },
+      {
+        to: '/admin/reports/branch-attendance',
+        label: 'Branch Attendance',
+        icon: Clock,
+      },
     ],
   },
   {
@@ -264,8 +269,14 @@ const hqNavSections: NavSection[] = [
   },
 ]
 
-/** Clinical / ops staff — Timeclock home; no Team or Marketing */
+/** Clinical / ops staff — Timeclock home; no Team or Marketing; HQ-only analytics trimmed */
 function buildTimeclockStaffNavSections(): NavSection[] {
+  const hqOnlyAnalytics = new Set([
+    '/admin/analytics/sales-product-report',
+    '/admin/analytics/best-selling-treatments',
+    '/admin/analytics/new-client-sales',
+    '/admin/reports/branch-attendance',
+  ])
   const sections: NavSection[] = [
     {
       items: [
@@ -277,6 +288,13 @@ function buildTimeclockStaffNavSections(): NavSection[] {
   for (const section of hqNavSections) {
     if (!section.category) continue
     if (section.category === 'Team' || section.category === 'Marketing') continue
+    if (section.category === 'Analytics') {
+      const items = section.items.filter(
+        (item) => !('to' in item && item.to && hqOnlyAnalytics.has(item.to)),
+      )
+      if (items.length) sections.push({ ...section, items })
+      continue
+    }
     sections.push(section)
   }
   sections.push({
@@ -396,7 +414,14 @@ const franchiseOwnerNavSections: NavSection[] = [
   },
   {
     category: 'Reports',
-    items: [{ to: '/admin/analytics/sales-reports', label: 'Branch Sales', icon: PieChart }],
+    items: [
+      { to: '/admin/analytics/sales-reports', label: 'Branch Sales', icon: PieChart },
+      {
+        to: '/admin/reports/branch-attendance',
+        label: 'Branch Attendance',
+        icon: Clock,
+      },
+    ],
   },
   {
     items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],

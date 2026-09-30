@@ -37,7 +37,7 @@ export function isBranchOwner(user: AuthSessionUser | null | undefined): boolean
 }
 
 /** Clinical / ops staff who use Time In–Out instead of the branch dashboard */
-const TIMECLOCK_ROLES: UserRole[] = [
+export const TIMECLOCK_ROLES: UserRole[] = [
   'DOCTOR',
   'NURSE',
   'AESTHETICIAN',

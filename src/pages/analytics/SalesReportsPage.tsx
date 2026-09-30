@@ -29,7 +29,7 @@ import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { useAuth } from '@/contexts/AuthContext'
-import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
+import { isFranchiseBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
 type TypeFilter = 'all' | AnalyticsSaleType
 
@@ -51,6 +51,7 @@ export function SalesReportsPage() {
   const { user } = useAuth()
   const forcedBranchId = useForcedBranchId()
   const franchiseOwner = isFranchiseBranchOwner(user)
+  const isHq = isHqRole(user?.role)
   const range = defaultAnalyticsRange()
   const [sales, setSales] = useState(() => getAnalyticsSales())
   const [dataReady, setDataReady] = useState(() => isSalesDataLoaded() && getAnalyticsSales().length > 0)
@@ -186,12 +187,14 @@ export function SalesReportsPage() {
           label="Product Sales"
           value={formatPesoExact(summary.productSales)}
           footer={
-            <Link
-              to="/admin/analytics/sales-product-report"
-              className="text-xs font-medium text-sky-600 hover:underline"
-            >
-              Click for details
-            </Link>
+            isHq ? (
+              <Link
+                to="/admin/analytics/sales-product-report"
+                className="text-xs font-medium text-sky-600 hover:underline"
+              >
+                Click for details
+              </Link>
+            ) : null
           }
         />
         <KpiCard label="Service Sales" value={formatPesoExact(summary.serviceSales)} />

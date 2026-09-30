@@ -513,3 +513,257 @@ export function daysWithPunches(
   }
   return set
 }
+
+/** Branch-wide punches (BRANCH_ADMIN / HQ via RLS). Optional Manila date range (inclusive). */
+export async function listBranchAttendance(
+  branchId: string,
+  fromDateKey?: string,
+  toDateKey?: string,
+): Promise<AttendancePunch[]> {
+  let rows: AttendancePunch[]
+  if (isSupabaseConfigured && supabase) {
+    let query = supabase
+      .from('staff_attendance_logs')
+      .select(ATTENDANCE_SELECT)
+      .eq('branch_id', branchId)
+      .order('punched_at', { ascending: false })
+
+    if (fromDateKey) {
+      query = query.gte('punched_at', `${fromDateKey}T00:00:00+08:00`)
+    }
+    if (toDateKey) {
+      query = query.lte('punched_at', `${toDateKey}T23:59:59.999+08:00`)
+    }
+
+    let { data, error } = await query
+
+    if (error && /location_label/i.test(error.message)) {
+      let fallback = supabase
+        .from('staff_attendance_logs')
+        .select(
+          'id, user_id, branch_id, punch_type, punched_at, photo_url, latitude, longitude, accuracy_m, created_at',
+        )
+        .eq('branch_id', branchId)
+        .order('punched_at', { ascending: false })
+      if (fromDateKey) fallback = fallback.gte('punched_at', `${fromDateKey}T00:00:00+08:00`)
+      if (toDateKey) fallback = fallback.lte('punched_at', `${toDateKey}T23:59:59.999+08:00`)
+      const retry = await fallback
+      data = (retry.data as DbRow[] | null)?.map((r) => ({
+        ...r,
+        location_label: null,
+      })) as typeof data
+      error = retry.error
+    }
+
+    if (error) throw new Error(error.message)
+    rows = ((data as DbRow[] | null) ?? []).map(mapRow)
+  } else {
+    rows = readLocal()
+      .filter((p) => p.branchId === branchId)
+      .filter((p) => {
+        const key = manilaDateKey(p.punchedAt)
+        if (fromDateKey && key < fromDateKey) return false
+        if (toDateKey && key > toDateKey) return false
+        return true
+      })
+      .sort((a, b) => b.punchedAt.localeCompare(a.punchedAt))
+  }
+  return enrichAttendanceLabels(rows)
+}
+
+export type AttendanceSession = {
+  dateKey: string
+  timeIn: AttendancePunch
+  timeOut: AttendancePunch | null
+  /** Decimal hours; null when still open / incomplete */
+  hours: number | null
+}
+
+/** Pair Time In → Time Out chronologically (per person). */
+export function buildAttendanceSessions(punches: AttendancePunch[]): AttendanceSession[] {
+  const sorted = [...punches].sort((a, b) => a.punchedAt.localeCompare(b.punchedAt))
+  const sessions: AttendanceSession[] = []
+  let open: AttendancePunch | null = null
+
+  for (const p of sorted) {
+    if (p.punchType === 'time_in') {
+      if (open) {
+        sessions.push({
+          dateKey: manilaDateKey(open.punchedAt),
+          timeIn: open,
+          timeOut: null,
+          hours: null,
+        })
+      }
+      open = p
+      continue
+    }
+    // time_out
+    if (open) {
+      const ms = new Date(p.punchedAt).getTime() - new Date(open.punchedAt).getTime()
+      sessions.push({
+        dateKey: manilaDateKey(open.punchedAt),
+        timeIn: open,
+        timeOut: p,
+        hours: ms > 0 ? ms / (1000 * 60 * 60) : 0,
+      })
+      open = null
+    }
+  }
+  if (open) {
+    sessions.push({
+      dateKey: manilaDateKey(open.punchedAt),
+      timeIn: open,
+      timeOut: null,
+      hours: null,
+    })
+  }
+  return sessions
+}
+
+export function formatAttendanceHours(hours: number | null | undefined): string {
+  if (hours == null || Number.isNaN(hours)) return '—'
+  const totalMinutes = Math.round(hours * 60)
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  if (h === 0) return `${m}m`
+  if (m === 0) return `${h}h`
+  return `${h}h ${m}m`
+}
+
+export type StaffAttendanceSummary = {
+  userId: string
+  fullName: string
+  role: string
+  email: string
+  daysPresent: number
+  sessionCount: number
+  completedSessions: number
+  openSessions: number
+  totalHours: number
+  sessions: AttendanceSession[]
+  punches: AttendancePunch[]
+}
+
+export function summarizeStaffAttendance(
+  punches: AttendancePunch[],
+  people: Array<{ id: string; fullName: string; role: string; email: string }>,
+): StaffAttendanceSummary[] {
+  const byUser = new Map<string, AttendancePunch[]>()
+  for (const p of punches) {
+    const list = byUser.get(p.userId) ?? []
+    list.push(p)
+    byUser.set(p.userId, list)
+  }
+
+  const peopleById = new Map(people.map((p) => [p.id, p]))
+  const ids = new Set([...peopleById.keys(), ...byUser.keys()])
+
+  const rows: StaffAttendanceSummary[] = []
+  for (const id of ids) {
+    const person = peopleById.get(id)
+    const userPunches = byUser.get(id) ?? []
+    const sessions = buildAttendanceSessions(userPunches)
+    const days = new Set(sessions.map((s) => s.dateKey))
+    const completed = sessions.filter((s) => s.timeOut)
+    const open = sessions.filter((s) => !s.timeOut)
+    const totalHours = completed.reduce((sum, s) => sum + (s.hours ?? 0), 0)
+    rows.push({
+      userId: id,
+      fullName: person?.fullName ?? `Staff ${id.slice(0, 8)}`,
+      role: person?.role ?? 'STAFF',
+      email: person?.email ?? '',
+      daysPresent: days.size,
+      sessionCount: sessions.length,
+      completedSessions: completed.length,
+      openSessions: open.length,
+      totalHours,
+      sessions: [...sessions].reverse(),
+      punches: userPunches,
+    })
+  }
+
+  return rows.sort((a, b) => a.fullName.localeCompare(b.fullName))
+}
+
+/** Excel export: Summary + Detail sheets for branch attendance review. */
+export async function exportBranchAttendanceXlsx(input: {
+  filename: string
+  branchName: string
+  from: string
+  to: string
+  summaries: StaffAttendanceSummary[]
+}) {
+  const XLSX = await import('xlsx')
+  const workbook = XLSX.utils.book_new()
+
+  const summaryRows = [
+    ['Branch', input.branchName],
+    ['Period', `${input.from} to ${input.to}`],
+    [],
+    [
+      'Staff',
+      'Role',
+      'Email',
+      'Days Present',
+      'Sessions',
+      'Completed',
+      'Open (no Time Out)',
+      'Total Hours',
+      'Total Hours (decimal)',
+    ],
+    ...input.summaries.map((s) => [
+      s.fullName,
+      s.role.replaceAll('_', ' '),
+      s.email,
+      s.daysPresent,
+      s.sessionCount,
+      s.completedSessions,
+      s.openSessions,
+      formatAttendanceHours(s.totalHours),
+      Number(s.totalHours.toFixed(2)),
+    ]),
+  ]
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.aoa_to_sheet(summaryRows),
+    'Summary',
+  )
+
+  const detailRows: (string | number)[][] = [
+    [
+      'Staff',
+      'Role',
+      'Date',
+      'Time In',
+      'Time Out',
+      'Hours',
+      'Hours (decimal)',
+      'Location In',
+      'Location Out',
+      'Status',
+    ],
+  ]
+  for (const s of input.summaries) {
+    for (const session of [...s.sessions].reverse()) {
+      detailRows.push([
+        s.fullName,
+        s.role.replaceAll('_', ' '),
+        session.dateKey,
+        formatManilaDateTime(session.timeIn.punchedAt),
+        session.timeOut ? formatManilaDateTime(session.timeOut.punchedAt) : '',
+        formatAttendanceHours(session.hours),
+        session.hours == null ? '' : Number(session.hours.toFixed(2)),
+        session.timeIn.locationLabel ?? '',
+        session.timeOut?.locationLabel ?? '',
+        session.timeOut ? 'Complete' : 'Open',
+      ])
+    }
+  }
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(detailRows), 'Detail')
+
+  const name = input.filename.toLowerCase().endsWith('.xlsx')
+    ? input.filename
+    : `${input.filename}.xlsx`
+  XLSX.writeFile(workbook, name)
+}
