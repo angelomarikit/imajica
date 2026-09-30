@@ -76,6 +76,7 @@ Or in **Dashboard → SQL Editor**, paste and run **each file in order**. Confir
 | 36 | `supabase/migrations/20260929000036_branch_account_all_roles.sql` |
 | 37 | `supabase/migrations/20260929000037_staff_attendance.sql` |
 | 38 | `supabase/migrations/20260929000038_attendance_location_label.sql` |
+| 39 | `supabase/migrations/20260929000039_attendance_delete_own.sql` |
 
 Step 23 adds missing RLS policies, creates the **Headquarters** sentinel branch (`00000000-0000-0000-0000-000000000001` / code `HQ`), and deletes any leftover demo transactional rows.
 
@@ -101,9 +102,12 @@ One-time setup:
 
 ```bash
 supabase functions deploy create-branch-account --no-verify-jwt
+supabase functions deploy delete-branch-account --no-verify-jwt
 ```
 
-4. Sign in as HQ (`SUPER_ADMIN` / `HQ_ADMIN`), then use **Branches Accounts → Create Account**.
+**Dashboard create (important):** the **URL slug** must be exactly `delete-branch-account` / `create-branch-account`. If Supabase auto-named the slug `smart-process` (or similar), renaming the display title does **not** change the endpoint — the app will still 404. Delete that function and create again with the correct slug, or deploy via CLI from this repo. Paste the matching `supabase/functions/<name>/index.ts`, turn **Verify JWT with legacy secret** OFF, Deploy.
+
+4. Sign in as HQ (`SUPER_ADMIN` / `HQ_ADMIN`), then use **Branches Accounts → Create Account**. HQ can also **delete** a branch account from the directory (trash / Delete account).
 
 ## 4. Seed (taxonomy only)
 

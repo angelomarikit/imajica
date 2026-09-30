@@ -180,6 +180,20 @@ export function exportCsv(filename: string, header: string[], rows: string[][]) 
   URL.revokeObjectURL(url)
 }
 
+/** Download a real Excel workbook (.xlsx). */
+export async function exportXlsx(filename: string, header: string[], rows: string[][]) {
+  const XLSX = await import('xlsx')
+  const sheetName = 'Sheet1'
+  const aoa = [header, ...rows]
+  const worksheet = XLSX.utils.aoa_to_sheet(aoa)
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName)
+  const name = filename.toLowerCase().endsWith('.xlsx')
+    ? filename
+    : `${filename.replace(/\.csv$/i, '').replace(/\.xlxs$/i, '')}.xlsx`
+  XLSX.writeFile(workbook, name)
+}
+
 export function feeLabelForMethod(method: PaymentMethod) {
   if (method === 'credit_card' || method === 'debit_card') return 'Card (3%)'
   if (

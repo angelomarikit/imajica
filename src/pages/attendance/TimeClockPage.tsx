@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Camera, MapPin, Clock } from 'lucide-react'
+import { Camera, MapPin, Clock, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { Dialog } from '@/components/ui/Dialog'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
 import {
   formatManilaClock,
   formatManilaTime,
+  deleteAttendancePunch,
   getTodayAttendanceStatus,
   recordAttendancePunch,
   reverseGeocodeLabel,
@@ -56,6 +58,8 @@ export function TimeClockPage() {
   const [pending, setPending] = useState<CaptureState | null>(null)
   const [saving, setSaving] = useState(false)
   const [cameraReady, setCameraReady] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const punchTypeRef = useRef<AttendancePunchType | null>(null)
@@ -340,6 +344,21 @@ export function TimeClockPage() {
     void beginSession(next)
   }
 
+  async function confirmDeletePunch() {
+    if (!user || !deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteAttendancePunch({ id: deleteTarget.id, userId: user.id })
+      toast.success(`${deleteTarget.label} deleted`)
+      setDeleteTarget(null)
+      await refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete punch')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const branchName = selectedBranch?.name || user?.branchName || 'Your branch'
   const locationReady = geo.status === 'ready' && Boolean(pending?.locationLabel || geo.locationLabel)
 
@@ -509,27 +528,52 @@ export function TimeClockPage() {
                 Today’s punches
               </p>
               <ul className="space-y-2">
-                {status.punches.map((p) => (
-                  <li
-                    key={p.id}
-                    className="flex flex-col gap-0.5 rounded-[10px] border border-border/70 bg-white px-3 py-2 text-sm"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-[#073D2C]">
-                        {p.punchType === 'time_in' ? 'Time In' : 'Time Out'}
-                      </span>
-                      <span className="text-slate-ui">{formatManilaTime(p.punchedAt)}</span>
-                    </div>
-                    {p.locationLabel ? (
-                      <span className="text-xs text-slate-ui">{p.locationLabel}</span>
-                    ) : null}
-                  </li>
-                ))}
+                {status.punches.map((p) => {
+                  const label = p.punchType === 'time_in' ? 'Time In' : 'Time Out'
+                  return (
+                    <li
+                      key={p.id}
+                      className="flex flex-col gap-1 rounded-[10px] border border-border/70 bg-white px-3 py-2 text-sm"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-[#073D2C]">{label}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-ui">{formatManilaTime(p.punchedAt)}</span>
+                          <button
+                            type="button"
+                            aria-label={`Delete ${label}`}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                            onClick={() => setDeleteTarget({ id: p.id, label })}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      {p.locationLabel ? (
+                        <span className="text-xs text-slate-ui">{p.locationLabel}</span>
+                      ) : null}
+                    </li>
+                  )
+                })}
               </ul>
             </div>
           ) : null}
         </div>
       </Card>
+
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onClose={() => {
+          if (!deleting) setDeleteTarget(null)
+        }}
+        title={`Delete ${deleteTarget?.label ?? 'attendance'}?`}
+        description="This will permanently remove this Time In / Time Out record, including the selfie. This cannot be undone."
+        confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+        destructive
+        onConfirm={() => {
+          if (!deleting) void confirmDeletePunch()
+        }}
+      />
     </div>
   )
 }

@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FileSpreadsheet, Pencil, Search } from 'lucide-react'
+import { FileSpreadsheet, Pencil, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { Dialog } from '@/components/ui/Dialog'
 import { Drawer } from '@/components/ui/Drawer'
 import { Input } from '@/components/ui/Input'
-import { exportCsv } from '@/services/analyticsService'
+import { exportXlsx } from '@/services/analyticsService'
 import { getBranches } from '@/services/branchService'
 import {
+  deleteBranchAccount,
   listBranchAccounts,
   saveAccessUser,
   setAccessUserActive,
@@ -44,6 +46,8 @@ export function BranchAccountsPage() {
   const [pageSize, setPageSize] = useState(10)
   const [page, setPage] = useState(1)
   const [editing, setEditing] = useState<AccessUser | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<AccessUser | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   async function refresh() {
     try {
@@ -82,8 +86,8 @@ export function BranchAccountsPage() {
   const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize)
 
   function handleExport() {
-    exportCsv(
-      'imajica-branch-accounts.csv',
+    void exportXlsx(
+      'imajica-branch-accounts.xlsx',
       ['Full Name', 'Email', 'Role', 'Branch', 'Status'],
       filtered.map((u) => [
         u.fullName,
@@ -93,7 +97,10 @@ export function BranchAccountsPage() {
         u.status,
       ]),
     )
-    toast.success('Exported branch accounts')
+      .then(() => toast.success('Exported branch accounts'))
+      .catch((err) =>
+        toast.error(err instanceof Error ? err.message : 'Export failed'),
+      )
   }
 
   function toggleActive(u: AccessUser) {
@@ -148,6 +155,22 @@ export function BranchAccountsPage() {
         return refresh()
       })
       .catch((err) => toast.error(err instanceof Error ? err.message : 'Save failed'))
+  }
+
+  async function confirmDeleteAccount() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteBranchAccount(deleteTarget.id)
+      toast.success(`Deleted ${deleteTarget.fullName}`)
+      setDeleteTarget(null)
+      if (editing?.id === deleteTarget.id) setEditing(null)
+      await refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Delete failed')
+    } finally {
+      setDeleting(false)
+    }
   }
 
   return (
@@ -293,14 +316,24 @@ export function BranchAccountsPage() {
                       </button>
                     </td>
                     <td className="px-2 py-3">
-                      <button
-                        type="button"
-                        onClick={() => setEditing({ ...u })}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#E8D9B8] text-[#073D2C]"
-                        aria-label="Edit"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditing({ ...u })}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#E8D9B8] text-[#073D2C]"
+                          aria-label="Edit"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(u)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                          aria-label={`Delete ${u.fullName}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )
@@ -412,6 +445,16 @@ export function BranchAccountsPage() {
               </select>
             </label>
             <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => {
+                  setDeleteTarget(editing)
+                  setEditing(null)
+                }}
+              >
+                Delete account
+              </Button>
               <Button type="button" variant="secondary" onClick={() => setEditing(null)}>
                 Cancel
               </Button>
@@ -422,6 +465,24 @@ export function BranchAccountsPage() {
           </div>
         ) : null}
       </Drawer>
+
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onClose={() => {
+          if (!deleting) setDeleteTarget(null)
+        }}
+        title="Delete branch account?"
+        description={
+          deleteTarget
+            ? `Permanently delete ${deleteTarget.fullName} (${deleteTarget.email}). They will no longer be able to sign in. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel={deleting ? 'Deleting…' : 'Delete account'}
+        destructive
+        onConfirm={() => {
+          if (!deleting) void confirmDeleteAccount()
+        }}
+      />
     </div>
   )
 }

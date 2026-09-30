@@ -274,3 +274,75 @@ export async function setAccessUserActive(id: string, active: boolean): Promise<
     { ...found, status: active ? 'active' : 'inactive' },
   ])
 }
+
+/** HQ: permanently delete a branch account (Auth user + profile). */
+export async function deleteBranchAccount(userId: string): Promise<void> {
+  if (isSupabaseConfigured && supabase) {
+    const { data: sessionData } = await supabase.auth.getSession()
+    if (!sessionData.session?.access_token) {
+      throw new Error(
+        'Sign in with your HQ Supabase account first. Offline demo login cannot delete Auth users.',
+      )
+    }
+
+    const { data, error } = await supabase.functions.invoke('delete-branch-account', {
+      body: { userId },
+    })
+
+    const payload = data as { error?: string; deleted?: boolean } | null
+    if (payload?.error) throw new Error(payload.error)
+
+    if (error) {
+      let detail = error.message || 'Edge Function request failed'
+      try {
+        const ctx = (error as { context?: Response }).context
+        if (ctx && typeof ctx.json === 'function') {
+          const body = (await ctx.json()) as { error?: string }
+          if (body?.error) detail = body.error
+        }
+      } catch {
+        /* keep detail */
+      }
+      if (/Failed to send|fetch|CORS|preflight|FunctionsFetchError|not found|404/i.test(detail)) {
+        throw new Error(
+          'Cannot reach Edge Function at /functions/v1/delete-branch-account. In Supabase, the function URL slug must be exactly "delete-branch-account" (renaming the display name is not enough). Delete the wrong function, create a new one with that exact slug, paste supabase/functions/delete-branch-account/index.ts, set Verify JWT OFF, Deploy.',
+        )
+      }
+      throw new Error(detail)
+    }
+
+    if (!payload?.deleted) throw new Error('Delete account failed')
+
+    const prev = readStored().find((u) => u.id === userId)
+    writeStored([
+      ...readStored().filter((u) => u.id !== userId),
+      {
+        id: userId,
+        fullName: prev?.fullName ?? '',
+        email: prev?.email ?? '',
+        role: prev?.role ?? 'STAFF',
+        branchId: prev?.branchId ?? null,
+        branchName: prev?.branchName ?? null,
+        status: prev?.status ?? 'inactive',
+        deleted: true,
+      },
+    ])
+    emit()
+    return
+  }
+
+  const prev = readStored().find((u) => u.id === userId)
+  writeStored([
+    ...readStored().filter((u) => u.id !== userId),
+    {
+      id: userId,
+      fullName: prev?.fullName ?? '',
+      email: prev?.email ?? '',
+      role: prev?.role ?? 'STAFF',
+      branchId: prev?.branchId ?? null,
+      branchName: prev?.branchName ?? null,
+      status: prev?.status ?? 'inactive',
+      deleted: true,
+    },
+  ])
+}

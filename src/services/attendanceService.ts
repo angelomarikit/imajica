@@ -481,6 +481,24 @@ export async function recordAttendancePunch(input: {
   return row
 }
 
+/** Staff may delete their own punch (accidental Time In / Out). */
+export async function deleteAttendancePunch(input: {
+  id: string
+  userId: string
+}): Promise<void> {
+  if (isSupabaseConfigured && supabase) {
+    const { error } = await supabase
+      .from('staff_attendance_logs')
+      .delete()
+      .eq('id', input.id)
+      .eq('user_id', input.userId)
+    if (error) throw new Error(error.message)
+    emit()
+    return
+  }
+  writeLocal(readLocal().filter((p) => !(p.id === input.id && p.userId === input.userId)))
+}
+
 /** Days in a Manila month that have at least one punch */
 export function daysWithPunches(
   punches: AttendancePunch[],

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, MapPin } from 'lucide-react'
+import { ChevronLeft, ChevronRight, MapPin, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { Dialog } from '@/components/ui/Dialog'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   daysWithPunches,
+  deleteAttendancePunch,
   formatManilaDateTime,
   formatManilaTime,
   listMyAttendance,
@@ -30,6 +32,8 @@ export function MyAttendancePage() {
   const [allPunches, setAllPunches] = useState<AttendancePunch[]>([])
   const [dayPunches, setDayPunches] = useState<AttendancePunch[]>([])
   const [loading, setLoading] = useState(true)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const year = cursor.getFullYear()
   const monthIndex = cursor.getMonth()
@@ -76,6 +80,21 @@ export function MyAttendancePage() {
 
   function shiftMonth(delta: number) {
     setCursor((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1))
+  }
+
+  async function confirmDelete() {
+    if (!user || !deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteAttendancePunch({ id: deleteTarget.id, userId: user.id })
+      toast.success(`${deleteTarget.label} deleted`)
+      setDeleteTarget(null)
+      await refreshAll()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete punch')
+    } finally {
+      setDeleting(false)
+    }
   }
 
   return (
@@ -183,58 +202,83 @@ export function MyAttendancePage() {
           </p>
 
           <ul className="mt-4 space-y-3">
-            {dayPunches.map((p) => (
-              <li
-                key={p.id}
-                className="overflow-hidden rounded-[14px] border border-border bg-white shadow-sm"
-              >
-                <div className="flex gap-3 p-3">
-                  {p.photoUrl ? (
-                    <img
-                      src={p.photoUrl}
-                      alt={`${p.punchType} selfie`}
-                      className="h-24 w-24 shrink-0 rounded-[10px] object-cover scale-x-[-1]"
-                    />
-                  ) : (
-                    <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-[10px] bg-slate-100 text-xs text-slate-ui">
-                      No photo
-                    </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#073D2C]">
-                      {p.punchType === 'time_in' ? 'Time In' : 'Time Out'}
-                    </p>
-                    <p className="mt-0.5 text-sm text-slate-ui">{formatManilaTime(p.punchedAt)}</p>
-                    <p className="text-xs text-slate-ui">{formatManilaDateTime(p.punchedAt)}</p>
-                    {p.locationLabel || (p.latitude != null && p.longitude != null) ? (
-                      <a
-                        className="mt-2 inline-flex items-start gap-1 text-xs font-semibold text-emerald-800 underline"
-                        href={
-                          p.latitude != null && p.longitude != null
-                            ? `https://www.google.com/maps?q=${p.latitude},${p.longitude}`
-                            : undefined
-                        }
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        <span>
-                          {p.locationLabel || 'Location on map'}
-                          {p.accuracyM != null && !p.locationLabel
-                            ? ` (±${Math.round(p.accuracyM)}m)`
-                            : ''}
-                        </span>
-                      </a>
+            {dayPunches.map((p) => {
+              const label = p.punchType === 'time_in' ? 'Time In' : 'Time Out'
+              return (
+                <li
+                  key={p.id}
+                  className="overflow-hidden rounded-[14px] border border-border bg-white shadow-sm"
+                >
+                  <div className="flex gap-3 p-3">
+                    {p.photoUrl ? (
+                      <img
+                        src={p.photoUrl}
+                        alt={`${p.punchType} selfie`}
+                        className="h-24 w-24 shrink-0 rounded-[10px] object-cover scale-x-[-1]"
+                      />
                     ) : (
-                      <p className="mt-2 text-xs text-slate-ui">No location saved</p>
+                      <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-[10px] bg-slate-100 text-xs text-slate-ui">
+                        No photo
+                      </div>
                     )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-sm font-semibold text-[#073D2C]">{label}</p>
+                        <button
+                          type="button"
+                          aria-label={`Delete ${label}`}
+                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                          onClick={() => setDeleteTarget({ id: p.id, label })}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <p className="mt-0.5 text-sm text-slate-ui">{formatManilaTime(p.punchedAt)}</p>
+                      <p className="text-xs text-slate-ui">{formatManilaDateTime(p.punchedAt)}</p>
+                      {p.locationLabel || (p.latitude != null && p.longitude != null) ? (
+                        <a
+                          className="mt-2 inline-flex items-start gap-1 text-xs font-semibold text-emerald-800 underline"
+                          href={
+                            p.latitude != null && p.longitude != null
+                              ? `https://www.google.com/maps?q=${p.latitude},${p.longitude}`
+                              : undefined
+                          }
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span>
+                            {p.locationLabel || 'Location on map'}
+                            {p.accuracyM != null && !p.locationLabel
+                              ? ` (±${Math.round(p.accuracyM)}m)`
+                              : ''}
+                          </span>
+                        </a>
+                      ) : (
+                        <p className="mt-2 text-xs text-slate-ui">No location saved</p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </li>
-            ))}
+                </li>
+              )
+            })}
           </ul>
         </Card>
       </div>
+
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onClose={() => {
+          if (!deleting) setDeleteTarget(null)
+        }}
+        title={`Delete ${deleteTarget?.label ?? 'attendance'}?`}
+        description="This will permanently remove this Time In / Time Out record, including the selfie. This cannot be undone."
+        confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+        destructive
+        onConfirm={() => {
+          if (!deleting) void confirmDelete()
+        }}
+      />
     </div>
   )
 }
