@@ -739,5 +739,7 @@ export interface AttendancePunch {
   latitude: number | null
   longitude: number | null
   accuracyM: number | null
+  /** Street / place name from reverse geocode */
+  locationLabel: string | null
   createdAt: string
 }

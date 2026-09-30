@@ -15,6 +15,7 @@ type DbRow = {
   latitude: number | null
   longitude: number | null
   accuracy_m: number | null
+  location_label: string | null
   created_at: string
 }
 
@@ -27,7 +28,11 @@ function readLocal(): AttendancePunch[] {
     const raw = localStorage.getItem(KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw) as AttendancePunch[]
-    return Array.isArray(parsed) ? parsed : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((p) => ({
+      ...p,
+      locationLabel: p.locationLabel ?? null,
+    }))
   } catch {
     return []
   }
@@ -49,8 +54,62 @@ function mapRow(row: DbRow): AttendancePunch {
     latitude: row.latitude == null ? null : Number(row.latitude),
     longitude: row.longitude == null ? null : Number(row.longitude),
     accuracyM: row.accuracy_m == null ? null : Number(row.accuracy_m),
+    locationLabel: row.location_label ?? null,
     createdAt: row.created_at,
   }
+}
+
+const ATTENDANCE_SELECT =
+  'id, user_id, branch_id, punch_type, punched_at, photo_url, latitude, longitude, accuracy_m, location_label, created_at'
+
+/** Reverse-geocode coords to a street / place label (client-side BigDataCloud). */
+export async function reverseGeocodeLabel(
+  latitude: number,
+  longitude: number,
+): Promise<string> {
+  try {
+    const url = new URL('https://api.bigdatacloud.net/data/reverse-geocode-client')
+    url.searchParams.set('latitude', String(latitude))
+    url.searchParams.set('longitude', String(longitude))
+    url.searchParams.set('localityLanguage', 'en')
+    const res = await fetch(url.toString())
+    if (!res.ok) throw new Error('geocode failed')
+    const data = (await res.json()) as {
+      locality?: string
+      city?: string
+      principalSubdivision?: string
+      countryName?: string
+      localityInfo?: {
+        informative?: Array<{ name?: string; description?: string }>
+        administrative?: Array<{ name?: string }>
+      }
+    }
+
+    const streetish =
+      data.localityInfo?.informative?.find((x) =>
+        /street|road|avenue|boulevard|barangay|neighbourhood|neighborhood/i.test(
+          `${x.description ?? ''} ${x.name ?? ''}`,
+        ),
+      )?.name ??
+      data.localityInfo?.administrative?.[0]?.name
+
+    const parts = [
+      streetish,
+      data.locality,
+      data.city && data.city !== data.locality ? data.city : null,
+      data.principalSubdivision,
+      data.countryName,
+    ].filter((p): p is string => Boolean(p && String(p).trim()))
+
+    const unique: string[] = []
+    for (const p of parts) {
+      if (!unique.some((u) => u.toLowerCase() === p.toLowerCase())) unique.push(p)
+    }
+    if (unique.length) return unique.slice(0, 4).join(', ')
+  } catch {
+    /* fall through */
+  }
+  return `Near ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`
 }
 
 /** Manila calendar date key YYYY-MM-DD for a timestamp */
@@ -117,9 +176,7 @@ export async function listMyAttendance(userId: string): Promise<AttendancePunch[
   if (isSupabaseConfigured && supabase) {
     const { data, error } = await supabase
       .from('staff_attendance_logs')
-      .select(
-        'id, user_id, branch_id, punch_type, punched_at, photo_url, latitude, longitude, accuracy_m, created_at',
-      )
+      .select(ATTENDANCE_SELECT)
       .eq('user_id', userId)
       .order('punched_at', { ascending: false })
     if (error) throw new Error(error.message)
@@ -224,6 +281,7 @@ export async function recordAttendancePunch(input: {
   latitude: number
   longitude: number
   accuracyM: number | null
+  locationLabel: string
 }): Promise<AttendancePunch> {
   const status = await getTodayAttendanceStatus(input.userId)
   if (input.punchType === 'time_in' && !status.canTimeIn) {
@@ -248,10 +306,9 @@ export async function recordAttendancePunch(input: {
         latitude: input.latitude,
         longitude: input.longitude,
         accuracy_m: input.accuracyM,
+        location_label: input.locationLabel,
       })
-      .select(
-        'id, user_id, branch_id, punch_type, punched_at, photo_url, latitude, longitude, accuracy_m, created_at',
-      )
+      .select(ATTENDANCE_SELECT)
       .single()
     if (error) throw new Error(error.message)
     emit()
@@ -268,6 +325,7 @@ export async function recordAttendancePunch(input: {
     latitude: input.latitude,
     longitude: input.longitude,
     accuracyM: input.accuracyM,
+    locationLabel: input.locationLabel,
     createdAt: punchedAt,
   }
   writeLocal([row, ...readLocal()])

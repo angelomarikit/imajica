@@ -75,6 +75,7 @@ Or in **Dashboard → SQL Editor**, paste and run **each file in order**. Confir
 | 35 | `supabase/migrations/20260929000035_seed_team_user_accounts.sql` |
 | 36 | `supabase/migrations/20260929000036_branch_account_all_roles.sql` |
 | 37 | `supabase/migrations/20260929000037_staff_attendance.sql` |
+| 38 | `supabase/migrations/20260929000038_attendance_location_label.sql` |
 
 Step 23 adds missing RLS policies, creates the **Headquarters** sentinel branch (`00000000-0000-0000-0000-000000000001` / code `HQ`), and deletes any leftover demo transactional rows.
 
