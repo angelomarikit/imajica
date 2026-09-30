@@ -164,7 +164,7 @@ export function LandingPage() {
             <Link to="/" className="flex shrink-0 items-center gap-2.5">
               <img src={logo} alt={BRAND.name} className="h-9 w-9 rounded-full object-cover" />
               <div className="leading-none">
-                <p className="font-display text-[18px] font-semibold tracking-[0.04em] text-[#073D2C]">
+                <p className="font-brand text-[18px] font-semibold tracking-[0.04em] text-[#073D2C]">
                   IMAJICA
                 </p>
                 <p className="mt-0.5 text-[7.5px] font-medium uppercase tracking-[0.24em] text-[#C5A059]">
@@ -249,7 +249,7 @@ export function LandingPage() {
               <p className="text-[13px] font-bold uppercase tracking-[0.28em] text-[#B8860B]">
                 Beauty. Science. Confidence.
               </p>
-              <h1 className="mt-4 max-w-[500px] font-display text-[42px] font-semibold leading-[0.94] text-[#073D2C] xl:text-[62px]">
+              <h1 className="mt-4 max-w-[500px] font-brand text-[42px] font-semibold leading-[0.94] text-[#073D2C] xl:text-[62px]">
                 Enhance Your Natural Beauty
               </h1>
               <p className="mt-4 max-w-[500px] text-[17px] font-medium leading-[1.5] text-[#2F2F2F]">
@@ -326,7 +326,7 @@ export function LandingPage() {
                       Transform Yourself
                     </p>
                   </div>
-                  <h2 className="mt-3 font-display text-[30px] font-semibold leading-tight text-[#073D2C]">
+                  <h2 className="mt-3 font-brand text-[30px] font-semibold leading-tight text-[#073D2C]">
                     Expert Care.
                     <br />
                     Visible Results.
@@ -378,7 +378,7 @@ export function LandingPage() {
                     Our Services
                   </p>
                 </div>
-                <h2 className="mt-2 font-display text-[2.1rem] font-medium leading-tight text-[#073D2C] sm:mt-3 sm:text-[2.5rem] lg:text-[3rem]">
+                <h2 className="mt-2 font-brand text-[2.1rem] font-medium leading-tight text-[#073D2C] sm:mt-3 sm:text-[2.5rem] lg:text-[3rem]">
                   Popular Treatments
                 </h2>
                 <p className="mt-2 max-w-md text-[14px] leading-relaxed text-[#6b6b6b] sm:mt-3 sm:text-[15px]">
@@ -410,7 +410,7 @@ export function LandingPage() {
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-[#073D2C]/75 via-[#073D2C]/10 to-transparent xl:from-[#073D2C]/80" />
                     <div className="absolute inset-x-0 bottom-0 p-2.5 text-white sm:p-3 xl:p-3.5">
-                      <h3 className="font-display text-[1.05rem] font-semibold leading-tight drop-shadow-sm sm:text-[1.15rem] xl:text-[1.15rem]">
+                      <h3 className="font-brand text-[1.05rem] font-semibold leading-tight drop-shadow-sm sm:text-[1.15rem] xl:text-[1.15rem]">
                         {service.title}
                       </h3>
                       <p className="mt-0.5 line-clamp-2 text-[10px] font-medium leading-snug text-white/85 sm:text-[11px]">
@@ -450,7 +450,7 @@ export function LandingPage() {
                       <span className="inline-flex rounded-full border border-[#C5A059]/50 bg-[#C5A059]/15 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.2em] text-[#E8D9B8] sm:text-[10px]">
                         {promo.badge}
                       </span>
-                      <h3 className="mt-3 font-display text-[1.55rem] font-semibold leading-[1.1] sm:text-[1.75rem] xl:mt-4 xl:text-[2rem]">
+                      <h3 className="mt-3 font-brand text-[1.55rem] font-semibold leading-[1.1] sm:text-[1.75rem] xl:mt-4 xl:text-[2rem]">
                         {promo.headline}
                       </h3>
                       <p className="mt-2 text-[12px] font-medium leading-relaxed text-white/88 sm:mt-3 sm:text-[13px]">
@@ -482,7 +482,7 @@ export function LandingPage() {
           <div className={cn(content, 'grid items-center gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:gap-14')}>
             <div>
               <div className="mb-4 h-px w-12 bg-[#C5A059]" />
-              <h2 className="font-display text-[2.25rem] font-medium leading-tight text-[#073D2C] lg:text-[2.55rem]">
+              <h2 className="font-brand text-[2.25rem] font-medium leading-tight text-[#073D2C] lg:text-[2.55rem]">
                 About Imajica Medical Aesthetics
               </h2>
               <p className="mt-4 text-[15px] leading-relaxed text-[#5a5a5a]">
@@ -519,7 +519,7 @@ export function LandingPage() {
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#E8D9B8] transition duration-300 group-hover:bg-[#C5A059]">
                   <Sparkles className="h-3.5 w-3.5 text-[#073D2C]" />
                 </span>
-                <p className="font-display text-[15px] font-medium text-[#073D2C]">
+                <p className="font-brand text-[15px] font-medium text-[#073D2C]">
                   Your Trusted Aesthetic Partner
                 </p>
               </div>
@@ -533,7 +533,7 @@ export function LandingPage() {
         <div className={shell}>
           <div className={content}>
             <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
-              <h2 className="font-display text-[2.4rem] font-medium text-[#073D2C] lg:text-[2.7rem]">
+              <h2 className="font-brand text-[2.4rem] font-medium text-[#073D2C] lg:text-[2.7rem]">
                 Client Testimonials
               </h2>
               <a
@@ -619,7 +619,7 @@ export function LandingPage() {
               <Link to="/" className="flex items-center gap-3">
                 <img src={logo} alt="" className="h-11 w-11 rounded-full object-cover" />
                 <div>
-                  <p className="font-display text-[22px] font-semibold tracking-wide">IMAJICA</p>
+                  <p className="font-brand text-[22px] font-semibold tracking-wide">IMAJICA</p>
                   <p className="text-[9px] uppercase tracking-[0.2em] text-[#C5A059]">
                     Medical Aesthetics
                   </p>
@@ -662,7 +662,7 @@ export function LandingPage() {
 
             <div className="mt-7 flex flex-col gap-2 border-t border-white/15 pt-5 text-[13px] text-white/55 sm:flex-row sm:items-center sm:justify-between">
               <p>{BRAND.copyright}</p>
-              <p className="font-display text-[15px] italic text-[#C5A059]">{BRAND.tagline}</p>
+              <p className="font-brand text-[15px] italic text-[#C5A059]">{BRAND.tagline}</p>
             </div>
           </div>
         </div>

@@ -6,6 +6,8 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   deleteBranchOrder,
   getBranchOrders,
@@ -13,6 +15,7 @@ import {
 } from '@/services/branchOrderService'
 import type { BranchOrder } from '@/types'
 import { formatPeso } from '@/utils/currency'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', {
@@ -23,6 +26,9 @@ function formatDate(iso: string) {
 }
 
 export function BranchOrdersPage() {
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  const forcedBranchId = useForcedBranchId()
   const [orders, setOrders] = useState(() => getBranchOrders())
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
@@ -31,14 +37,22 @@ export function BranchOrdersPage() {
   useEffect(() => subscribeBranchOrders(() => setOrders(getBranchOrders())), [])
 
   const filtered = useMemo(() => {
-    if (!search) return orders
+    let list = orders
+    if (franchiseOwner) {
+      list = list.filter((o) => {
+        if (forcedBranchId && o.branchId === forcedBranchId) return true
+        if (user?.branchName && o.branchName === user.branchName) return true
+        return false
+      })
+    }
+    if (!search) return list
     const q = search.toLowerCase()
-    return orders.filter((o) =>
+    return list.filter((o) =>
       `${o.invoiceNumber} ${o.branchName} ${o.contactPerson} ${o.phone ?? ''}`.toLowerCase().includes(
         q,
       ),
     )
-  }, [orders, search])
+  }, [orders, search, franchiseOwner, forcedBranchId, user?.branchName])
 
   function handleDelete(order: BranchOrder) {
     if (!window.confirm(`Delete invoice ${order.invoiceNumber}?`)) return

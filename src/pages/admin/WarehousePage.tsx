@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import {
   Clock,
   FilePenLine,
@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Drawer } from '@/components/ui/Drawer'
+import { useAuth } from '@/contexts/AuthContext'
 import {
   adjustWarehouseStock,
   deleteWarehouseItem,
@@ -28,6 +29,7 @@ import {
 import type { WarehouseItem, WarehouseItemType } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', {
@@ -38,6 +40,8 @@ function formatDate(iso: string) {
 }
 
 export function WarehousePage() {
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
   const [items, setItems] = useState(() => getWarehouseItems())
   const [tab, setTab] = useState<WarehouseItemType>('product')
   const [query, setQuery] = useState('')
@@ -48,6 +52,10 @@ export function WarehousePage() {
   const [editPrice, setEditPrice] = useState('0')
 
   useEffect(() => subscribeWarehouse(() => setItems(getWarehouseItems())), [])
+
+  if (franchiseOwner) {
+    return <Navigate to="/admin/catalog/products" replace />
+  }
 
   const products = useMemo(() => items.filter((i) => i.itemType === 'product'), [items])
   const consumables = useMemo(() => items.filter((i) => i.itemType === 'consumable'), [items])

@@ -1,11 +1,13 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Box, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { demoBranches } from '@/constants/demoData'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { getBranches } from '@/services/branchService'
 import {
   BRANCH_ORDER_SUPPLIER,
   createBranchOrder,
@@ -16,6 +18,7 @@ import {
 import { getCatalogProducts, getConsumables } from '@/services/productCatalogService'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 const labelCls =
   'mb-1.5 block text-[11px] font-bold uppercase tracking-[0.12em] text-charcoal'
@@ -40,20 +43,26 @@ function Required() {
 
 export function NewBranchOrderPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  const forcedBranchId = useForcedBranchId()
   const [params] = useSearchParams()
   const editId = params.get('edit')
   const existing = editId ? getBranchOrderById(editId) : undefined
+  const branchOptions = useMemo(() => getBranches().filter((b) => b.status === 'active'), [])
 
   const matchedBranch =
-    existing?.branchId && demoBranches.some((b) => b.id === existing.branchId)
+    existing?.branchId && branchOptions.some((b) => b.id === existing.branchId)
       ? existing.branchId
       : existing
-        ? demoBranches.find((b) => b.name === existing.branchName)?.id ??
+        ? branchOptions.find((b) => b.name === existing.branchName)?.id ??
           (existing.branchName ? '__custom__' : '')
-        : ''
+        : forcedBranchId ?? ''
 
   const [branchId, setBranchId] = useState(matchedBranch)
-  const [branchName, setBranchName] = useState(existing?.branchName ?? '')
+  const [branchName, setBranchName] = useState(
+    existing?.branchName ?? (franchiseOwner ? user?.branchName ?? '' : ''),
+  )
   const [orderDate, setOrderDate] = useState(
     existing?.orderDate ?? new Date().toISOString().slice(0, 10),
   )
@@ -107,10 +116,17 @@ export function NewBranchOrderPage() {
       setBranchName(existing.branchName)
       return
     }
-    const b = demoBranches.find((x) => x.id === id)
+    const b = branchOptions.find((x) => x.id === id)
     setBranchName(b?.name ?? '')
     if (b?.phone && !phone) setPhone(b.phone.replace(/\s/g, ''))
   }
+
+  useEffect(() => {
+    if (franchiseOwner && forcedBranchId) {
+      setBranchId(forcedBranchId)
+      setBranchName(user?.branchName ?? '')
+    }
+  }, [franchiseOwner, forcedBranchId, user?.branchName])
 
   function addItem() {
     setLines((rows) => [...rows, emptyLine()])
@@ -233,9 +249,13 @@ export function NewBranchOrderPage() {
                 value={branchId}
                 onChange={(e) => onBranchChange(e.target.value)}
                 required
+                disabled={franchiseOwner}
               >
                 <option value="">Select Branch</option>
-                {demoBranches.map((b) => (
+                {(franchiseOwner
+                  ? branchOptions.filter((b) => b.id === forcedBranchId)
+                  : branchOptions
+                ).map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.name}
                   </option>

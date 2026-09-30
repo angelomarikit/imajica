@@ -6,10 +6,13 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { demoBranches, demoSystemSettings } from '@/constants/demoData'
+import { useAuth } from '@/contexts/AuthContext'
+import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import type { Branch } from '@/types'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner, isTimeclockStaff } from '@/utils/franchiseAccess'
 
-const tabs = [
+const hqTabs = [
   { to: '/admin/settings', end: true, label: 'General' },
   { to: '/admin/team/branches', label: 'Branches' },
   { to: '/admin/team/user-access', label: 'User Access' },
@@ -18,12 +21,27 @@ const tabs = [
   { to: '/admin/settings/security', label: 'Security' },
 ]
 
+const franchiseTabs = [
+  { to: '/admin/settings', end: true, label: 'Profile' },
+  { to: '/admin/settings/security', label: 'Password' },
+]
+
 export function SettingsRoutes() {
+  const { user } = useAuth()
+  const staffSettings = isFranchiseBranchOwner(user) || isTimeclockStaff(user)
+  const tabs = staffSettings ? franchiseTabs : hqTabs
+
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="font-display text-4xl">System Settings</h1>
-        <p className="text-sm text-slate-ui">Manage clinic information, branches, services, staff access, and system preferences.</p>
+        <h1 className="font-display text-4xl">
+          {staffSettings ? 'Account Settings' : 'System Settings'}
+        </h1>
+        <p className="text-sm text-slate-ui">
+          {staffSettings
+            ? 'Update your profile details and password for this branch account.'
+            : 'Manage clinic information, branches, services, staff access, and system preferences.'}
+        </p>
       </div>
       <div className="flex flex-wrap gap-2">
         {tabs.map((t) => (
@@ -43,15 +61,69 @@ export function SettingsRoutes() {
         ))}
       </div>
       <Routes>
-        <Route index element={<GeneralSettings />} />
-        <Route path="branches" element={<BranchesSettings />} />
-        <Route path="users" element={<UsersSettings />} />
-        <Route path="payments" element={<PaymentsSettings />} />
-        <Route path="notifications" element={<NotificationsSettings />} />
+        <Route index element={staffSettings ? <ProfileSettings /> : <GeneralSettings />} />
+        {!staffSettings ? (
+          <>
+            <Route path="branches" element={<BranchesSettings />} />
+            <Route path="users" element={<UsersSettings />} />
+            <Route path="payments" element={<PaymentsSettings />} />
+            <Route path="notifications" element={<NotificationsSettings />} />
+          </>
+        ) : null}
         <Route path="security" element={<SecuritySettings />} />
         <Route path="*" element={<Navigate to="." replace />} />
       </Routes>
     </div>
+  )
+}
+
+function ProfileSettings() {
+  const { user } = useAuth()
+  const [fullName, setFullName] = useState(user?.fullName ?? '')
+  const [email] = useState(user?.email ?? '')
+
+  async function saveProfile() {
+    if (!fullName.trim()) {
+      toast.error('Full name is required')
+      return
+    }
+    if (isSupabaseConfigured && supabase && user?.id) {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ full_name: fullName.trim(), updated_at: new Date().toISOString() })
+        .eq('id', user.id)
+      if (error) {
+        toast.error(error.message)
+        return
+      }
+    }
+    toast.success('Profile saved')
+  }
+
+  return (
+    <Card className="p-5">
+      <CardHeader
+        title="Profile"
+        description={
+          user?.branchName
+            ? `Franchise branch: ${user.branchName}`
+            : 'Your account details'
+        }
+      />
+      <div className="mt-4 grid max-w-lg gap-3">
+        <Input label="Full name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+        <Input label="Email" value={email} disabled />
+        <p className="text-xs text-slate-ui">
+          Role: <strong>Branch Admin</strong>
+          {user?.branchName ? ` · ${user.branchName}` : ''}
+        </p>
+        <div>
+          <Button type="button" onClick={() => void saveProfile()}>
+            Save profile
+          </Button>
+        </div>
+      </div>
+    </Card>
   )
 }
 
@@ -68,9 +140,19 @@ function GeneralSettings() {
 }
 
 function BranchesSettings() {
-  const [branches, setBranches] = useState(demoBranches)
-  const [selectedId, setSelectedId] = useState(demoBranches[0].id)
-  const selected = branches.find((b) => b.id === selectedId)!
+  const initial = demoBranches.length > 0 ? demoBranches : []
+  const [branches, setBranches] = useState(initial)
+  const [selectedId, setSelectedId] = useState(initial[0]?.id ?? '')
+  const selected = branches.find((b) => b.id === selectedId)
+
+  if (!selected) {
+    return (
+      <Card className="p-5">
+        <CardHeader title="Branches" description="No branches loaded yet." />
+        <p className="text-sm text-slate-ui">Add clinic branches from Team → Branches.</p>
+      </Card>
+    )
+  }
 
   function updateSelected(patch: Partial<Branch>) {
     setBranches((prev) => prev.map((b) => (b.id === selectedId ? { ...b, ...patch } : b)))
@@ -98,54 +180,27 @@ function BranchesSettings() {
               >
                 <div className="flex items-center gap-2">
                   <p className="font-medium">{b.name}</p>
-                  {b.isMain ? <Badge variant="gold">Main Branch</Badge> : <Badge variant="success">Active</Badge>}
+                  {b.isMain ? <Badge variant="gold">Main</Badge> : null}
                 </div>
-                <p className="mt-1 text-xs text-slate-ui">{b.address}</p>
-                <p className="mt-1 text-xs text-slate-ui">
-                  {b.staffCount} Staff · {b.treatmentRooms} Rooms
-                </p>
+                <p className="text-xs text-slate-ui">{b.address}</p>
               </button>
             </li>
           ))}
         </ul>
       </Card>
-
       <Card className="p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-display text-2xl">{selected.name}</h2>
-          <Button size="sm" onClick={() => toast.success('Branch changes saved (demo)')}>
-            Save Changes
-          </Button>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Input label="Branch Name" value={selected.name} onChange={(e) => updateSelected({ name: e.target.value })} />
-          <Input label="Branch Code" value={selected.code} onChange={(e) => updateSelected({ code: e.target.value })} />
+        <CardHeader title={selected.name} description={selected.code} />
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <Input
-            label="Address"
-            className="sm:col-span-2"
-            value={selected.address}
-            onChange={(e) => updateSelected({ address: e.target.value })}
+            label="Phone"
+            value={selected.phone}
+            onChange={(e) => updateSelected({ phone: e.target.value })}
           />
-          <Input label="Contact Number" value={selected.phone} onChange={(e) => updateSelected({ phone: e.target.value })} />
-          <Input label="Email Address" value={selected.email} onChange={(e) => updateSelected({ email: e.target.value })} />
-        </div>
-        <div className="mt-4 flex flex-wrap gap-4">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={selected.status === 'active'}
-              onChange={(e) => updateSelected({ status: e.target.checked ? 'active' : 'inactive' })}
-            />
-            Active Branch
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={selected.isMain}
-              onChange={(e) => updateSelected({ isMain: e.target.checked })}
-            />
-            Set as Main Branch
-          </label>
+          <Input
+            label="Email"
+            value={selected.email}
+            onChange={(e) => updateSelected({ email: e.target.value })}
+          />
         </div>
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Facility label="Treatment Rooms" value={selected.treatmentRooms} />
@@ -203,12 +258,72 @@ function NotificationsSettings() {
 }
 
 function SecuritySettings() {
+  const { user } = useAuth()
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function changePassword() {
+    if (password.length < 8) {
+      toast.error('Password must be at least 8 characters')
+      return
+    }
+    if (password !== confirm) {
+      toast.error('Passwords do not match')
+      return
+    }
+    setSaving(true)
+    try {
+      if (isSupabaseConfigured && supabase) {
+        const { error } = await supabase.auth.updateUser({ password })
+        if (error) {
+          toast.error(error.message)
+          return
+        }
+        toast.success('Password updated')
+      } else {
+        toast.message(
+          user?.email?.includes('franchise@') || user?.email?.includes('admin@')
+            ? 'Demo mode: password change is simulated. Connect Supabase to persist it.'
+            : 'Connect Supabase to change password.',
+        )
+      }
+      setPassword('')
+      setConfirm('')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <Card className="p-5">
-      <CardHeader title="Security" />
-      <p className="text-sm text-slate-ui">
-        Audit logging enabled for client changes, payments, payroll, inventory adjustments, and role changes.
-      </p>
+      <CardHeader title="Security" description="Change your account password." />
+      <div className="mt-4 grid max-w-lg gap-3">
+        <Input
+          label="New password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete="new-password"
+        />
+        <Input
+          label="Confirm password"
+          type="password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          autoComplete="new-password"
+        />
+        <div>
+          <Button type="button" disabled={saving} onClick={() => void changePassword()}>
+            {saving ? 'Saving…' : 'Update password'}
+          </Button>
+        </div>
+      </div>
+      {!isFranchiseBranchOwner(user) ? (
+        <p className="mt-4 text-sm text-slate-ui">
+          Audit logging enabled for client changes, payments, payroll, inventory adjustments, and role changes.
+        </p>
+      ) : null}
     </Card>
   )
 }

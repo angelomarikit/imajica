@@ -34,11 +34,15 @@ import {
   Store,
   BarChart3,
   Box,
+  KeyRound,
+  Clock,
 } from 'lucide-react'
-import { useEffect, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import logo from '@/assets/logo-imajica.jpg'
 import { BRAND } from '@/constants/brand'
+import { useAuth } from '@/contexts/AuthContext'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner, isTimeclockStaff } from '@/utils/franchiseAccess'
 import { Button } from '@/components/ui/Button'
 
 type NavLeaf = {
@@ -75,7 +79,7 @@ function isNavGroup(node: NavNode): node is NavGroup {
   return 'children' in node && Array.isArray(node.children)
 }
 
-const navSections: NavSection[] = [
+const hqNavSections: NavSection[] = [
   {
     items: [{ to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
   },
@@ -240,6 +244,12 @@ const navSections: NavSection[] = [
         children: [
           { to: '/admin/team/branches/new', label: 'New Branch', icon: Store },
           { to: '/admin/team/branches', label: 'Branches List', icon: List, end: true },
+          {
+            to: '/admin/team/branches/accounts',
+            label: 'Branches Accounts',
+            icon: KeyRound,
+            end: true,
+          },
         ],
       },
     ],
@@ -247,6 +257,145 @@ const navSections: NavSection[] = [
   {
     category: 'Marketing',
     items: [{ to: '/admin/marketing', label: 'Marketing', icon: Megaphone }],
+  },
+  {
+    items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
+  },
+]
+
+/** Clinical / ops staff — Timeclock home; no Team or Marketing */
+function buildTimeclockStaffNavSections(): NavSection[] {
+  const sections: NavSection[] = [
+    {
+      items: [
+        { to: '/admin/dashboard', label: 'Time In / Out', icon: Clock },
+        { to: '/admin/attendance', label: 'My Attendance', icon: CalendarDays },
+      ],
+    },
+  ]
+  for (const section of hqNavSections) {
+    if (!section.category) continue
+    if (section.category === 'Team' || section.category === 'Marketing') continue
+    sections.push(section)
+  }
+  sections.push({
+    items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
+  })
+  return sections
+}
+
+/** Franchise branch owner — trimmed to their branch ops only */
+const franchiseOwnerNavSections: NavSection[] = [
+  {
+    items: [{ to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
+  },
+  {
+    category: 'Scheduling',
+    items: [
+      { to: '/admin/appointments', label: 'Client Scheduling', icon: CalendarDays },
+      { to: '/admin/booking', label: 'Booking', icon: ShoppingBag },
+    ],
+  },
+  {
+    category: 'Sales',
+    items: [{ to: '/admin/payments', label: 'Franchise Sale', icon: Wallet }],
+  },
+  {
+    category: 'Catalog',
+    items: [
+      {
+        label: 'Services & Packages',
+        icon: Package,
+        children: [
+          { to: '/admin/catalog/services', label: 'Services List', icon: List, end: true },
+          { to: '/admin/catalog/packages', label: 'Packages List', icon: Boxes, end: true },
+        ],
+      },
+      {
+        label: 'Products',
+        icon: ShoppingCart,
+        children: [
+          { to: '/admin/catalog/products', label: 'Products', icon: Box, end: true },
+          { to: '/admin/catalog/consumables', label: 'Consumables', icon: FlaskConical, end: true },
+        ],
+      },
+      {
+        label: 'Promotions',
+        icon: Ticket,
+        children: [
+          { to: '/admin/catalog/promotions/new', label: 'New Coupon', icon: Plus },
+          { to: '/admin/catalog/promotions', label: 'Coupon List', icon: List, end: true },
+        ],
+      },
+    ],
+  },
+  {
+    category: 'Customers',
+    items: [
+      {
+        label: 'Customers',
+        icon: Users,
+        children: [
+          { to: '/admin/clients/new', label: 'New Customer', icon: UserPlus },
+          { to: '/admin/clients', label: 'Customer List', icon: Users, end: true },
+        ],
+      },
+    ],
+  },
+  {
+    category: 'Administration',
+    items: [
+      {
+        label: 'Operations',
+        icon: Settings,
+        children: [
+          { to: '/admin/operations/expenses', label: 'Expenses', icon: Receipt, end: true },
+          {
+            to: '/admin/operations/branch-orders',
+            label: 'Branch Orders',
+            icon: ClipboardList,
+            end: true,
+          },
+          {
+            to: '/admin/operations/franchise-orders',
+            label: 'Franchise Orders',
+            icon: FileText,
+            end: true,
+          },
+          { to: '/admin/operations/waste', label: 'Waste', icon: TriangleAlert, end: true },
+          {
+            to: '/admin/catalog/products',
+            label: 'Branch Stock',
+            icon: ShoppingBasket,
+            end: true,
+          },
+        ],
+      },
+      {
+        label: 'Forms',
+        icon: FileText,
+        children: [
+          { to: '/admin/forms/imajica', label: 'Imajica Forms', icon: ClipboardList, end: true },
+        ],
+      },
+    ],
+  },
+  {
+    category: 'Team',
+    items: [
+      {
+        label: 'Staff',
+        icon: User,
+        children: [
+          { to: '/admin/staff/new', label: 'New Staff', icon: UserPlus },
+          { to: '/admin/staff', label: 'Staff List', icon: Users, end: true },
+        ],
+      },
+    ],
+  },
+  {
+    category: 'Reports',
+    items: [{ to: '/admin/analytics/sales-reports', label: 'Branch Sales', icon: PieChart }],
   },
   {
     items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
@@ -421,6 +570,12 @@ export function AdminSidebar({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const { user } = useAuth()
+  const navSections = useMemo(() => {
+    if (isTimeclockStaff(user)) return buildTimeclockStaffNavSections()
+    if (isFranchiseBranchOwner(user)) return franchiseOwnerNavSections
+    return hqNavSections
+  }, [user])
   const close = () => onOpenChange(false)
 
   const content = (
@@ -428,7 +583,7 @@ export function AdminSidebar({
       <div className="flex items-center gap-2.5 border-b border-white/10 px-3.5 py-3">
         <img src={logo} alt={BRAND.name} className="h-9 w-9 rounded-full object-cover" />
         <div>
-          <p className="font-display text-base leading-tight tracking-wide">IMAJICA</p>
+          <p className="font-brand text-base leading-tight tracking-wide">IMAJICA</p>
           <p className="text-[9px] uppercase tracking-[0.16em] text-gold">Medical Aesthetics</p>
         </div>
       </div>
@@ -483,7 +638,7 @@ export function AdminSidebar({
       <div className="mx-2 mb-2 overflow-hidden rounded-[10px] border border-white/10">
         <div className="h-12 bg-[url('https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=400&q=80')] bg-cover bg-center" />
         <div className="bg-emerald-900 px-2.5 py-2">
-          <p className="font-display text-xs text-gold">{BRAND.tagline}</p>
+          <p className="font-brand text-xs text-gold">{BRAND.tagline}</p>
         </div>
       </div>
     </div>

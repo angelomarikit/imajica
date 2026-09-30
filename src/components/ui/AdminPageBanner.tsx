@@ -72,14 +72,14 @@ export function AdminPageBanner({
           ) : null}
           <h1
             className={cn(
-              'font-display text-[1.85rem] leading-[1.1] tracking-wide text-[#F3E6C8] sm:text-[2.35rem]',
+              'font-display text-[1.5rem] font-semibold leading-tight tracking-tight text-[#F3E6C8] sm:text-[1.85rem]',
               eyebrow && 'mt-1.5',
             )}
           >
             {title}
           </h1>
           {description ? (
-            <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-white/70 sm:text-sm">
+            <p className="mt-2 max-w-xl text-[13px] font-normal leading-relaxed tracking-normal text-white/70 sm:text-sm">
               {description}
             </p>
           ) : null}

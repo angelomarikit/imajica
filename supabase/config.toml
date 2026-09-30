@@ -1,9 +1,22 @@
-{
-  "project_id": "imajica-medical-aesthetics",
-  "api": {
-    "enabled": true
-  },
-  "db": {
-    "major_version": 15
-  }
-}
+# https://supabase.com/docs/guides/cli/config
+project_id = "imajica-medical-aesthetics"
+
+[api]
+enabled = true
+
+[db]
+major_version = 15
+
+# Disable gateway JWT on these functions so browser OPTIONS preflight succeeds.
+# Each function still authenticates the caller internally.
+[functions.create-branch-account]
+verify_jwt = false
+
+[functions.semaphore-send]
+verify_jwt = false
+
+[functions.semaphore-account]
+verify_jwt = false
+
+[functions.paymongo-create-payment]
+verify_jwt = false

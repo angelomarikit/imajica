@@ -1,11 +1,12 @@
-import { useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { demoBranches } from '@/constants/demoData'
+import { getBranches } from '@/services/branchService'
 import { createAccessUser } from '@/services/userAccessService'
+import { isSupabaseConfigured } from '@/lib/supabase'
 import { cn } from '@/utils/cn'
 
 const ROLE_OPTIONS = [
@@ -26,13 +27,15 @@ const labelClass = 'text-sm font-medium text-[#073D2C]'
 
 export function NewUserPage() {
   const navigate = useNavigate()
+  const branches = useMemo(() => getBranches().filter((b) => b.status === 'active'), [])
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('')
   const [branchId, setBranchId] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!fullName.trim() || !email.trim()) {
       toast.error('Full name and email are required')
@@ -46,19 +49,31 @@ export function NewUserPage() {
       toast.error('Password must be at least 6 characters')
       return
     }
-    const branch = demoBranches.find((b) => b.id === branchId)
-    createAccessUser({
-      fullName: fullName.trim(),
-      email: email.trim(),
-      role,
-      branchId: branchId || null,
-      branchName: branch?.name ?? null,
-      status: 'active',
-    })
-    toast.success('User added (demo)', {
-      description: 'Will create auth.users + profiles + user_roles when Supabase is connected.',
-    })
-    navigate('/admin/team/user-access')
+    if (isSupabaseConfigured && !branchId) {
+      toast.error(
+        'With Supabase connected, pick a branch — or use Branches Accounts for franchise/clinic logins. HQ-only users: create Auth user in Dashboard then assign SUPER_ADMIN via SQL.',
+      )
+      return
+    }
+    const branch = branches.find((b) => b.id === branchId)
+    setSaving(true)
+    try {
+      await createAccessUser({
+        fullName: fullName.trim(),
+        email: email.trim(),
+        password,
+        role,
+        branchId: branchId || null,
+        branchName: branch?.name ?? null,
+        status: 'active',
+      })
+      toast.success('User added')
+      navigate('/admin/team/user-access')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Create failed')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -148,7 +163,7 @@ export function NewUserPage() {
               >
                 <option value="">Select value</option>
                 <option value="">No Branch (HQ)</option>
-                {demoBranches.map((b) => (
+                {branches.map((b) => (
                   <option key={b.id} value={b.id} className="text-[#073D2C]">
                     {b.name}
                   </option>
@@ -161,7 +176,9 @@ export function NewUserPage() {
             <Button type="button" variant="secondary" onClick={() => navigate('/admin/team/user-access')}>
               Cancel
             </Button>
-            <Button type="submit">Add User</Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? 'Saving…' : 'Add User'}
+            </Button>
           </div>
         </form>
       </Card>

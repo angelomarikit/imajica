@@ -24,7 +24,7 @@ export function Drawer({
       <button type="button" className="absolute inset-0 bg-emerald-950/30" aria-label="Close drawer" onClick={onClose} />
       <aside className={cn('relative z-10 flex h-full flex-col bg-white shadow-xl', widthClass)}>
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 className="font-display text-2xl text-charcoal">{title}</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight text-charcoal">{title}</h2>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
             <X className="h-5 w-5" />
           </Button>

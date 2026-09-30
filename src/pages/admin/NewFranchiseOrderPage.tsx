@@ -1,10 +1,11 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Box, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { useAuth } from '@/contexts/AuthContext'
 import {
   createFranchiseOrder,
   FRANCHISE_BRANCHES,
@@ -17,6 +18,7 @@ import { getCatalogProducts, getConsumables } from '@/services/productCatalogSer
 import type { FranchiseOrderStatus } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 const labelCls =
   'mb-1.5 block text-[11px] font-bold uppercase tracking-[0.12em] text-charcoal'
@@ -41,11 +43,15 @@ function Required() {
 
 export function NewFranchiseOrderPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
   const [params] = useSearchParams()
   const editId = params.get('edit')
   const existing = editId ? getFranchiseOrderById(editId) : undefined
 
-  const [franchiseBranch, setFranchiseBranch] = useState(existing?.franchiseBranch ?? '')
+  const [franchiseBranch, setFranchiseBranch] = useState(
+    existing?.franchiseBranch ?? (franchiseOwner ? user?.branchName ?? '' : ''),
+  )
   const [orderDate, setOrderDate] = useState(
     existing?.orderDate ?? new Date().toISOString().slice(0, 10),
   )
@@ -86,10 +92,15 @@ export function NewFranchiseOrderPage() {
   }, [])
 
   const branchOptions = useMemo(() => {
+    if (franchiseOwner && user?.branchName) return [user.branchName]
     const set = new Set(FRANCHISE_BRANCHES)
     if (existing?.franchiseBranch) set.add(existing.franchiseBranch)
     return [...set]
-  }, [existing])
+  }, [existing, franchiseOwner, user?.branchName])
+
+  useEffect(() => {
+    if (franchiseOwner && user?.branchName) setFranchiseBranch(user.branchName)
+  }, [franchiseOwner, user?.branchName])
 
   const subtotal = lines.reduce((sum, l) => {
     const q = Number(l.quantity) || 0
@@ -221,6 +232,7 @@ export function NewFranchiseOrderPage() {
                 value={franchiseBranch}
                 onChange={(e) => setFranchiseBranch(e.target.value)}
                 required
+                disabled={franchiseOwner}
               >
                 <option value="">Select Franchise Branch</option>
                 {branchOptions.map((b) => (

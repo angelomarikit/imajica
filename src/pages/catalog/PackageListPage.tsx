@@ -20,12 +20,17 @@ import { getBranches } from '@/services/branchService'
 import {
   deletePackage,
   getPackagesCatalog,
+  isPackageLiveAtBranch,
   packageBranchLabel,
   subscribeCatalog,
+  togglePackageLiveForBranch,
 } from '@/services/catalogService'
 import type { Package } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 function packageMatchesBranch(p: Package, branchId: string): boolean {
   if (branchId === 'all') return true
@@ -35,26 +40,32 @@ function packageMatchesBranch(p: Package, branchId: string): boolean {
 }
 
 export function PackageListPage() {
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  const forcedBranchId = useForcedBranchId()
   const [packages, setPackages] = useState<Package[]>(() => getPackagesCatalog())
   const branches = useMemo(() => getBranches(), [packages])
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [sessionFilter, setSessionFilter] = useState('all')
-  const [branchFilter, setBranchFilter] = useState('all')
+  const [branchFilter, setBranchFilter] = useState(forcedBranchId ?? 'all')
   const [pageSize, setPageSize] = useState(10)
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
   useEffect(() => subscribeCatalog(() => setPackages(getPackagesCatalog())), [])
+  useEffect(() => {
+    if (forcedBranchId) setBranchFilter(forcedBranchId)
+  }, [forcedBranchId])
 
   const filtered = useMemo(() => {
     return packages.filter((p) => {
       if (sessionFilter !== 'all' && String(p.sessions) !== sessionFilter) return false
-      if (!packageMatchesBranch(p, branchFilter)) return false
+      if (!franchiseOwner && !packageMatchesBranch(p, branchFilter)) return false
       if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false
       return true
     })
-  }, [packages, sessionFilter, branchFilter, search])
+  }, [packages, sessionFilter, branchFilter, search, franchiseOwner])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
@@ -120,14 +131,22 @@ export function PackageListPage() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <h2 className="font-display text-3xl text-[#073D2C]">Package List</h2>
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={exportCsv}>
-              <FileSpreadsheet className="h-4 w-4" /> Export Excel
-            </Button>
-            <Link to="/admin/catalog/packages/new">
-              <Button>
-                <Plus className="h-4 w-4" /> Add Package
-              </Button>
-            </Link>
+            {!franchiseOwner ? (
+              <>
+                <Button variant="secondary" onClick={exportCsv}>
+                  <FileSpreadsheet className="h-4 w-4" /> Export Excel
+                </Button>
+                <Link to="/admin/catalog/packages/new">
+                  <Button>
+                    <Plus className="h-4 w-4" /> Add Package
+                  </Button>
+                </Link>
+              </>
+            ) : (
+              <p className="text-sm text-slate-ui">
+                Toggle packages live for {user?.branchName ?? 'your branch'} only.
+              </p>
+            )}
           </div>
         </div>
 
@@ -222,11 +241,14 @@ export function PackageListPage() {
                 <th className="px-2 py-3">Branch Name</th>
                 <th className="px-2 py-3">Status</th>
                 <th className="px-2 py-3">Price</th>
-                <th className="px-2 py-3">Actions</th>
+                <th className="px-2 py-3">{franchiseOwner ? 'Live at Branch' : 'Actions'}</th>
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((p) => (
+              {pageRows.map((p) => {
+                const live =
+                  forcedBranchId != null ? isPackageLiveAtBranch(p, forcedBranchId) : false
+                return (
                 <tr key={p.id} className="border-t border-border/70 hover:bg-ivory-100">
                   <td className="px-2 py-3">
                     <input
@@ -254,6 +276,32 @@ export function PackageListPage() {
                     {formatPeso(p.promoPrice ?? p.regularPrice)}
                   </td>
                   <td className="px-2 py-3">
+                    {franchiseOwner && forcedBranchId ? (
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={live}
+                        onClick={() => {
+                          togglePackageLiveForBranch(p.id, forcedBranchId, !live)
+                          toast.success(
+                            !live
+                              ? `${p.name} is now live at your branch`
+                              : `${p.name} turned off for your branch`,
+                          )
+                        }}
+                        className={cn(
+                          'relative h-7 w-12 rounded-full transition',
+                          live ? 'bg-emerald-700' : 'bg-slate-300',
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition',
+                            live ? 'left-5' : 'left-0.5',
+                          )}
+                        />
+                      </button>
+                    ) : (
                     <div className="flex gap-1.5">
                       <Link
                         to={`/admin/catalog/packages/new?edit=${p.id}`}
@@ -271,9 +319,10 @@ export function PackageListPage() {
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
+                    )}
                   </td>
                 </tr>
-              ))}
+              )})}
               {pageRows.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-2 py-10 text-center text-slate-ui">

@@ -22,7 +22,17 @@ export type AppointmentStatus =
   | 'rescheduled'
 
 export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded'
-export type PaymentMethod = 'cash' | 'paymongo' | 'bank_transfer' | 'gcash' | 'paymaya' | 'credit_card' | 'other'
+export type PaymentMethod =
+  | 'cash'
+  | 'paymongo'
+  | 'bank_transfer'
+  | 'gcash'
+  | 'paymaya'
+  | 'credit_card'
+  | 'debit_card'
+  | 'qr_ph'
+  | 'owners_account'
+  | 'other'
 
 export type InventoryMovementType =
   | 'STOCK_IN'
@@ -112,6 +122,8 @@ export interface Client {
   sessionsCount?: number
   totalVisits: number
   totalSpent: number
+  /** Loyalty / referral reward points balance */
+  rewardPoints?: number
   membershipLabel?: string
   emergencyContactName?: string
   emergencyContactPhone?: string
@@ -389,6 +401,8 @@ export interface Sale {
   branchName: string
   staffId?: string
   staffName?: string
+  doctorId?: string
+  doctorName?: string
   treatmentOrPackage: string
   /** Analytics / booking line classification */
   itemType?: 'service' | 'package' | 'product'
@@ -401,6 +415,8 @@ export interface Sale {
   unitRetailPrice?: number
   leadSource?: string
   isFirstClientSale?: boolean
+  referredByClientId?: string
+  referredByName?: string
   totalAmount: number
   paymentMethod: PaymentMethod
   status: PaymentStatus
@@ -706,4 +722,22 @@ export interface AuthSessionUser {
   role: UserRole
   avatarUrl?: string
   branchId?: string
+  /** When set from user_roles → branches */
+  branchType?: 'company_owned' | 'franchise' | 'warehouse'
+  branchName?: string
+}
+
+export type AttendancePunchType = 'time_in' | 'time_out'
+
+export interface AttendancePunch {
+  id: string
+  userId: string
+  branchId: string
+  punchType: AttendancePunchType
+  punchedAt: string
+  photoUrl: string | null
+  latitude: number | null
+  longitude: number | null
+  accuracyM: number | null
+  createdAt: string
 }

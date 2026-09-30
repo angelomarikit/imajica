@@ -31,6 +31,8 @@ export type CreateAppointmentInput = {
   promoCode?: string
   downPayment?: number
   leadSource?: string
+  /** Override default 60-minute duration (booking checkout start/end) */
+  durationMinutes?: number
 }
 
 /** Parse "09:00 AM" or "14:30" → { hours, minutes } in 24h */
@@ -438,7 +440,7 @@ export async function createAppointment(input: CreateAppointmentInput): Promise<
   if (!branch) throw new Error('Select a valid branch')
 
   const treatmentName = input.treatmentName.trim() || 'Consultation'
-  const durationMinutes = 60
+  const durationMinutes = Math.max(15, input.durationMinutes ?? 60)
   const timeLabel = formatTimeLabel(input.timeLabel)
   const { startAt, endAt } = buildStartEnd(input.date, timeLabel, durationMinutes)
 

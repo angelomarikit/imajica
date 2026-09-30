@@ -4,6 +4,7 @@ import { createAppointment, toDateKey } from '@/services/appointmentService'
 import { getBranches } from '@/services/branchService'
 import type { AppointmentStatus } from '@/types'
 import { cn } from '@/utils/cn'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 
 const fieldLabel = 'mb-1.5 block text-xs font-semibold text-[#334155]'
 const fieldControl =
@@ -43,7 +44,12 @@ export function AddClientScheduleModal({
   onSaved: () => void | Promise<void>
   defaultDate?: Date
 }) {
-  const branches = useMemo(() => getBranches().filter((b) => b.code !== 'HQ'), [])
+  const forcedBranchId = useForcedBranchId()
+  const branches = useMemo(() => {
+    const all = getBranches().filter((b) => b.code !== 'HQ')
+    if (forcedBranchId) return all.filter((b) => b.id === forcedBranchId)
+    return all
+  }, [forcedBranchId])
   const today = toDateKey(new Date())
   const defaultAppt = toDateKey(defaultDate ?? new Date())
 
@@ -62,7 +68,7 @@ export function AddClientScheduleModal({
   const [downPayment, setDownPayment] = useState('0')
   const [staffName, setStaffName] = useState('')
   const [showStatus, setShowStatus] = useState('pending')
-  const [branchId, setBranchId] = useState('')
+  const [branchId, setBranchId] = useState(forcedBranchId ?? '')
   const [leadSource, setLeadSource] = useState('')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
@@ -85,11 +91,11 @@ export function AddClientScheduleModal({
     setDownPayment('0')
     setStaffName('')
     setShowStatus('pending')
-    setBranchId('')
+    setBranchId(forcedBranchId ?? '')
     setLeadSource('')
     setNotes('')
     setError('')
-  }, [open, defaultDate, today])
+  }, [open, defaultDate, today, forcedBranchId])
 
   if (!open) return null
 
@@ -337,6 +343,7 @@ export function AddClientScheduleModal({
                   value={branchId}
                   onChange={(e) => setBranchId(e.target.value)}
                   required
+                  disabled={Boolean(forcedBranchId)}
                 >
                   <option value="">Select Branch</option>
                   {branches.map((b) => (

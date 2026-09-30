@@ -6,6 +6,7 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { useAuth } from '@/contexts/AuthContext'
 import {
   deleteFranchiseOrder,
   getFranchiseOrders,
@@ -13,6 +14,7 @@ import {
 } from '@/services/franchiseOrderService'
 import type { FranchiseOrder, FranchiseOrderStatus } from '@/types'
 import { formatPeso } from '@/utils/currency'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', {
@@ -32,6 +34,8 @@ function statusVariant(status: FranchiseOrderStatus): 'warning' | 'info' | 'succ
 }
 
 export function FranchiseOrdersPage() {
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
   const [orders, setOrders] = useState(() => getFranchiseOrders())
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
@@ -40,14 +44,19 @@ export function FranchiseOrdersPage() {
   useEffect(() => subscribeFranchiseOrders(() => setOrders(getFranchiseOrders())), [])
 
   const filtered = useMemo(() => {
-    if (!search) return orders
+    let list = orders
+    if (franchiseOwner && user?.branchName) {
+      const needle = user.branchName.toLowerCase()
+      list = list.filter((o) => o.franchiseBranch.toLowerCase().includes(needle.split(',')[0]))
+    }
+    if (!search) return list
     const q = search.toLowerCase()
-    return orders.filter((o) =>
+    return list.filter((o) =>
       `${o.invoiceNumber} ${o.franchiseBranch} ${o.contactPerson} ${o.phone ?? ''} ${o.status}`
         .toLowerCase()
         .includes(q),
     )
-  }, [orders, search])
+  }, [orders, search, franchiseOwner, user?.branchName])
 
   function handleDelete(order: FranchiseOrder) {
     if (!window.confirm(`Delete invoice ${order.invoiceNumber}?`)) return

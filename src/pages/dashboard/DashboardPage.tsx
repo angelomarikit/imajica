@@ -1,372 +1,610 @@
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ComposedChart,
-  Legend,
-  Line,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
-import {
-  CalendarDays,
-  Coins,
-  Package,
-  Syringe,
-  UserPlus,
-  Users,
+  CalendarCheck2,
+  Cake,
+  CreditCard,
+  Gift,
+  Plus,
+  Receipt,
+  TrendingUp,
+  Wallet,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import type { ReactNode } from 'react'
-import { Badge } from '@/components/ui/Badge'
-import {
-  demoAppointments,
-  demoClientGrowth,
-  demoDashboardKpis,
-  demoInventory,
-  demoRevenueByMonth,
-  demoSalesByBranch,
-  demoStaff,
-  demoTreatments,
-} from '@/constants/demoData'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/Button'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
-import { formatPeso } from '@/utils/currency'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import {
+  listAppointments,
+  subscribeAppointments,
+  toDateKey,
+} from '@/services/appointmentService'
+import { getClients, subscribeClients } from '@/services/clientService'
+import { getExpenses, subscribeExpenses } from '@/services/expenseService'
+import {
+  getBookingRows,
+  getSales,
+  preloadSalesData,
+  subscribeSalesData,
+  todayDateKey,
+} from '@/services/salesService'
+import { getDirectoryStaff } from '@/services/staffDirectoryService'
+import type { Appointment, Client, OperationalExpense, Sale, Staff } from '@/types'
+import { formatPesoExact } from '@/utils/currency'
+import { cn } from '@/utils/cn'
+import { isBranchOwner, isHqRole, isTimeclockStaff } from '@/utils/franchiseAccess'
+import { TimeClockPage } from '@/pages/attendance/TimeClockPage'
 
-/** Visual source of truth: reference/ui/03-dashboard.png */
+const COMMISSION_RATE = 0.05
 
-const pieColors = ['#0A2E26', '#C5A059', '#E8A0A0', '#D4CFC4']
+type BirthdayCard = {
+  id: string
+  name: string
+  initials: string
+  label: string
+  sub: string
+  daysUntil: number
+  role?: string
+}
 
-export function DashboardPage() {
-  const { user } = useAuth()
-  const { branches, selectedBranchId, setSelectedBranchId } = useBranch()
-  const kpis = demoDashboardKpis
-  const topTreatments = [...demoTreatments].sort((a, b) => b.popularity - a.popularity).slice(0, 5)
-  const todayAppts = demoAppointments.filter(
-    (a) =>
-      a.startAt.startsWith('2026-09-25') ||
-      a.status === 'in_progress' ||
-      a.status === 'pending' ||
-      a.status === 'confirmed',
-  )
-  const clientDist = [
-    { name: 'New Clients', value: 32 },
-    { name: 'Regular Clients', value: 45 },
-    { name: 'VIP Clients', value: 15 },
-    { name: 'Inactive', value: 8 },
-  ]
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) return `${parts[0]![0]}${parts[parts.length - 1]![0]}`.toUpperCase()
+  return name.slice(0, 2).toUpperCase() || '—'
+}
 
-  const kpiItems = [
-    { label: 'Total Revenue', value: formatPeso(kpis.totalRevenue), trend: `↑ ${kpis.revenueChange}% vs. last month`, icon: Coins },
-    { label: 'Total Clients', value: String(kpis.totalClients), trend: `↑ ${kpis.clientsChange}% vs. last month`, icon: Users },
-    { label: 'Total Appointments', value: kpis.totalAppointments.toLocaleString(), trend: `↑ ${kpis.appointmentsChange}% vs. last month`, icon: CalendarDays },
-    { label: 'Treatment Sales', value: formatPeso(kpis.treatmentSales), trend: `↑ ${kpis.treatmentSalesChange}% vs. last month`, icon: Syringe },
-    { label: 'Package Sales', value: formatPeso(kpis.packageSales), trend: `↑ ${kpis.packageSalesChange}% vs. last month`, icon: Package },
-    { label: 'New Clients', value: String(kpis.newClients), trend: `↑ ${kpis.newClientsChange}% vs. last month`, icon: UserPlus },
-  ]
+function parseDob(raw?: string): Date | null {
+  if (!raw?.trim()) return null
+  const d = new Date(raw.includes('T') ? raw : `${raw}T12:00:00`)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function birthdayMeta(dob: Date, from: Date) {
+  const today = new Date(from.getFullYear(), from.getMonth(), from.getDate())
+  let next = new Date(today.getFullYear(), dob.getMonth(), dob.getDate())
+  if (next < today) next = new Date(today.getFullYear() + 1, dob.getMonth(), dob.getDate())
+  const daysUntil = Math.round((next.getTime() - today.getTime()) / 86_400_000)
+  let age = today.getFullYear() - dob.getFullYear()
+  const hadBirthday =
+    today.getMonth() > dob.getMonth() ||
+    (today.getMonth() === dob.getMonth() && today.getDate() >= dob.getDate())
+  if (!hadBirthday) age -= 1
+  const displayDate = dob.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  return { daysUntil, age: Math.max(0, age), displayDate }
+}
+
+function cashStorageKey(scope: string, dateKey: string) {
+  return `imajica_cash_confirm_${scope}_${dateKey}`
+}
+
+function readConfirmedCash(scope: string, dateKey: string): number | null {
+  try {
+    const raw = localStorage.getItem(cashStorageKey(scope, dateKey))
+    if (raw == null) return null
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : null
+  } catch {
+    return null
+  }
+}
+
+function writeConfirmedCash(scope: string, dateKey: string, amount: number) {
+  localStorage.setItem(cashStorageKey(scope, dateKey), String(amount))
+}
+
+function StatCard({
+  title,
+  value,
+  hint,
+  tag,
+  tagTone = 'amber',
+  icon,
+  action,
+  className,
+}: {
+  title: string
+  value: string
+  hint?: string
+  tag?: string
+  tagTone?: 'amber' | 'sky' | 'rose' | 'emerald'
+  icon?: ReactNode
+  action?: ReactNode
+  className?: string
+}) {
+  const tagClass = {
+    amber: 'bg-amber-100 text-amber-800',
+    sky: 'bg-sky-100 text-sky-800',
+    rose: 'bg-rose-100 text-rose-700',
+    emerald: 'bg-emerald-100 text-emerald-800',
+  }[tagTone]
 
   return (
-    <div className="space-y-5">
-      <section className="relative overflow-hidden rounded-[16px] border border-[#E8E4DC] bg-white">
-        <div
-          className="absolute inset-0 opacity-[0.28]"
-          style={{
-            backgroundImage: "url('https://images.unsplash.com/photo-1629909615184-74f495363b67?w=1400&q=80')",
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-          }}
-        />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#FDFBF7] via-[#FDFBF7]/88 to-[#FDFBF7]/40" />
-        <div className="relative flex flex-col gap-4 px-5 py-6 lg:flex-row lg:items-end lg:justify-between lg:px-7">
-          <div>
-            <h1 className="font-display text-[2rem] leading-tight text-[#0A2E26] lg:text-[2.35rem]">
-              Welcome Back, {user?.fullName ?? 'Maria Santos'}
-            </h1>
-            <p className="mt-1 text-sm text-[#5a5a5a]">Here’s what’s happening across your clinic today.</p>
-            <p className="mt-3 font-display text-sm italic text-[#C5A059]">Enhancing Natural Beauty</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <select
-              value={selectedBranchId}
-              onChange={(e) => setSelectedBranchId(e.target.value)}
-              className="h-10 rounded-[10px] border border-[#E5E0D6] bg-white px-3 text-sm"
-            >
-              <option value="all">All Branches</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-            <select className="h-10 rounded-[10px] border border-[#E5E0D6] bg-white px-3 text-sm" defaultValue="sep">
-              <option value="sep">Sep 1, 2026 – Sep 30, 2026</option>
-              <option value="aug">Aug 1, 2026 – Aug 31, 2026</option>
-            </select>
-          </div>
+    <div
+      className={cn(
+        'flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]',
+        className,
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          {icon ? (
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-50 text-[#0A2E26] ring-1 ring-slate-200/80">
+              {icon}
+            </span>
+          ) : null}
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+            {title}
+          </p>
         </div>
-      </section>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        {kpiItems.map(({ label, value, trend, icon: Icon }) => (
-          <div
-            key={label}
-            className="rounded-[14px] border border-[#E8E4DC] bg-white p-4 shadow-[0_2px_10px_rgba(10,46,38,0.04)]"
+        {tag ? (
+          <span
+            className={cn(
+              'rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+              tagClass,
+            )}
           >
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-[#6b6b6b]">{label}</p>
-              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#F7F1E3] text-[#C5A059]">
-                <Icon className="h-4 w-4" />
-              </span>
-            </div>
-            <p className="mt-2 font-metric text-[1.75rem] font-semibold leading-none tracking-tight text-[#0A2E26]">
-              {value}
-            </p>
-            <p className="mt-2 text-[11px] font-medium text-[#0d5c45]">{trend}</p>
-          </div>
-        ))}
+            {tag}
+          </span>
+        ) : null}
       </div>
-
-      {/* Middle: Revenue (wide) + Distribution + Top Treatments */}
-      <div className="grid gap-4 xl:grid-cols-[1.35fr_0.75fr_0.9fr]">
-        <Panel
-          title="Revenue & Sales Overview"
-          action={
-            <select className="h-8 rounded-md border border-[#E5E0D6] px-2 text-xs" defaultValue="monthly">
-              <option value="monthly">Monthly</option>
-            </select>
-          }
-        >
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={demoRevenueByMonth}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="treatment" stackId="a" fill="#0A2E26" name="Treatment Sales" />
-                <Bar dataKey="package" stackId="a" fill="#C5A059" name="Package Sales" />
-                <Bar dataKey="product" stackId="a" fill="#E8A0A0" name="Product Sales" />
-                <Line type="monotone" dataKey="revenue" stroke="#B8860B" strokeWidth={2} name="Total Revenue" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </Panel>
-
-        <Panel title="Client Distribution">
-          <div className="relative h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={clientDist} dataKey="value" nameKey="name" innerRadius={52} outerRadius={78}>
-                  {clientDist.map((_, i) => (
-                    <Cell key={i} fill={pieColors[i % pieColors.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center pb-10">
-              <div className="text-center">
-                <p className="font-metric text-2xl font-semibold tracking-tight text-[#0A2E26]">386</p>
-                <p className="text-[10px] text-[#6b6b6b]">Total Clients</p>
-              </div>
-            </div>
-          </div>
-        </Panel>
-
-        <Panel
-          title="Top Treatments"
-          action={
-            <Link to="/admin/treatments" className="text-xs font-medium text-[#0A2E26] hover:underline">
-              View All →
-            </Link>
-          }
-        >
-          <ul className="space-y-3">
-            {topTreatments.map((t, idx) => (
-              <li key={t.id} className="flex items-center gap-3 border-b border-[#E8E4DC]/80 pb-3 last:border-0">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#F7F1E3] text-[11px] font-semibold text-[#C5A059]">
-                  {idx + 1}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-[#0A2E26]">{t.name}</p>
-                  <p className="text-[11px] text-[#6b6b6b]">{t.popularity} sessions</p>
-                </div>
-                <p className="text-sm font-semibold text-[#0A2E26]">{formatPeso(t.price * t.popularity)}</p>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-        <Panel
-          title="Appointments Today"
-          action={
-            <Link to="/admin/appointments" className="text-xs font-medium text-[#0A2E26] hover:underline">
-              View All →
-            </Link>
-          }
-        >
-          <ul className="space-y-3">
-            {todayAppts.map((a) => (
-              <li key={a.id} className="flex items-start justify-between gap-3">
-                <div className="flex gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#E8F2EE] text-xs font-semibold text-[#0A2E26]">
-                    {a.clientName.slice(0, 1)}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-[#0A2E26]">{a.clientName}</p>
-                    <p className="text-[11px] text-[#6b6b6b]">
-                      {new Date(a.startAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} ·{' '}
-                      {a.treatmentName}
-                    </p>
-                  </div>
-                </div>
-                <Badge
-                  variant={
-                    a.status === 'confirmed' || a.status === 'completed'
-                      ? 'success'
-                      : a.status === 'in_progress'
-                        ? 'info'
-                        : 'warning'
-                  }
-                >
-                  {a.status.replace('_', ' ')}
-                </Badge>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-
-        <Panel title="Sales by Branch">
-          <div className="h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={demoSalesByBranch} layout="vertical" margin={{ left: 8, right: 8 }}>
-                <XAxis type="number" hide />
-                <YAxis type="category" dataKey="branch" width={78} tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v) => formatPeso(Number(v))} />
-                <Bar dataKey="revenue" fill="#0A2E26" radius={[0, 6, 6, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Panel>
-
-        <Panel title="Client Growth">
-          <div className="h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={demoClientGrowth}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Bar dataKey="newClients" stackId="a" fill="#0A2E26" name="New Clients" />
-                <Bar dataKey="returning" stackId="a" fill="#9fc5b5" name="Returning" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Panel>
-
-        <Panel
-          title="Inventory Status"
-          action={
-            <Link to="/admin/inventory" className="text-xs font-medium text-[#0A2E26] hover:underline">
-              View All →
-            </Link>
-          }
-        >
-          <div className="grid grid-cols-2 gap-2.5">
-            {demoInventory.slice(0, 4).map((item) => (
-              <div key={item.id} className="rounded-[10px] border border-[#E8E4DC] p-3">
-                <p className="truncate text-sm font-medium text-[#0A2E26]">{item.name}</p>
-                <p className="mt-1 text-[11px] text-[#6b6b6b]">{item.currentStock} units</p>
-                <Badge
-                  className="mt-2"
-                  variant={item.status === 'in_stock' ? 'success' : item.status === 'low_stock' ? 'warning' : 'danger'}
-                >
-                  {item.status.replace('_', ' ')}
-                </Badge>
-              </div>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel
-          title="Staff Performance"
-          action={
-            <Link to="/admin/staff" className="text-xs font-medium text-[#0A2E26] hover:underline">
-              View All →
-            </Link>
-          }
-        >
-          <ul className="space-y-3">
-            {demoStaff.slice(0, 4).map((s) => (
-              <li key={s.id} className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#F7F1E3] text-xs font-semibold text-[#0A2E26]">
-                    {s.fullName.slice(0, 1)}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-[#0A2E26]">{s.fullName}</p>
-                    <p className="text-[11px] text-[#6b6b6b]">{s.title}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-semibold text-[#0A2E26]">{formatPeso(s.baseSalary)}</p>
-                  <p className="text-[11px] text-[#6b6b6b]">★ {s.rating.toFixed(1)}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-
-        <div className="relative min-h-[260px] overflow-hidden rounded-[14px] border border-[#E8E4DC] shadow-[0_2px_10px_rgba(10,46,38,0.04)]">
-          <img
-            src="https://images.unsplash.com/photo-1616394584738-fc6e612e71b9?w=900&q=80"
-            alt="Promotions"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#0A2E26]/85 via-[#0A2E26]/35 to-transparent" />
-          <div className="relative flex h-full flex-col justify-end p-5 text-white">
-            <p className="font-display text-2xl leading-tight">More Beautiful Results</p>
-            <p className="mt-2 text-sm text-white/80">
-              Trusted treatments. Advanced technology. Personalized care.
-            </p>
-            <Link
-              to="/admin/marketing"
-              className="mt-4 inline-flex h-10 w-fit items-center rounded-full bg-[#C5A059] px-4 text-sm font-semibold text-[#0A2E26]"
-            >
-              View Promotions →
-            </Link>
-          </div>
-        </div>
+      <p className="mt-4 font-metric text-[1.75rem] font-semibold leading-none tracking-tight text-slate-900">
+        {value}
+      </p>
+      <div className="mt-auto flex items-end justify-between gap-2 pt-3">
+        {hint ? <p className="text-xs leading-snug text-slate-500">{hint}</p> : <span />}
+        {action}
       </div>
     </div>
   )
 }
 
-function Panel({
+function BirthdayPersonCard({ item }: { item: BirthdayCard }) {
+  return (
+    <div className="flex min-w-[240px] max-w-[280px] shrink-0 items-start gap-3 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#0A2E26] text-sm font-semibold text-[#F3E6C8]">
+        {item.initials}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-2">
+          <p className="truncate text-sm font-semibold text-slate-900">{item.name}</p>
+          <span
+            className={cn(
+              'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
+              item.daysUntil === 0 ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-800',
+            )}
+          >
+            <Cake className="h-3 w-3" />
+            {item.label}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">{item.sub}</p>
+        {item.role ? <p className="mt-0.5 text-[11px] font-medium text-slate-400">{item.role}</p> : null}
+      </div>
+    </div>
+  )
+}
+
+function BirthdayBlock({
   title,
-  children,
-  action,
+  empty,
+  items,
 }: {
   title: string
-  children: ReactNode
-  action?: ReactNode
+  empty: string
+  items: BirthdayCard[]
 }) {
   return (
-    <div className="rounded-[14px] border border-[#E8E4DC] bg-white p-4 shadow-[0_2px_10px_rgba(10,46,38,0.04)]">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h3 className="font-display text-xl text-[#0A2E26]">{title}</h3>
-        {action}
+    <div>
+      <p className="mb-2.5 text-sm font-semibold text-slate-800">{title}</p>
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-8 text-center text-sm text-slate-500">
+          {empty}
+        </div>
+      ) : (
+        <div className="flex gap-3 overflow-x-auto pb-1">{items.map((b) => (
+          <BirthdayPersonCard key={b.id} item={b} />
+        ))}</div>
+      )}
+    </div>
+  )
+}
+
+export function DashboardPage() {
+  const { user } = useAuth()
+  if (isTimeclockStaff(user)) {
+    return <TimeClockPage />
+  }
+  return <BranchOpsDashboard />
+}
+
+function BranchOpsDashboard() {
+  const { user } = useAuth()
+  const { branches, selectedBranchId, setSelectedBranchId, branchLocked } = useBranch()
+  const forcedBranchId = useForcedBranchId()
+  const branchOwner = isBranchOwner(user)
+  const hqView = isHqRole(user?.role)
+  const scopeBranchId = forcedBranchId ?? (selectedBranchId === 'all' ? undefined : selectedBranchId)
+
+  const [sales, setSales] = useState<Sale[]>(() => getSales())
+  const [clients, setClients] = useState<Client[]>(() => getClients())
+  const [appointments, setAppointments] = useState<Appointment[]>([])
+  const [expenses, setExpenses] = useState<OperationalExpense[]>(() => getExpenses())
+  const [cashTick, setCashTick] = useState(0)
+
+  useEffect(() => {
+    const refreshSales = () => setSales(getSales())
+    const refreshClients = () => setClients(getClients())
+    const refreshExpenses = () => setExpenses(getExpenses())
+    const refreshAppts = () => {
+      void listAppointments().then(setAppointments)
+    }
+    void preloadSalesData().then(refreshSales)
+    refreshSales()
+    refreshClients()
+    refreshExpenses()
+    refreshAppts()
+    const unsubs = [
+      subscribeSalesData(refreshSales),
+      subscribeClients(refreshClients),
+      subscribeExpenses(refreshExpenses),
+      subscribeAppointments(refreshAppts),
+    ]
+    return () => unsubs.forEach((u) => u())
+  }, [])
+
+  const branchLabel = useMemo(() => {
+    if (forcedBranchId || branchOwner) return user?.branchName ?? 'My Branch'
+    if (scopeBranchId) {
+      return branches.find((b) => b.id === scopeBranchId)?.name ?? 'Selected Branch'
+    }
+    return 'All Branches'
+  }, [forcedBranchId, branchOwner, user?.branchName, scopeBranchId, branches])
+
+  const cashScope = scopeBranchId ?? 'all'
+  const todayKey = todayDateKey()
+  const now = useMemo(() => new Date(), [todayKey])
+  const monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+
+  const scopedSales = useMemo(
+    () => (scopeBranchId ? sales.filter((s) => s.branchId === scopeBranchId) : sales),
+    [sales, scopeBranchId],
+  )
+  const scopedClients = useMemo(() => {
+    if (!scopeBranchId) return clients
+    return clients.filter((c) => c.preferredBranchId === scopeBranchId)
+  }, [clients, scopeBranchId])
+  const scopedAppts = useMemo(
+    () => (scopeBranchId ? appointments.filter((a) => a.branchId === scopeBranchId) : appointments),
+    [appointments, scopeBranchId],
+  )
+  const scopedExpenses = useMemo(() => {
+    if (!scopeBranchId) return expenses
+    return expenses.filter((e) => !e.branchId || e.branchId === scopeBranchId)
+  }, [expenses, scopeBranchId])
+
+  const metrics = useMemo(() => {
+    const todaySales = scopedSales.filter((s) => todayDateKey(new Date(s.createdAt)) === todayKey)
+    const monthSales = scopedSales.filter((s) => s.createdAt.slice(0, 7) === monthPrefix)
+    const dailySales = todaySales.reduce((n, s) => n + (s.totalAmount || 0), 0)
+    const monthlySales = monthSales.reduce((n, s) => n + (s.totalAmount || 0), 0)
+    const todayExpenseTotal = scopedExpenses
+      .filter((e) => e.expenseDate === todayKey && e.status === 'active')
+      .reduce((n, e) => n + (e.amount || 0), 0)
+
+    const bookingRows = getBookingRows({ branchId: scopeBranchId })
+    const totalAppointments = Math.max(scopedAppts.length, bookingRows.length)
+    const todayApptCount = scopedAppts.filter(
+      (a) => toDateKey(new Date(a.startAt)) === todayKey,
+    ).length
+    const todayPaymentsCount = todaySales.length
+    const commissions = monthlySales * COMMISSION_RATE
+
+    return {
+      totalAppointments,
+      todayPaymentsCount: todayPaymentsCount || todayApptCount,
+      paymentSummary: dailySales,
+      dailySales,
+      monthlySales,
+      commissions,
+      todayExpenses: todayExpenseTotal,
+    }
+  }, [scopedSales, scopedAppts, scopedExpenses, scopeBranchId, todayKey, monthPrefix])
+
+  const cash = useMemo(() => {
+    void cashTick
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    const yKey = todayDateKey(yesterday)
+    const beginning = readConfirmedCash(cashScope, yKey) ?? 0
+    const ending = beginning + metrics.dailySales - metrics.todayExpenses
+    const confirmedToday = readConfirmedCash(cashScope, todayKey)
+    return { beginning, ending, confirmedToday }
+  }, [cashScope, todayKey, metrics.dailySales, metrics.todayExpenses, cashTick])
+
+  const customerBirthdays = useMemo(() => {
+    const todayList: BirthdayCard[] = []
+    const upcoming: BirthdayCard[] = []
+    for (const c of scopedClients) {
+      const dob = parseDob(c.dateOfBirth)
+      if (!dob) continue
+      const meta = birthdayMeta(dob, now)
+      if (meta.daysUntil > 92) continue
+      const card: BirthdayCard = {
+        id: c.id,
+        name: c.fullName,
+        initials: initials(c.fullName),
+        label: meta.daysUntil === 0 ? 'Today' : `in ${meta.daysUntil} days`,
+        sub: `${meta.displayDate} | ${meta.age} years old`,
+        daysUntil: meta.daysUntil,
+      }
+      if (meta.daysUntil === 0) todayList.push(card)
+      else upcoming.push(card)
+    }
+    upcoming.sort((a, b) => a.daysUntil - b.daysUntil)
+    return { today: todayList, upcoming: upcoming.slice(0, 12) }
+  }, [scopedClients, now])
+
+  const staffBirthdays = useMemo(() => {
+    let staff: Staff[] = getDirectoryStaff().filter((s) => s.status === 'active')
+    if (scopeBranchId) {
+      const scoped = staff.filter((s) => s.branchId === scopeBranchId)
+      if (scoped.length) staff = scoped
+    }
+    const todayList: BirthdayCard[] = []
+    const upcoming: BirthdayCard[] = []
+    for (const s of staff) {
+      const dob = parseDob(s.birthDate)
+      if (!dob) continue
+      const meta = birthdayMeta(dob, now)
+      if (meta.daysUntil > 92) continue
+      const card: BirthdayCard = {
+        id: s.id,
+        name: s.fullName,
+        initials: initials(s.fullName),
+        label: meta.daysUntil === 0 ? 'Today' : `in ${meta.daysUntil} days`,
+        sub: `${meta.displayDate} | ${meta.age} years old`,
+        daysUntil: meta.daysUntil,
+        role: s.title || s.role,
+      }
+      if (meta.daysUntil === 0) todayList.push(card)
+      else upcoming.push(card)
+    }
+    upcoming.sort((a, b) => a.daysUntil - b.daysUntil)
+    return { today: todayList, upcoming: upcoming.slice(0, 12) }
+  }, [scopeBranchId, now])
+
+  function confirmCash() {
+    writeConfirmedCash(cashScope, todayKey, cash.ending)
+    setCashTick((n) => n + 1)
+    toast.success('Cash confirmed', {
+      description: `Ending balance ${formatPesoExact(cash.ending)} saved for ${todayKey}.`,
+    })
+  }
+
+  return (
+    <div className="-mx-1 space-y-6 sm:mx-0">
+      {/* Welcome */}
+      <section className="relative overflow-hidden rounded-2xl bg-[#05281F] text-white shadow-[0_16px_40px_rgba(5,40,31,0.28)]">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -right-10 -top-16 h-48 w-48 rounded-full bg-[radial-gradient(circle,rgba(197,160,89,0.28)_0%,transparent_70%)]"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#C5A059]/50 to-transparent"
+        />
+        <div className="relative flex flex-col gap-5 px-5 py-6 sm:px-7 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-2xl">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#C5A059]">
+              Daily operations
+            </p>
+            <h1 className="mt-1.5 text-[1.65rem] font-semibold leading-tight tracking-tight text-white sm:text-[1.9rem]">
+              Welcome back, {user?.fullName ?? 'Team'}!
+            </h1>
+            <p className="mt-2 text-sm leading-relaxed text-white/70">
+              Here is your daily summary, branch performance metrics, and operational highlights.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {!branchLocked && !branchOwner && hqView ? (
+              <select
+                value={selectedBranchId}
+                onChange={(e) => setSelectedBranchId(e.target.value)}
+                className="h-11 rounded-xl border border-white/15 bg-white/10 px-3 text-sm text-white outline-none backdrop-blur"
+              >
+                <option value="all" className="text-slate-900">
+                  All Branches
+                </option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id} className="text-slate-900">
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <div className="rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 backdrop-blur">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#C5A059]">
+                Branch
+              </p>
+              <p className="mt-0.5 text-sm font-semibold text-white">{branchLabel}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Metrics row 1 */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          title="Total Appointments"
+          value={metrics.totalAppointments.toLocaleString()}
+          hint="Bookings closed and ready for review."
+          tag="Booking"
+          tagTone="amber"
+          icon={<CalendarCheck2 className="h-4 w-4" />}
+        />
+        <StatCard
+          title="Today's Payments"
+          value={String(metrics.todayPaymentsCount)}
+          hint="Payment transactions recorded today."
+          tag="Today"
+          tagTone="sky"
+          icon={<CreditCard className="h-4 w-4" />}
+        />
+        <StatCard
+          title="Payment Summary"
+          value={formatPesoExact(metrics.paymentSummary)}
+          hint="Current payment balance summary."
+          icon={<Wallet className="h-4 w-4" />}
+          action={
+            <Link
+              to="/admin/payments"
+              className="text-xs font-semibold text-emerald-800 hover:underline"
+            >
+              View All
+            </Link>
+          }
+        />
+        <StatCard
+          title="Daily Sales"
+          value={formatPesoExact(metrics.dailySales)}
+          hint="Today's total service sales."
+          tag="Revenue"
+          tagTone="amber"
+          icon={<TrendingUp className="h-4 w-4" />}
+        />
       </div>
-      {children}
+
+      {/* Metrics row 2 */}
+      <div className="grid gap-3 lg:grid-cols-3">
+        <StatCard
+          title="Monthly Sales"
+          value={formatPesoExact(metrics.monthlySales)}
+          hint="Total revenue for the current month."
+          icon={<Receipt className="h-4 w-4" />}
+        />
+        <StatCard
+          title="Total Commissions"
+          value={formatPesoExact(metrics.commissions)}
+          hint={`Estimated staff fees (${Math.round(COMMISSION_RATE * 100)}% of monthly sales).`}
+          tag="Fees"
+          tagTone="rose"
+          action={
+            <Link
+              to="/admin/staff/sales"
+              className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-rose-700"
+            >
+              <Plus className="h-3 w-3" /> Details
+            </Link>
+          }
+        />
+        <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-50 text-[#0A2E26] ring-1 ring-slate-200/80">
+              <Wallet className="h-4 w-4" />
+            </span>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+              Cash Drawer Summary
+            </p>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div className="rounded-xl bg-slate-50 px-3.5 py-3 ring-1 ring-slate-200/70">
+              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                Beginning
+              </p>
+              <p className="mt-1.5 font-metric text-lg font-semibold text-slate-900">
+                {formatPesoExact(cash.beginning)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-emerald-50 px-3.5 py-3 ring-1 ring-emerald-100">
+              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-800/70">
+                Ending
+              </p>
+              <p className="mt-1.5 font-metric text-lg font-semibold text-emerald-950">
+                {formatPesoExact(cash.ending)}
+              </p>
+            </div>
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500">
+            Ending = beginning + daily sales − today&apos;s expenses
+            {cash.confirmedToday != null ? ' · confirmed' : ''}.
+          </p>
+          <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
+            <Button type="button" variant="gold" className="rounded-xl" onClick={confirmCash}>
+              Confirm Cash
+            </Button>
+            <Link
+              to="/admin/operations/expenses"
+              className="text-xs font-semibold text-slate-500 hover:text-emerald-800"
+            >
+              Log expense
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* Birthday banner */}
+      <section className="relative overflow-hidden rounded-2xl bg-[#05281F] px-5 py-5 text-white sm:px-7">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -right-6 top-1/2 h-28 w-28 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(197,160,89,0.35)_0%,transparent_70%)]"
+        />
+        <div className="relative flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
+              Happy Birthday to Our Valued Clients! 🎂
+            </h2>
+            <p className="mt-1 text-sm font-medium text-[#C5A059]">{branchLabel}</p>
+          </div>
+          <Gift className="h-12 w-12 text-[#C5A059]" strokeWidth={1.35} />
+        </div>
+      </section>
+
+      {/* Customer birthdays */}
+      <section className="space-y-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.03)] sm:p-6">
+        <div>
+          <h3 className="text-lg font-semibold tracking-tight text-slate-900">Customer Birthdays</h3>
+          <p className="mt-0.5 text-sm text-slate-500">
+            Stay connected with your customers on their special day.
+          </p>
+        </div>
+        <BirthdayBlock
+          title="Today's Birthdays"
+          empty="No customer birthdays today."
+          items={customerBirthdays.today}
+        />
+        <BirthdayBlock
+          title="Upcoming Birthdays"
+          empty="No upcoming customer birthdays in the next 3 months."
+          items={customerBirthdays.upcoming}
+        />
+      </section>
+
+      {/* Staff birthdays */}
+      <section className="space-y-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.03)] sm:p-6">
+        <div>
+          <h3 className="text-lg font-semibold tracking-tight text-slate-900">Staff Birthdays</h3>
+          <p className="mt-0.5 text-sm text-slate-500">Celebrate your team members.</p>
+        </div>
+        <BirthdayBlock
+          title="Today's Birthdays"
+          empty="No staff birthdays today."
+          items={staffBirthdays.today}
+        />
+        <BirthdayBlock
+          title="Upcoming Birthdays"
+          empty="No upcoming staff birthdays in the next 3 months."
+          items={staffBirthdays.upcoming}
+        />
+      </section>
+
+      <p className="pb-1 text-center text-xs text-slate-400">
+        © {new Date().getFullYear()} Imajica Medical Aesthetics
+      </p>
     </div>
   )
 }

@@ -9,12 +9,12 @@ import { Drawer } from '@/components/ui/Drawer'
 import { Input } from '@/components/ui/Input'
 import { exportCsv } from '@/services/analyticsService'
 import {
-  getAccessUsers,
+  listAccessUsers,
   saveAccessUser,
   setAccessUserActive,
   subscribeAccessUsers,
 } from '@/services/userAccessService'
-import { demoBranches } from '@/constants/demoData'
+import { getBranches } from '@/services/branchService'
 import type { AccessUser } from '@/types'
 import { cn } from '@/utils/cn'
 
@@ -31,14 +31,28 @@ const ROLE_OPTIONS = [
 
 export function UserAccessPage() {
   const navigate = useNavigate()
-  const [users, setUsers] = useState(() => getAccessUsers())
+  const [users, setUsers] = useState<AccessUser[]>([])
+  const branches = useMemo(() => getBranches(), [])
   const [queryDraft, setQueryDraft] = useState('')
   const [query, setQuery] = useState('')
   const [pageSize, setPageSize] = useState(10)
   const [page, setPage] = useState(1)
   const [editing, setEditing] = useState<AccessUser | null>(null)
 
-  useEffect(() => subscribeAccessUsers(() => setUsers(getAccessUsers())), [])
+  async function refresh() {
+    try {
+      setUsers(await listAccessUsers())
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to load users')
+    }
+  }
+
+  useEffect(() => {
+    void refresh()
+    return subscribeAccessUsers(() => {
+      void refresh()
+    })
+  }, [])
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase()
@@ -72,8 +86,12 @@ export function UserAccessPage() {
 
   function toggleActive(u: AccessUser) {
     const next = u.status !== 'active'
-    setAccessUserActive(u.id, next)
-    toast.success(`${u.fullName} ${next ? 'activated' : 'deactivated'} (demo)`)
+    void setAccessUserActive(u.id, next)
+      .then(() => {
+        toast.success(`${u.fullName} ${next ? 'activated' : 'deactivated'}`)
+        return refresh()
+      })
+      .catch((err) => toast.error(err instanceof Error ? err.message : 'Update failed'))
   }
 
   function saveEdit() {
@@ -82,13 +100,17 @@ export function UserAccessPage() {
       toast.error('Name and email are required')
       return
     }
-    const branch = demoBranches.find((b) => b.id === editing.branchId)
-    saveAccessUser({
+    const branch = branches.find((b) => b.id === editing.branchId)
+    void saveAccessUser({
       ...editing,
       branchName: editing.branchId ? branch?.name ?? editing.branchName : null,
     })
-    toast.success('User updated (demo)')
-    setEditing(null)
+      .then(() => {
+        toast.success('User updated')
+        setEditing(null)
+        return refresh()
+      })
+      .catch((err) => toast.error(err instanceof Error ? err.message : 'Save failed'))
   }
 
   return (
@@ -318,14 +340,14 @@ export function UserAccessPage() {
                     ...editing,
                     branchId: e.target.value || null,
                     branchName: e.target.value
-                      ? demoBranches.find((b) => b.id === e.target.value)?.name ?? null
+                      ? branches.find((b) => b.id === e.target.value)?.name ?? null
                       : null,
                   })
                 }
                 className="w-full rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm"
               >
                 <option value="">No Branch</option>
-                {demoBranches.map((b) => (
+                {branches.map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.name}
                   </option>

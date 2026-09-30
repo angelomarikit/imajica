@@ -13,6 +13,8 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Drawer } from '@/components/ui/Drawer'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   createExpense,
   deleteExpense,
@@ -23,6 +25,7 @@ import {
 import type { ExpenseScope, OperationalExpense } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 type TabId = 'all' | 'branch' | 'ops'
 
@@ -51,8 +54,11 @@ function formatDate(iso: string) {
 }
 
 export function ExpensesPage() {
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  const forcedBranchId = useForcedBranchId()
   const [expenses, setExpenses] = useState(() => getExpenses())
-  const [tab, setTab] = useState<TabId>('all')
+  const [tab, setTab] = useState<TabId>(franchiseOwner ? 'branch' : 'all')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -75,6 +81,16 @@ export function ExpensesPage() {
 
   const filtered = useMemo(() => {
     return expenses.filter((e) => {
+      if (franchiseOwner) {
+        if (e.scope !== 'branch') return false
+        const matchId = forcedBranchId && e.branchId === forcedBranchId
+        const matchName = user?.branchName && e.branchName === user.branchName
+        if (!matchId && !matchName && e.branchId == null && e.branchName == null) {
+          // legacy rows without branch — hide from franchise owners
+          return false
+        }
+        if (!matchId && !matchName) return false
+      }
       if (tab === 'branch' && e.scope !== 'branch') return false
       if (tab === 'ops' && e.scope !== 'ops') return false
       if (dateFrom && e.expenseDate < dateFrom) return false
@@ -86,7 +102,7 @@ export function ExpensesPage() {
       }
       return true
     })
-  }, [expenses, tab, dateFrom, dateTo, search])
+  }, [expenses, tab, dateFrom, dateTo, search, franchiseOwner, forcedBranchId, user?.branchName])
 
   const totalAmount = filtered.reduce((s, e) => s + e.amount, 0)
 
@@ -96,7 +112,7 @@ export function ExpensesPage() {
     setCategory(CATEGORIES[0])
     setDepartment('')
     setAmount('0')
-    setScope(tab === 'ops' ? 'ops' : 'branch')
+    setScope(franchiseOwner ? 'branch' : tab === 'ops' ? 'ops' : 'branch')
     setDeductCash(false)
     setExpenseDate(new Date().toISOString().slice(0, 10))
     setStatus('active')
@@ -128,10 +144,12 @@ export function ExpensesPage() {
         category,
         department: department.trim() || undefined,
         amount: Number(amount) || 0,
-        scope,
+        scope: franchiseOwner ? 'branch' : scope,
         deductCash,
         expenseDate,
         status,
+        branchId: franchiseOwner ? forcedBranchId ?? editing.branchId : editing.branchId,
+        branchName: franchiseOwner ? user?.branchName ?? editing.branchName : editing.branchName,
       })
       toast.success('Expense updated')
     } else {
@@ -140,10 +158,12 @@ export function ExpensesPage() {
         category,
         department,
         amount: Number(amount) || 0,
-        scope,
+        scope: franchiseOwner ? 'branch' : scope,
         deductCash,
         expenseDate,
         status,
+        branchId: franchiseOwner ? forcedBranchId : undefined,
+        branchName: franchiseOwner ? user?.branchName : undefined,
       })
       toast.success('Expense added')
     }
@@ -199,11 +219,13 @@ export function ExpensesPage() {
 
       <div className="flex gap-6 border-b border-border text-sm font-semibold">
         {(
-          [
-            ['all', 'All Expenses'],
-            ['branch', 'Branch Expenses'],
-            ['ops', 'Ops Expenses'],
-          ] as const
+          franchiseOwner
+            ? ([['branch', 'Branch Expenses']] as const)
+            : ([
+                ['all', 'All Expenses'],
+                ['branch', 'Branch Expenses'],
+                ['ops', 'Ops Expenses'],
+              ] as const)
         ).map(([id, label]) => (
           <button
             key={id}

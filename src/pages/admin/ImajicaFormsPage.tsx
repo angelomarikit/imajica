@@ -15,6 +15,7 @@ import { SignaturePad } from '@/components/forms/SignaturePad'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { useAuth } from '@/contexts/AuthContext'
 import {
   formPdfUrl,
   getFormTemplate,
@@ -30,6 +31,7 @@ import {
   type GeneratedFormRecord,
 } from '@/services/imajicaFormsService'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 function formatSubmitted(iso: string) {
   return new Date(iso).toLocaleString('en-US', {
@@ -42,6 +44,8 @@ function formatSubmitted(iso: string) {
 }
 
 export function ImajicaFormsPage() {
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
   const [templateId, setTemplateId] = useState(IMAJICA_FORM_TEMPLATES[0]?.id ?? '')
   const [patientName, setPatientName] = useState('')
   const [values, setValues] = useState<Record<string, unknown>>({})
@@ -67,15 +71,19 @@ export function ImajicaFormsPage() {
   }, [templateId])
 
   const filteredHistory = useMemo(() => {
-    if (!search.trim()) return history
+    let list = history
+    if (franchiseOwner && user?.branchName) {
+      list = list.filter((h) => h.branch === user.branchName || h.branch.includes(user.branchName.split(',')[0]))
+    }
+    if (!search.trim()) return list
     const q = search.toLowerCase()
-    return history.filter(
+    return list.filter(
       (h) =>
         h.clientName.toLowerCase().includes(q) ||
         h.formType.toLowerCase().includes(q) ||
         h.branch.toLowerCase().includes(q),
     )
-  }, [history, search])
+  }, [history, search, franchiseOwner, user?.branchName])
 
   function setField(key: string, value: unknown) {
     setValues((prev) => ({ ...prev, [key]: value }))
@@ -94,6 +102,7 @@ export function ImajicaFormsPage() {
     const record = createGeneratedForm({
       template,
       clientName: patientName,
+      branch: user?.branchName ?? 'BR01',
       fieldValues: values,
       clientSignature: clientSig,
       otherSignature: template.otherSignature ? otherSig || undefined : undefined,

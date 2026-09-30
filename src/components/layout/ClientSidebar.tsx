@@ -70,7 +70,7 @@ export function ClientSidebar({
       <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
         <img src={logo} alt={BRAND.name} className="h-11 w-11 rounded-full object-cover" />
         <div>
-          <p className="font-display text-lg leading-tight tracking-wide">IMAJICA</p>
+          <p className="font-brand text-lg leading-tight tracking-wide">IMAJICA</p>
           <p className="text-[10px] uppercase tracking-[0.18em] text-gold">Client Portal</p>
         </div>
       </div>
@@ -123,7 +123,7 @@ export function ClientSidebar({
       <div className="m-3 overflow-hidden rounded-[12px] border border-white/10">
         <div className="bg-emerald-900 px-3 py-3">
           <p className="text-[10px] uppercase tracking-[0.16em] text-white/50">Your journey</p>
-          <p className="font-display text-sm text-gold">{BRAND.tagline}</p>
+          <p className="font-brand text-sm text-gold">{BRAND.tagline}</p>
         </div>
       </div>
     </div>

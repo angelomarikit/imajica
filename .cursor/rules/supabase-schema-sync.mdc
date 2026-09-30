@@ -29,9 +29,10 @@ You MUST update Supabase SQL in the same change set:
 | Catalog services & packages | `treatments` (+ sessions, default_branch_id), `packages` (+ free_items, default_branch_id), `package_items`, `branch_treatments` |
 | Catalog products / categories / consumables | `inventory_items` (+ category_id), `product_categories`, `consumables` |
 | Administration operations | `operational_expenses`, `branch_orders`, `franchise_orders`, `waste_logs`, `warehouse_items` + `warehouse_stock_movements`, `stock_transfers`, `imajica_forms` (+ client_name, form_type, template_file, field_values, signatures) |
-| Sales / payments | `sales` (+ `invoice_number`, `payment_type`, `booking_ref`), `sale_items` (+ `unit_cost`, `sku`), `payments` |
+| Sales / payments | `sales` (+ `invoice_number`, `payment_type`, `booking_ref`, `referred_by_*`, `doctor_*`, `staff_name`, `lead_source`), `sale_items` (+ `unit_cost`, `sku`), `payments`; `clients.reward_points` |
 | Analytics reports | `v_analytics_sales_transactions`, `analytics_sales_summary`, `analytics_product_sales_report`, `analytics_best_selling_treatments`, `analytics_new_client_sales`, `imajica_transaction_fee`; `clients.lead_source` |
 | Staff / payroll | `staff` (+ first_name, last_name, birth_date, department, address, avatar_url, emergency_*, `position_id`), `staff_positions` (+ department), `commissions`, `payroll_*`; RPC `analytics_staff_sales` (rank by booking_count) |
+| Staff attendance | `staff_attendance_logs` (time_in / time_out + selfie + geolocation); storage bucket `attendance-selfies` |
 | Marketing campaigns | `marketing_campaigns` |
 | Inventory | `inventory_items`, `branch_inventory`, `inventory_movements` |
 

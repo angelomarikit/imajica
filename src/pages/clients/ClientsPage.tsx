@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { useAuth } from '@/contexts/AuthContext'
 import {
   compareClientsByRecentAvail,
   deleteClient,
@@ -26,6 +27,8 @@ import { preloadSalesData } from '@/services/salesService'
 import { subscribeAnalytics } from '@/services/analyticsService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -56,11 +59,15 @@ function paginationItems(current: number, total: number): (number | 'ellipsis')[
 
 export function ClientsPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [queryDraft, setQueryDraft] = useState('')
   const [query, setQuery] = useState('')
   const [clients, setClients] = useState<Client[]>(() => getClients())
   const [loading, setLoading] = useState(() => getClients().length === 0)
   const [page, setPage] = useState(1)
+  const forcedBranchId = useForcedBranchId()
+  const branchScoped = isBranchOwner(user) || Boolean(forcedBranchId)
+  const hqView = isHqRole(user?.role)
 
   useEffect(() => {
     const refresh = () => {
@@ -78,18 +85,33 @@ export function ClientsPage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const list = !q
-      ? clients
-      : clients.filter(
-          (c) =>
-            c.fullName.toLowerCase().includes(q) ||
-            c.email.toLowerCase().includes(q) ||
-            c.phone.toLowerCase().includes(q) ||
-            c.code.toLowerCase().includes(q),
-        )
-    // Always newest avail first — never alphabetical
+    let list = clients
+    // Branch accounts: only customers assigned to their branch. HQ sees all.
+    if (!hqView && (branchScoped || forcedBranchId)) {
+      const branchId = forcedBranchId ?? user?.branchId
+      const branchName = user?.branchName?.toLowerCase()
+      list = list.filter((c) => {
+        if (branchId && c.preferredBranchId === branchId) return true
+        if (
+          branchName &&
+          c.preferredBranchName?.toLowerCase() === branchName
+        ) {
+          return true
+        }
+        return false
+      })
+    }
+    if (q) {
+      list = list.filter(
+        (c) =>
+          c.fullName.toLowerCase().includes(q) ||
+          c.email.toLowerCase().includes(q) ||
+          c.phone.toLowerCase().includes(q) ||
+          c.code.toLowerCase().includes(q),
+      )
+    }
     return [...list].sort(compareClientsByRecentAvail)
-  }, [clients, query])
+  }, [clients, query, forcedBranchId, hqView, branchScoped, user?.branchId, user?.branchName])
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const pageRows = useMemo(
@@ -117,8 +139,12 @@ export function ClientsPage() {
     <div className="space-y-5">
       <AdminPageBanner
         title="Customer Registry"
-        description="Manage customer metadata profile files, search identities, and view detailed consultation history."
-        stat={{ value: clients.length, label: 'Total Customers' }}
+        description={
+          hqView
+            ? 'Manage customer metadata profile files, search identities, and view detailed consultation history across all branches.'
+            : `Customers assigned to ${user?.branchName ?? 'your branch'} only.`
+        }
+        stat={{ value: filtered.length, label: hqView ? 'Total Customers' : 'Branch Customers' }}
       />
 
       <Card className="p-5">

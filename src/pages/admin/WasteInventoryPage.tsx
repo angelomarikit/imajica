@@ -12,6 +12,9 @@ import {
   subscribeWaste,
 } from '@/services/wasteService'
 import { formatPeso } from '@/utils/currency'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', {
@@ -22,10 +25,19 @@ function formatDate(iso: string) {
 }
 
 export function WasteInventoryPage() {
+  const { user } = useAuth()
+  const forcedBranchId = useForcedBranchId()
+  const franchiseOwner = isFranchiseBranchOwner(user)
   const [items, setItems] = useState(() => getWasteItems())
-  const [branchFilter, setBranchFilter] = useState('all')
+  const [branchFilter, setBranchFilter] = useState(
+    franchiseOwner ? user?.branchName ?? 'all' : 'all',
+  )
 
   useEffect(() => subscribeWaste(() => setItems(getWasteItems())), [])
+
+  useEffect(() => {
+    if (franchiseOwner && user?.branchName) setBranchFilter(user.branchName)
+  }, [franchiseOwner, user?.branchName])
 
   const branches = useMemo(() => getWasteBranches(), [items])
 
@@ -33,6 +45,8 @@ export function WasteInventoryPage() {
     if (branchFilter === 'all') return items
     return items.filter((i) => i.branchName === branchFilter)
   }, [items, branchFilter])
+
+  void forcedBranchId
 
   function exportCsv() {
     const header = [
@@ -80,9 +94,13 @@ export function WasteInventoryPage() {
               className="h-10 min-w-[160px] rounded-[10px] border border-border bg-white px-3 text-sm text-charcoal"
               value={branchFilter}
               onChange={(e) => setBranchFilter(e.target.value)}
+              disabled={franchiseOwner}
             >
-              <option value="all">All Branches</option>
-              {branches.map((b) => (
+              {!franchiseOwner && <option value="all">All Branches</option>}
+              {(franchiseOwner && user?.branchName
+                ? [user.branchName]
+                : branches
+              ).map((b) => (
                 <option key={b} value={b}>
                   {b}
                 </option>

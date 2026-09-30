@@ -1,15 +1,34 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { FileText } from 'lucide-react'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { demoSales } from '@/constants/demoData'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { getSales, preloadSalesData, subscribeSalesData } from '@/services/salesService'
 import type { Sale } from '@/types'
 import { formatPeso } from '@/utils/currency'
+import { useAuth } from '@/contexts/AuthContext'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 export function PaymentsPage() {
+  const { user } = useAuth()
+  const forcedBranchId = useForcedBranchId()
+  const franchiseOwner = isFranchiseBranchOwner(user)
   const [invoice, setInvoice] = useState<Sale | null>(null)
+  const [salesTick, setSalesTick] = useState(0)
+
+  useEffect(() => {
+    void preloadSalesData().then(() => setSalesTick((n) => n + 1))
+    return subscribeSalesData(() => setSalesTick((n) => n + 1))
+  }, [])
+
+  const sales = useMemo(() => {
+    void salesTick
+    const all = getSales()
+    if (!forcedBranchId) return all
+    return all.filter((s) => s.branchId === forcedBranchId)
+  }, [forcedBranchId, salesTick])
 
   function printSaleInvoice(sale: Sale) {
     const w = window.open('', '_blank', 'noopener,noreferrer,width=720,height=900')
@@ -41,9 +60,13 @@ export function PaymentsPage() {
     <div className="space-y-5">
       <AdminPageBanner
         eyebrow="Sales"
-        title="Payments"
-        description="Review recent booking payments, settlement status, and sales invoices."
-        stat={{ value: demoSales.length, label: 'Total Sales' }}
+        title={franchiseOwner ? 'Franchise Sale' : 'Payments'}
+        description={
+          franchiseOwner
+            ? `Sales and invoices for ${user?.branchName ?? 'your franchise branch'}.`
+            : 'Review recent booking payments, settlement status, and sales invoices.'
+        }
+        stat={{ value: sales.length, label: 'Total Sales' }}
       />
 
       <Card className="p-4 sm:p-5">
@@ -64,41 +87,50 @@ export function PaymentsPage() {
               </tr>
             </thead>
             <tbody>
-              {demoSales.map((s) => (
-                <tr key={s.id} className="border-t border-border/70 hover:bg-ivory-100">
-                  <td className="px-2 py-3">
-                    <button
-                      type="button"
-                      onClick={() => setInvoice(s)}
-                      className="rounded-full bg-sky-50 px-2.5 py-0.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
-                    >
-                      {s.invoiceNumber}
-                    </button>
-                  </td>
-                  <td className="px-2 py-3 text-slate-ui">
-                    {new Date(s.createdAt).toLocaleString()}
-                  </td>
-                  <td className="px-2 py-3 font-medium text-[#073D2C]">{s.clientName}</td>
-                  <td className="px-2 py-3">{s.treatmentOrPackage}</td>
-                  <td className="px-2 py-3">{s.branchName}</td>
-                  <td className="px-2 py-3 font-semibold">{formatPeso(s.totalAmount)}</td>
-                  <td className="px-2 py-3 capitalize">{s.paymentMethod.replace('_', ' ')}</td>
-                  <td className="px-2 py-3">
-                    <Badge variant="success">{s.status}</Badge>
-                  </td>
-                  <td className="px-2 py-3">
-                    <button
-                      type="button"
-                      aria-label="Print invoice"
-                      title="Print invoice"
-                      onClick={() => printSaleInvoice(s)}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-emerald-100 text-emerald-800 transition hover:bg-emerald-200"
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                    </button>
+              {sales.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="px-2 py-8 text-center text-slate-ui">
+                    No sales for this branch yet.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                sales.map((s) => (
+                  <tr key={s.id} className="border-t border-border/70 hover:bg-ivory-100">
+                    <td className="px-2 py-3">
+                      <button
+                        type="button"
+                        onClick={() => setInvoice(s)}
+                        className="rounded-full bg-sky-50 px-2.5 py-0.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                      >
+                        {s.invoiceNumber}
+                      </button>
+                    </td>
+                    <td className="px-2 py-3 text-slate-ui">
+                      {new Date(s.createdAt).toLocaleString()}
+                    </td>
+                    <td className="px-2 py-3">{s.clientName}</td>
+                    <td className="px-2 py-3">{s.treatmentOrPackage}</td>
+                    <td className="px-2 py-3 text-slate-ui">{s.branchName}</td>
+                    <td className="px-2 py-3 font-medium">{formatPeso(s.totalAmount)}</td>
+                    <td className="px-2 py-3 capitalize text-slate-ui">
+                      {s.paymentMethod.replace('_', ' ')}
+                    </td>
+                    <td className="px-2 py-3">
+                      <Badge variant={s.status === 'paid' ? 'success' : 'neutral'}>{s.status}</Badge>
+                    </td>
+                    <td className="px-2 py-3">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => printSaleInvoice(s)}
+                      >
+                        <FileText className="h-3.5 w-3.5" /> Print
+                      </Button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -109,42 +141,22 @@ export function PaymentsPage() {
           <button
             type="button"
             className="absolute inset-0 bg-emerald-950/40"
-            aria-label="Close invoice"
+            aria-label="Close"
             onClick={() => setInvoice(null)}
           />
-          <div className="relative z-10 w-full max-w-lg rounded-[14px] bg-white p-6 shadow-xl">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#C5A059]">
-              Sales Invoice
-            </p>
+          <Card className="relative z-10 w-full max-w-md p-6">
             <h3 className="font-display text-2xl text-[#073D2C]">{invoice.invoiceNumber}</h3>
-            <div className="mt-4 space-y-2 text-sm text-slate-ui">
-              <p>
-                <span className="font-semibold text-[#073D2C]">Client:</span> {invoice.clientName}
-              </p>
-              <p>
-                <span className="font-semibold text-[#073D2C]">Item:</span>{' '}
-                {invoice.treatmentOrPackage}
-              </p>
-              <p>
-                <span className="font-semibold text-[#073D2C]">Branch:</span> {invoice.branchName}
-              </p>
-              <p>
-                <span className="font-semibold text-[#073D2C]">Date:</span>{' '}
-                {new Date(invoice.createdAt).toLocaleString()}
-              </p>
-            </div>
-            <p className="mt-5 font-metric text-3xl font-semibold tracking-tight text-[#073D2C]">
-              {formatPeso(invoice.totalAmount)}
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setInvoice(null)}>
+            <p className="mt-2 text-sm text-slate-ui">{invoice.clientName}</p>
+            <p className="mt-4 text-lg font-semibold">{formatPeso(invoice.totalAmount)}</p>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button type="button" variant="secondary" onClick={() => setInvoice(null)}>
                 Close
               </Button>
-              <Button onClick={() => printSaleInvoice(invoice)}>
-                <FileText className="h-4 w-4" /> Print Invoice
+              <Button type="button" onClick={() => printSaleInvoice(invoice)}>
+                Print
               </Button>
             </div>
-          </div>
+          </Card>
         </div>
       ) : null}
     </div>

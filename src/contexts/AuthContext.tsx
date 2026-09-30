@@ -10,6 +10,8 @@ import {
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import type { AuthSessionUser, UserRole } from '@/types'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { getBranches } from '@/services/branchService'
+import { teamAccountsAsDemoUsers } from '@/constants/teamAccountsSeed'
 
 interface AuthContextValue {
   user: AuthSessionUser | null
@@ -29,6 +31,9 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+/** Demo franchise branch: Dasmariñas, Cavite (FR01) */
+const DEMO_FRANCHISE_BRANCH_ID = '22222222-2222-2222-2222-222222222205'
+
 const DEMO_USERS: Record<string, AuthSessionUser & { password: string }> = {
   'admin@imajica.ph': {
     id: 'user-admin',
@@ -38,13 +43,25 @@ const DEMO_USERS: Record<string, AuthSessionUser & { password: string }> = {
     password: 'password123',
     avatarUrl: undefined,
   },
+  'franchise@imajica.ph': {
+    id: 'user-franchise',
+    email: 'franchise@imajica.ph',
+    fullName: 'Franchise Owner',
+    role: 'BRANCH_ADMIN',
+    password: 'password123',
+    branchId: DEMO_FRANCHISE_BRANCH_ID,
+    branchType: 'franchise',
+    branchName: 'Dasmariñas, Cavite',
+  },
   'staff@imajica.ph': {
     id: 'user-staff',
     email: 'staff@imajica.ph',
     fullName: 'Paolo Garcia',
     role: 'RECEPTIONIST',
     password: 'password123',
-    branchId: 'br-pasig',
+    branchId: '22222222-2222-2222-2222-222222222203',
+    branchType: 'company_owned',
+    branchName: 'Pasig City',
   },
   'client@imajica.ph': {
     id: 'user-client',
@@ -53,6 +70,7 @@ const DEMO_USERS: Record<string, AuthSessionUser & { password: string }> = {
     role: 'CLIENT',
     password: 'password123',
   },
+  ...teamAccountsAsDemoUsers(),
 }
 
 const STAFF_ROLES: UserRole[] = [
@@ -89,6 +107,17 @@ function pickHighestRole(roleIds: string[]): UserRole {
   return 'CLIENT'
 }
 
+function branchMeta(branchId: string | undefined) {
+  if (!branchId) return {}
+  const b = getBranches().find((x) => x.id === branchId)
+  if (!b) return { branchId }
+  return {
+    branchId: b.id,
+    branchType: b.branchType,
+    branchName: b.name,
+  }
+}
+
 /** Resolve app session from Supabase auth user + profiles / user_roles (DB is source of truth). */
 async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthSessionUser> {
   if (!supabase) {
@@ -111,13 +140,47 @@ async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthS
   const staffBranch = (roleRows ?? []).find(
     (r) => r.branch_id && r.branch_id !== '00000000-0000-0000-0000-000000000001',
   )
+  const branchId = staffBranch?.branch_id ? String(staffBranch.branch_id) : undefined
+
+  let branchType: AuthSessionUser['branchType']
+  let branchName: string | undefined
+  if (branchId) {
+    const local = getBranches().find((b) => b.id === branchId)
+    if (local) {
+      branchType = local.branchType
+      branchName = local.name
+    } else {
+      const { data: remote, error: branchError } = await supabase
+        .from('branches')
+        .select('name, branch_type')
+        .eq('id', branchId)
+        .maybeSingle()
+      if (branchError) {
+        console.error('[auth] failed to load branch meta', branchError)
+      }
+      if (remote) {
+        branchName = remote.name
+        branchType = remote.branch_type as AuthSessionUser['branchType']
+      }
+    }
+  }
+
+  // Franchise owners must carry branchType for nav/guards; warn when missing
+  if (role === 'BRANCH_ADMIN' && branchId && !branchType) {
+    console.warn(
+      '[auth] BRANCH_ADMIN has branch_id but branch_type could not be resolved — check branches.branch_type = franchise',
+      branchId,
+    )
+  }
 
   return {
     id: authUser.id,
     email: profile?.email || authUser.email || '',
     fullName: profile?.full_name || meta.full_name || authUser.email || '',
     role,
-    branchId: staffBranch?.branch_id ? String(staffBranch.branch_id) : undefined,
+    branchId,
+    branchType,
+    branchName,
   }
 }
 
@@ -134,7 +197,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     else localStorage.removeItem('imajica_auth_user')
   }, [])
 
-  // Refresh role from DB when a Supabase session already exists (fixes stale CLIENT in localStorage)
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
       setLoading(false)
@@ -159,7 +221,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })()
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      // Avoid querying Supabase inside the auth callback (can deadlock the client).
       window.setTimeout(() => {
         if (event === 'SIGNED_OUT' || !session?.user) {
           persist(null)
@@ -179,45 +240,101 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (email: string, password: string, roleHint?: UserRole) => {
-      if (isSupabaseConfigured && supabase) {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-        if (error) throw error
-        if (!data.user) throw new Error('Sign in failed')
-        const sessionUser = await resolveSupabaseSessionUser(data.user)
-        // Keep Auth metadata in sync so older builds / JWT claims also see the staff role
-        if (sessionUser.role !== 'CLIENT') {
-          void supabase.auth.updateUser({
-            data: { role: sessionUser.role, full_name: sessionUser.fullName },
-          })
+      const normalized = email.toLowerCase().trim()
+
+      function buildDemoSession(demoEmail: string, hint?: UserRole): AuthSessionUser | null {
+        const demo = DEMO_USERS[demoEmail]
+        if (!demo || demo.password !== password) return null
+        const { password: _pw, ...sessionUser } = demo
+        void _pw
+        if (hint === 'BRANCH_ADMIN') {
+          return {
+            ...sessionUser,
+            role: 'BRANCH_ADMIN',
+            ...branchMeta(DEMO_FRANCHISE_BRANCH_ID),
+            branchId: DEMO_FRANCHISE_BRANCH_ID,
+            branchType: 'franchise',
+            branchName: 'Dasmariñas, Cavite',
+          }
         }
-        persist(sessionUser)
+        if (hint) {
+          return { ...sessionUser, role: hint, ...branchMeta(sessionUser.branchId) }
+        }
         return sessionUser
       }
 
-      const demo = DEMO_USERS[email.toLowerCase()]
-      if (demo && demo.password === password) {
-        const { password: _pw, ...sessionUser } = demo
-        void _pw
-        const next = roleHint ? { ...sessionUser, role: roleHint } : sessionUser
-        persist(next)
-        return next
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: normalized,
+          password,
+        })
+
+        if (!error && data.user) {
+          const sessionUser = await resolveSupabaseSessionUser(data.user)
+          // SQL may assign BRANCH_ADMIN before branch_type is readable — keep franchise hint for known demo email
+          if (
+            sessionUser.role === 'BRANCH_ADMIN' &&
+            sessionUser.branchId &&
+            !sessionUser.branchType
+          ) {
+            const local = getBranches().find((b) => b.id === sessionUser.branchId)
+            if (local?.branchType) {
+              sessionUser.branchType = local.branchType
+              sessionUser.branchName = local.name
+            }
+          }
+          if (sessionUser.role !== 'CLIENT') {
+            void supabase.auth.updateUser({
+              data: { role: sessionUser.role, full_name: sessionUser.fullName },
+            })
+          }
+          persist(sessionUser)
+          return sessionUser
+        }
+
+        // Known offline demo accounts still work when the Auth user was never created
+        const demoFallback = buildDemoSession(normalized, roleHint)
+        if (demoFallback) {
+          console.warn(
+            '[auth] Supabase sign-in failed; using local demo session for',
+            normalized,
+            error?.message,
+          )
+          persist(demoFallback)
+          return demoFallback
+        }
+
+        throw error ?? new Error('Invalid email or password')
+      }
+
+      const demoSession = buildDemoSession(normalized, roleHint)
+      if (demoSession) {
+        persist(demoSession)
+        return demoSession
       }
 
       if (roleHint) {
+        const franchiseMeta =
+          roleHint === 'BRANCH_ADMIN'
+            ? {
+                branchId: DEMO_FRANCHISE_BRANCH_ID,
+                branchType: 'franchise' as const,
+                branchName: 'Dasmariñas, Cavite',
+              }
+            : {}
         const next: AuthSessionUser = {
           id: `demo-${roleHint.toLowerCase()}`,
-          email,
-          fullName: 'Maria Santos',
+          email: normalized,
+          fullName: roleHint === 'BRANCH_ADMIN' ? 'Franchise Owner' : 'Maria Santos',
           role: roleHint,
+          ...franchiseMeta,
         }
         persist(next)
         return next
       }
 
       throw new Error(
-        isSupabaseConfigured
-          ? 'Invalid email or password'
-          : 'Invalid email or password. Offline demo: admin@imajica.ph / password123',
+        'Invalid email or password. Offline demo: admin@imajica.ph / franchise@imajica.ph / password123 — or any seeded team account / Imajica123 (see docs/TEAM_ACCOUNT_CREDENTIALS.md)',
       )
     },
     [persist],

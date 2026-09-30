@@ -3,7 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import { AdminShell } from '@/components/layout/AdminShell'
 import { ClientShell } from '@/components/layout/ClientShell'
-import { PublicOnly, RequireAuth, RequireClient, RequireStaff } from '@/components/layout/RouteGuards'
+import { PublicOnly, RequireAuth, RequireClient, RequireHqAdmin, RequireStaff } from '@/components/layout/RouteGuards'
 import { AuthProvider, isStaffRole, useAuth } from '@/contexts/AuthContext'
 import { BranchProvider } from '@/contexts/BranchContext'
 import { SalesDataBootstrap } from '@/components/SalesDataBootstrap'
@@ -29,6 +29,8 @@ import { NewStockTransferPage } from '@/pages/admin/NewStockTransferPage'
 import { RecruitmentLmsPage } from '@/pages/team/RecruitmentLmsPage'
 import { NewBranchPage } from '@/pages/team/NewBranchPage'
 import { TeamBranchesPage } from '@/pages/team/TeamBranchesPage'
+import { BranchAccountsPage } from '@/pages/team/BranchAccountsPage'
+import { NewBranchAccountPage } from '@/pages/team/NewBranchAccountPage'
 import { NewUserPage } from '@/pages/team/NewUserPage'
 import { UserAccessPage } from '@/pages/team/UserAccessPage'
 import { AppointmentsPage } from '@/pages/appointments/AppointmentsPage'
@@ -58,6 +60,7 @@ import { ViewProductPage } from '@/pages/catalog/ViewProductPage'
 import { EditProductPage } from '@/pages/catalog/EditProductPage'
 import { ServiceListPage } from '@/pages/catalog/ServiceListPage'
 import { DashboardPage } from '@/pages/dashboard/DashboardPage'
+import { MyAttendancePage } from '@/pages/attendance/MyAttendancePage'
 import { InventoryPage } from '@/pages/inventory/InventoryPage'
 import { MarketingPage } from '@/pages/marketing/MarketingPage'
 import { PackagesPage } from '@/pages/packages/PackagesPage'
@@ -106,19 +109,55 @@ export default function App() {
               >
                 <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="dashboard" element={<DashboardPage />} />
+                <Route path="attendance" element={<MyAttendancePage />} />
                 <Route path="appointments" element={<AppointmentsPage />} />
                 <Route path="clients" element={<ClientsPage />} />
                 <Route path="clients/new" element={<NewClientPage />} />
                 <Route path="clients/:id" element={<AdminClientProfilePage />} />
                 <Route path="catalog/services" element={<ServiceListPage />} />
-                <Route path="catalog/services/new" element={<NewServicePage />} />
+                <Route
+                  path="catalog/services/new"
+                  element={
+                    <RequireHqAdmin>
+                      <NewServicePage />
+                    </RequireHqAdmin>
+                  }
+                />
                 <Route path="catalog/packages" element={<PackageListPage />} />
-                <Route path="catalog/packages/new" element={<NewPackagePage />} />
+                <Route
+                  path="catalog/packages/new"
+                  element={
+                    <RequireHqAdmin>
+                      <NewPackagePage />
+                    </RequireHqAdmin>
+                  }
+                />
                 <Route path="catalog/products" element={<ProductInventoryPage />} />
-                <Route path="catalog/products/new" element={<EditProductPage />} />
+                <Route
+                  path="catalog/products/new"
+                  element={
+                    <RequireHqAdmin>
+                      <EditProductPage />
+                    </RequireHqAdmin>
+                  }
+                />
                 <Route path="catalog/products/:id" element={<ViewProductPage />} />
-                <Route path="catalog/products/:id/edit" element={<EditProductPage />} />
-                <Route path="catalog/categories" element={<CategoryInventoryPage />} />
+                <Route
+                  path="catalog/products/:id/edit"
+                  element={
+                    <RequireHqAdmin>
+                      <EditProductPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="catalog/categories"
+                  element={
+                    <RequireHqAdmin>
+                      <CategoryInventoryPage />
+                    </RequireHqAdmin>
+                  }
+                />
                 <Route path="catalog/consumables" element={<ConsumablesInventoryPage />} />
                 <Route path="catalog/consumables/:id" element={<ViewConsumablePage />} />
                 <Route path="catalog/promotions" element={<CouponListPage />} />
@@ -132,17 +171,96 @@ export default function App() {
                 <Route path="sales" element={<Navigate to="/admin/booking" replace />} />
                 <Route path="payments" element={<PaymentsPage />} />
                 <Route path="staff/new" element={<NewStaffPage />} />
-                <Route path="staff/sales" element={<StaffSalesPage />} />
-                <Route path="staff/positions" element={<StaffPositionsPage />} />
+                <Route
+                  path="staff/sales"
+                  element={
+                    <RequireHqAdmin>
+                      <StaffSalesPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="staff/positions"
+                  element={
+                    <RequireHqAdmin>
+                      <StaffPositionsPage />
+                    </RequireHqAdmin>
+                  }
+                />
                 <Route path="staff" element={<StaffPage />} />
                 <Route path="staff/:id" element={<StaffDetailPage />} />
-                <Route path="commissions" element={<CommissionsPage />} />
-                <Route path="payroll" element={<PayrollPage />} />
-                <Route path="team/recruitment-lms" element={<RecruitmentLmsPage />} />
-                <Route path="team/user-access/new" element={<NewUserPage />} />
-                <Route path="team/user-access" element={<UserAccessPage />} />
-                <Route path="team/branches/new" element={<NewBranchPage />} />
-                <Route path="team/branches" element={<TeamBranchesPage />} />
+                <Route
+                  path="commissions"
+                  element={
+                    <RequireHqAdmin>
+                      <CommissionsPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="payroll"
+                  element={
+                    <RequireHqAdmin>
+                      <PayrollPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="team/recruitment-lms"
+                  element={
+                    <RequireHqAdmin>
+                      <RecruitmentLmsPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="team/user-access/new"
+                  element={
+                    <RequireHqAdmin>
+                      <NewUserPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="team/user-access"
+                  element={
+                    <RequireHqAdmin>
+                      <UserAccessPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="team/branches/new"
+                  element={
+                    <RequireHqAdmin>
+                      <NewBranchPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="team/branches/accounts/new"
+                  element={
+                    <RequireHqAdmin>
+                      <NewBranchAccountPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="team/branches/accounts"
+                  element={
+                    <RequireHqAdmin>
+                      <BranchAccountsPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="team/branches"
+                  element={
+                    <RequireHqAdmin>
+                      <TeamBranchesPage />
+                    </RequireHqAdmin>
+                  }
+                />
                 <Route
                   path="settings/branches"
                   element={<Navigate to="/admin/team/branches" replace />}
@@ -158,14 +276,36 @@ export default function App() {
                 <Route path="analytics/sales-reports" element={<SalesReportsPage />} />
                 <Route
                   path="analytics/sales-product-report"
-                  element={<SalesProductReportPage />}
+                  element={
+                    <RequireHqAdmin>
+                      <SalesProductReportPage />
+                    </RequireHqAdmin>
+                  }
                 />
                 <Route
                   path="analytics/best-selling-treatments"
-                  element={<BestSellingTreatmentsPage />}
+                  element={
+                    <RequireHqAdmin>
+                      <BestSellingTreatmentsPage />
+                    </RequireHqAdmin>
+                  }
                 />
-                <Route path="analytics/new-client-sales" element={<NewClientSalesPage />} />
-                <Route path="marketing" element={<MarketingPage />} />
+                <Route
+                  path="analytics/new-client-sales"
+                  element={
+                    <RequireHqAdmin>
+                      <NewClientSalesPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="marketing"
+                  element={
+                    <RequireHqAdmin>
+                      <MarketingPage />
+                    </RequireHqAdmin>
+                  }
+                />
                 <Route path="operations/expenses" element={<ExpensesPage />} />
                 <Route path="operations/branch-orders" element={<BranchOrdersPage />} />
                 <Route path="operations/branch-orders/new" element={<NewBranchOrderPage />} />
@@ -176,11 +316,29 @@ export default function App() {
                 />
                 <Route path="operations/waste" element={<WasteInventoryPage />} />
                 <Route path="operations/warehouse" element={<WarehousePage />} />
-                <Route path="operations/warehouse/new" element={<AddWarehouseItemPage />} />
-                <Route path="operations/stock-transfers" element={<StockTransfersPage />} />
+                <Route
+                  path="operations/warehouse/new"
+                  element={
+                    <RequireHqAdmin>
+                      <AddWarehouseItemPage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="operations/stock-transfers"
+                  element={
+                    <RequireHqAdmin>
+                      <StockTransfersPage />
+                    </RequireHqAdmin>
+                  }
+                />
                 <Route
                   path="operations/stock-transfers/new"
-                  element={<NewStockTransferPage />}
+                  element={
+                    <RequireHqAdmin>
+                      <NewStockTransferPage />
+                    </RequireHqAdmin>
+                  }
                 />
                 <Route path="forms/imajica" element={<ImajicaFormsPage />} />
                 <Route path="settings/*" element={<SettingsRoutes />} />

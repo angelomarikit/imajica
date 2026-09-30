@@ -1,6 +1,7 @@
 -- Seed for local / fresh Supabase projects
 -- Consent form templates live in the React app (src/constants/imajicaFormTemplates.ts), not SQL.
--- Auth users must be created via Supabase Auth, then profiles + user_roles (see docs/SUPABASE_SETUP.md).
+-- Team login accounts (Auth + profiles + user_roles): migration 20260929000035_seed_team_user_accounts.sql
+-- Credentials: docs/TEAM_ACCOUNT_CREDENTIALS.md (password Imajica123).
 
 -- Required treatment taxonomy (catalog FK / filters)
 insert into public.treatment_categories (id, name) values

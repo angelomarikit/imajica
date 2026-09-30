@@ -13,7 +13,6 @@ import {
   type ConsumableBranchStock,
 } from '@/services/consumableStockService'
 import type { CatalogProduct, ConsumableItem, ProductStockHistoryEntry } from '@/types'
-import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 
 function formatCreatedLong(iso: string) {
@@ -74,13 +73,12 @@ export function ViewConsumablePage() {
     return <p className="text-sm text-slate-ui">Loading consumable…</p>
   }
 
-  // Reuse StockHistoryModal which expects CatalogProduct shape for title
   const modalProduct = {
     id: item.id,
     name: item.name,
     sku: '',
     branchName: item.branchName,
-    retailPrice: item.price,
+    retailPrice: 0,
     baseCost: 0,
     status: 'active' as const,
     createdAt: item.createdAt,
@@ -98,7 +96,7 @@ export function ViewConsumablePage() {
 
       <div className="relative overflow-hidden rounded-[14px] bg-[#0A2E26] px-6 py-7 sm:px-8">
         <div className="absolute inset-y-0 left-0 w-1 bg-[#C5A059]" />
-        <h1 className="font-display text-3xl uppercase tracking-wide text-[#C5A059] sm:text-4xl">
+        <h1 className="font-display text-3xl tracking-tight text-[#C5A059] sm:text-4xl">
           {item.name}
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-white/85">
@@ -106,18 +104,12 @@ export function ViewConsumablePage() {
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card className="p-5">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-ui">Price (₱)</p>
-          <p className="mt-2 text-2xl font-bold text-emerald-700">{formatPeso(item.price)}</p>
-        </Card>
-        <Card className="p-5">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-ui">Date Created</p>
-          <p className="mt-2 text-lg font-semibold text-charcoal">
-            {formatCreatedLong(item.createdAt)}
-          </p>
-        </Card>
-      </div>
+      <Card className="p-5">
+        <p className="text-[10px] font-bold uppercase tracking-wide text-slate-ui">Date Created</p>
+        <p className="mt-2 text-lg font-semibold text-charcoal">
+          {formatCreatedLong(item.createdAt)}
+        </p>
+      </Card>
 
       <Card className="overflow-hidden p-0">
         <div className="border-b border-border bg-[#F3F4F2] px-5 py-3">

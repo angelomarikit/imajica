@@ -21,6 +21,7 @@ import {
 } from '@/services/appointmentService'
 import type { Appointment, AppointmentStatus } from '@/types'
 import { cn } from '@/utils/cn'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const
 
@@ -86,6 +87,7 @@ export function AppointmentsPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [selectedAppt, setSelectedAppt] = useState<Appointment | null>(null)
   const [addOpen, setAddOpen] = useState(false)
+  const forcedBranchId = useForcedBranchId()
 
   const cells = useMemo(() => buildMonthCells(monthCursor), [monthCursor])
   const today = useMemo(() => {
@@ -118,7 +120,10 @@ export function AppointmentsPage() {
 
   async function refresh() {
     try {
-      setAppointments(await listAppointments())
+      const all = await listAppointments()
+      setAppointments(
+        forcedBranchId ? all.filter((a) => a.branchId === forcedBranchId) : all,
+      )
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load appointments')
     }
@@ -129,7 +134,7 @@ export function AppointmentsPage() {
     return subscribeAppointments(() => {
       void refresh()
     })
-  }, [])
+  }, [forcedBranchId])
 
   async function updateStatus(id: string, status: AppointmentStatus) {
     try {

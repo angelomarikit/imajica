@@ -20,6 +20,8 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { BranchStocksModal } from '@/components/catalog/BranchStocksModal'
 import { StockHistoryModal } from '@/components/catalog/StockHistoryModal'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   deleteCatalogProduct,
   getCatalogProducts,
@@ -33,9 +35,13 @@ import {
 import type { CatalogProduct, ProductBranchStock, ProductStockHistoryEntry } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 export function ProductInventoryPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  const forcedBranchId = useForcedBranchId()
   const [products, setProducts] = useState(() => getCatalogProducts())
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
@@ -75,12 +81,20 @@ export function ProductInventoryPage() {
 
   function openBranchStocks(p: CatalogProduct) {
     setStocksProduct(p)
-    setStocks(getProductBranchStocks(p.id))
+    const all = getProductBranchStocks(p.id)
+    setStocks(
+      forcedBranchId ? all.filter((s) => s.branchId === forcedBranchId) : all,
+    )
   }
 
   function openStockHistory(p: CatalogProduct) {
     setHistoryProduct(p)
-    setHistory(getProductStockHistory(p.id))
+    const all = getProductStockHistory(p.id)
+    setHistory(
+      forcedBranchId
+        ? all.filter((h) => !h.branchId || h.branchId === forcedBranchId)
+        : all,
+    )
   }
 
   function exportCsv() {
@@ -102,25 +116,31 @@ export function ProductInventoryPage() {
   return (
     <div className="space-y-5">
       <AdminPageBanner
-        title="Imajica Product Inventory"
-        description="Manage clinic skincare products, cosmetics, raw goods inventory, and branch distribution networks with precise stock targets and safety alert points."
+        title={franchiseOwner ? 'Branch Stock' : 'Imajica Product Inventory'}
+        description={
+          franchiseOwner
+            ? 'View on-hand product stock for your franchise branch. Catalog definitions are managed by HQ.'
+            : 'Manage clinic skincare products, cosmetics, raw goods inventory, and branch distribution networks with precise stock targets and safety alert points.'
+        }
         stat={{ value: products.length, label: 'Total Products' }}
       />
 
       <Card className="p-4 sm:p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <h2 className="font-display text-2xl text-[#073D2C] sm:text-3xl">
-            Skincare & Clinic Inventory
+            {franchiseOwner ? 'Your Branch Inventory' : 'Skincare & Clinic Inventory'}
           </h2>
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={exportCsv}>
               <FileSpreadsheet className="h-4 w-4" /> Export Excel
             </Button>
-            <Link to="/admin/catalog/products/new">
-              <Button>
-                <Plus className="h-4 w-4" /> Add Product
-              </Button>
-            </Link>
+            {!franchiseOwner ? (
+              <Link to="/admin/catalog/products/new">
+                <Button>
+                  <Plus className="h-4 w-4" /> Add Product
+                </Button>
+              </Link>
+            ) : null}
           </div>
         </div>
 

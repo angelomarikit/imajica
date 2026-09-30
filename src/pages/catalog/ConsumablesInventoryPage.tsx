@@ -7,7 +7,6 @@ import { Card } from '@/components/ui/Card'
 import { Pager } from '@/pages/catalog/ProductInventoryPage'
 import { getBranches } from '@/services/branchService'
 import { getConsumables, subscribeProducts } from '@/services/productCatalogService'
-import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 
 function formatCreated(iso: string) {
@@ -123,7 +122,6 @@ export function ConsumablesInventoryPage() {
               <tr className="border-b border-border">
                 <th className="px-2 py-3">Consumable Name</th>
                 <th className="px-2 py-3 text-center">Stock</th>
-                <th className="px-2 py-3 text-center">Price</th>
                 <th className="px-2 py-3 text-center">Branch</th>
                 <th className="px-2 py-3 text-center">Date Created</th>
                 <th className="px-2 py-3 text-center">Actions</th>
@@ -132,7 +130,7 @@ export function ConsumablesInventoryPage() {
             <tbody>
               {rows.map((i) => (
                 <tr key={i.id} className="border-t border-border/70 hover:bg-ivory-100">
-                  <td className="px-2 py-3 font-semibold uppercase text-[#073D2C]">{i.name}</td>
+                  <td className="px-2 py-3 font-semibold text-[#073D2C]">{i.name}</td>
                   <td className="px-2 py-3 text-center">
                     <span
                       className={cn(
@@ -143,7 +141,6 @@ export function ConsumablesInventoryPage() {
                       {i.stock}
                     </span>
                   </td>
-                  <td className="px-2 py-3 text-center">{formatPeso(i.price)}</td>
                   <td className="px-2 py-3 text-center text-slate-ui">{i.branchName}</td>
                   <td className="px-2 py-3 text-center text-slate-ui">
                     {formatCreated(i.createdAt)}
@@ -163,7 +160,7 @@ export function ConsumablesInventoryPage() {
               ))}
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-2 py-10 text-center text-slate-ui">
+                  <td colSpan={5} className="px-2 py-10 text-center text-slate-ui">
                     No consumables found.
                   </td>
                 </tr>

@@ -7,6 +7,8 @@ export const FRANCHISE_ORDER_SUPPLIER = 'Imajica Aesthetic'
 export const FRANCHISE_UNIT_TYPES = ['Piece', 'Box', 'Bottle', 'Pack', 'Case', 'Liter', 'Set'] as const
 
 export const FRANCHISE_BRANCHES = [
+  'Dasmariñas, Cavite',
+  'Bacoor, Cavite',
   'Imajica Franchise — Quezon City',
   'Imajica Franchise — Cebu',
   'Imajica Franchise — Davao',

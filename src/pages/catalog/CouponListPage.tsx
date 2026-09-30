@@ -7,6 +7,8 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Pager } from '@/pages/catalog/ProductInventoryPage'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   couponStatus,
   daysSinceEnded,
@@ -16,6 +18,7 @@ import {
 } from '@/services/couponService'
 import type { PromoCoupon } from '@/types'
 import { formatPeso } from '@/utils/currency'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 function formatRange(from: string, until: string) {
   const a = new Date(from).toLocaleDateString('en-US', {
@@ -32,6 +35,9 @@ function formatRange(from: string, until: string) {
 }
 
 export function CouponListPage() {
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  const forcedBranchId = useForcedBranchId()
   const [coupons, setCoupons] = useState<PromoCoupon[]>(() => getCoupons())
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
@@ -42,13 +48,21 @@ export function CouponListPage() {
 
   const filtered = useMemo(
     () =>
-      coupons.filter(
-        (c) =>
-          !search ||
+      coupons.filter((c) => {
+        if (franchiseOwner) {
+          const matchesId = forcedBranchId && c.branchId === forcedBranchId
+          const matchesName =
+            user?.branchName &&
+            c.branchName.toLowerCase().includes(user.branchName.toLowerCase().split(',')[0])
+          if (!matchesId && !matchesName) return false
+        }
+        if (!search) return true
+        return (
           c.code.toLowerCase().includes(search.toLowerCase()) ||
-          c.name.toLowerCase().includes(search.toLowerCase()),
-      ),
-    [coupons, search],
+          c.name.toLowerCase().includes(search.toLowerCase())
+        )
+      }),
+    [coupons, search, franchiseOwner, forcedBranchId, user?.branchName],
   )
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))

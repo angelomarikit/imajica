@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, Navigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
   Cake,
@@ -18,6 +18,8 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Tabs } from '@/components/ui/Tabs'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   computeContractValue,
   getAvailedServices,
@@ -31,6 +33,7 @@ import { getBranches } from '@/services/branchService'
 import type { Client } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
 const fieldLabel =
   'mb-1.5 block text-[11px] font-bold uppercase tracking-[0.12em] text-charcoal'
@@ -76,6 +79,8 @@ function formatShortDate(iso: string) {
 
 export function ClientProfilePage() {
   const { id } = useParams()
+  const { user } = useAuth()
+  const forcedBranchId = useForcedBranchId()
   const [tab, setTab] = useState('patient')
   const [client, setClient] = useState<Client | undefined>(() =>
     id ? getClientById(id) : getClients()[0],
@@ -85,7 +90,26 @@ export function ClientProfilePage() {
   const [form, setForm] = useState<PersonalForm | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const branches = useMemo(() => getBranches(), [])
+  const branches = useMemo(() => {
+    const all = getBranches()
+    if (forcedBranchId) return all.filter((b) => b.id === forcedBranchId)
+    return all
+  }, [forcedBranchId])
+
+  const canViewClient = useMemo(() => {
+    if (!client) return true
+    if (isHqRole(user?.role)) return true
+    if (!isBranchOwner(user) && !forcedBranchId) return true
+    const branchId = forcedBranchId ?? user?.branchId
+    if (branchId && client.preferredBranchId === branchId) return true
+    if (
+      user?.branchName &&
+      client.preferredBranchName?.toLowerCase() === user.branchName.toLowerCase()
+    ) {
+      return true
+    }
+    return false
+  }, [client, user, forcedBranchId])
 
   useEffect(() => {
     const refreshClient = () => setClient(id ? getClientById(id) : getClients()[0])
@@ -97,6 +121,10 @@ export function ClientProfilePage() {
       unsubSales()
     }
   }, [id])
+
+  if (client && !canViewClient) {
+    return <Navigate to="/admin/clients" replace />
+  }
 
   useEffect(() => {
     setEditing(false)
@@ -297,6 +325,7 @@ export function ClientProfilePage() {
                     className={fieldControl}
                     value={form.branchId}
                     onChange={(e) => setForm({ ...form, branchId: e.target.value })}
+                    disabled={Boolean(forcedBranchId)}
                   >
                     {!branches.some((b) => b.id === form.branchId) && form.branchId ? (
                       <option value={form.branchId}>{client.preferredBranchName}</option>

@@ -13,102 +13,18 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { demoCommissions, demoStaff } from '@/constants/demoData'
+import { demoCommissions } from '@/constants/demoData'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { exportCsv } from '@/services/analyticsService'
+import { getDirectoryStaff } from '@/services/staffDirectoryService'
 import type { Staff } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-
-/** Extra directory rows for UI parity with Staff Directory screenshot */
-const DIRECTORY_EXTRA: Staff[] = [
-  {
-    id: 'st-rosalie',
-    code: 'MJ-AE-010',
-    fullName: 'Rosalie Manalo',
-    email: 'jangmi2575@gmail.com',
-    phone: '09064770983',
-    role: 'AESTHETICIAN',
-    title: 'Aesthetician',
-    department: 'Operation Departments',
-    branchId: 'br-pasig',
-    branchName: 'Pasig City',
-    status: 'active',
-    specializations: ['Facials'],
-    hireDate: '2024-02-01',
-    employmentType: 'Full-time',
-    rating: 4.9,
-    reviewCount: 50,
-    baseSalary: 35000,
-  },
-  {
-    id: 'st-veronica',
-    code: 'MJ-AE-011',
-    fullName: 'Veronica Mayo',
-    email: 'veronica.mayo@imajica.ph',
-    phone: '09171234567',
-    role: 'AESTHETICIAN',
-    title: 'Aesthetician',
-    department: 'Operation Departments',
-    branchId: 'br-pasig',
-    branchName: 'Cainta, Rizal',
-    status: 'active',
-    specializations: ['Facials'],
-    hireDate: '2024-04-12',
-    employmentType: 'Full-time',
-    rating: 4.8,
-    reviewCount: 40,
-    baseSalary: 34000,
-  },
-  {
-    id: 'st-sonayah',
-    code: 'MJ-BM-012',
-    fullName: 'Sonayah Arsila',
-    email: 'sonayah.arsila@imajica.ph',
-    phone: '09181234567',
-    role: 'BRANCH_ADMIN',
-    title: 'Branch Manager',
-    department: 'Operation Departments',
-    branchId: 'br-pasig',
-    branchName: 'San Mateo, Rizal',
-    status: 'active',
-    specializations: ['Operations'],
-    hireDate: '2023-08-01',
-    employmentType: 'Full-time',
-    rating: 5,
-    reviewCount: 20,
-    baseSalary: 55000,
-  },
-  {
-    id: 'st-rasmiya',
-    code: 'MJ-AE-013',
-    fullName: 'Rasmiya Monteclaro',
-    email: 'rasmiya.m@imajica.ph',
-    phone: '09191234567',
-    role: 'AESTHETICIAN',
-    title: 'Aesthetician',
-    department: 'Operation Departments',
-    branchId: 'br-makati',
-    branchName: 'Bacoor, Cavite',
-    status: 'inactive',
-    specializations: ['Facials'],
-    hireDate: '2023-01-10',
-    employmentType: 'Full-time',
-    rating: 4.5,
-    reviewCount: 18,
-    baseSalary: 32000,
-  },
-]
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 function allDirectoryStaff(): Staff[] {
-  const extras = DIRECTORY_EXTRA
-  const demo = demoStaff.map((s) => ({
-    ...s,
-    department: s.department ?? 'Operation Departments',
-    title: s.title || s.role,
-    branchName: s.branchName.includes('City') ? s.branchName : `${s.branchName} City`.replace(' City City', ' City'),
-  }))
-  const ids = new Set(extras.map((e) => e.id))
-  return [...extras, ...demo.filter((d) => !ids.has(d.id))]
+  return getDirectoryStaff()
 }
 
 function initials(name: string) {
@@ -123,18 +39,29 @@ function initials(name: string) {
 
 export function StaffPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  const forcedBranchId = useForcedBranchId()
   const [staffRows] = useState(() => allDirectoryStaff())
   const [queryDraft, setQueryDraft] = useState('')
   const [query, setQuery] = useState('')
 
   const filtered = useMemo(() => {
+    let list = staffRows
+    if (franchiseOwner) {
+      list = list.filter(
+        (s) =>
+          (forcedBranchId && s.branchId === forcedBranchId) ||
+          (user?.branchName && s.branchName === user.branchName),
+      )
+    }
     const q = query.toLowerCase()
-    if (!q) return staffRows
-    return staffRows.filter((s) => {
+    if (!q) return list
+    return list.filter((s) => {
       const hay = `${s.fullName} ${s.email} ${s.title} ${s.branchName} ${s.department ?? ''}`.toLowerCase()
       return hay.includes(q)
     })
-  }, [staffRows, query])
+  }, [staffRows, query, franchiseOwner, forcedBranchId, user?.branchName])
 
   function handleExport() {
     exportCsv(
@@ -158,7 +85,7 @@ export function StaffPage() {
       <AdminPageBanner
         title="Staff Directory"
         description="Manage salon clinicians, admin personnel, commission profiles, and department branch assignments."
-        stat={{ value: staffRows.length, label: 'Total Staff' }}
+        stat={{ value: filtered.length, label: 'Total Staff' }}
       />
 
       <Card className="p-4 sm:p-5">
@@ -290,7 +217,7 @@ export function StaffPage() {
 
 export function StaffDetailPage() {
   const { id } = useParams()
-  const staff = allDirectoryStaff().find((s) => s.id === id) ?? demoStaff[0]
+  const staff = allDirectoryStaff().find((s) => s.id === id) ?? allDirectoryStaff()[0]
   return (
     <div className="space-y-5">
       <AdminPageBanner

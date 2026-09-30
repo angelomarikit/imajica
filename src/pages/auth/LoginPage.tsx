@@ -24,10 +24,10 @@ import { cn } from '@/utils/cn'
 /** Visual source of truth: reference/ui/01-login.png */
 
 export function LoginPage() {
-  const { login, isDemoMode } = useAuth()
+  const { login } = useAuth()
   const navigate = useNavigate()
-  const [email, setEmail] = useState('admin@imajica.ph')
-  const [password, setPassword] = useState('password123')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [remember, setRemember] = useState(true)
   const [loading, setLoading] = useState(false)
@@ -39,9 +39,13 @@ export function LoginPage() {
       const hintEmail =
         roleHint === 'CLIENT'
           ? 'client@imajica.ph'
-          : roleHint === 'RECEPTIONIST' || roleHint === 'BRANCH_ADMIN'
+          : roleHint === 'RECEPTIONIST'
             ? 'staff@imajica.ph'
-            : email
+            : roleHint === 'BRANCH_ADMIN'
+              ? 'franchise@imajica.ph'
+              : roleHint === 'HQ_ADMIN' || roleHint === 'SUPER_ADMIN'
+                ? 'admin@imajica.ph'
+                : email
 
       const sessionUser = await login(hintEmail || email, password, roleHint)
       // Prefer DB role from login; roleHint only for offline demo quick-login buttons
@@ -71,7 +75,7 @@ export function LoginPage() {
 
         <div className="relative z-10 flex h-full flex-col justify-between px-12 py-14 xl:px-16">
           <div className="max-w-xl pt-6">
-            <h1 className="font-display text-[3.25rem] leading-[1.08] text-white xl:text-[3.75rem]">
+            <h1 className="font-brand text-[3.25rem] leading-[1.08] text-white xl:text-[3.75rem]">
               Beauty. Science.
               <br />
               Confidence.
@@ -118,12 +122,12 @@ export function LoginPage() {
             </div>
             <div className="h-10 w-px bg-white/25" />
             <div>
-              <p className="font-display text-[1.65rem] text-[#C5A059]">Thousands</p>
+              <p className="font-brand text-[1.65rem] text-[#C5A059]">Thousands</p>
               <p className="mt-0.5 text-white/75">of Happy Clients</p>
             </div>
             <div className="h-10 w-px bg-white/25" />
             <div>
-              <p className="font-display text-[1.65rem] text-[#C5A059]">One</p>
+              <p className="font-brand text-[1.65rem] text-[#C5A059]">One</p>
               <p className="mt-0.5 text-white/75">Beautiful System</p>
             </div>
           </div>
@@ -169,14 +173,14 @@ export function LoginPage() {
         >
           <div className="mb-7 text-center">
             <img src={logo} alt={BRAND.name} className="mx-auto h-[72px] w-[72px] rounded-full object-cover" />
-            <p className="mt-3 font-display text-[22px] tracking-[0.08em] text-[#0A2E26]">IMAJICA</p>
+            <p className="mt-3 font-brand text-[22px] tracking-[0.08em] text-[#0A2E26]">IMAJICA</p>
             <p className="mt-0.5 text-[9px] font-medium uppercase tracking-[0.22em] text-[#C5A059]">
               Medical Aesthetics
             </p>
           </div>
 
           <div className="mb-6 text-center">
-            <h2 className="font-display text-[2rem] text-[#1a1a1a]">Welcome Back</h2>
+            <h2 className="font-display text-[1.75rem] font-semibold tracking-tight text-[#1a1a1a]">Welcome Back</h2>
             <p className="mt-1.5 text-sm text-[#6b6b6b]">Sign in to your clinic management system.</p>
           </div>
 
@@ -254,7 +258,7 @@ export function LoginPage() {
               [
                 { label: 'Admin', role: 'HQ_ADMIN' as const, icon: Settings2 },
                 { label: 'Staff', role: 'RECEPTIONIST' as const, icon: Heart },
-                { label: 'Branch', role: 'BRANCH_ADMIN' as const, icon: Building2 },
+                { label: 'Franchise', role: 'BRANCH_ADMIN' as const, icon: Building2 },
               ]
             ).map(({ label, role, icon: Icon }) => (
               <button
@@ -277,12 +281,6 @@ export function LoginPage() {
               Create an account
             </Link>
           </p>
-
-          {isDemoMode ? (
-            <p className="mt-3 rounded-[10px] bg-[#F7F1E3] px-3 py-2 text-center text-[11px] text-[#6b6b6b]">
-              Demo: admin@imajica.ph / password123
-            </p>
-          ) : null}
         </form>
 
         <p className="absolute bottom-4 right-5 text-[11px] text-[#8a8a8a]">{BRAND.copyright}</p>

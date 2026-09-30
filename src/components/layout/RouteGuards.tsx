@@ -47,6 +47,11 @@ export function RequireStaff({ children }: { children?: React.ReactNode }) {
   return <RequireRole roles={staffRoles}>{children}</RequireRole>
 }
 
+/** HQ-only admin surfaces (User Access, Branches, Marketing, org warehouse, etc.) */
+export function RequireHqAdmin({ children }: { children?: React.ReactNode }) {
+  return <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN']}>{children}</RequireRole>
+}
+
 /** Client portal only — staff are sent to the admin dashboard. */
 export function RequireClient({ children }: { children?: React.ReactNode }) {
   const { user } = useAuth()

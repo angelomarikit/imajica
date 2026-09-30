@@ -1,11 +1,13 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { demoBranches } from '@/constants/demoData'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { getBranches } from '@/services/branchService'
 import { getPackagesCatalog, getServices } from '@/services/catalogService'
 import {
   createCoupon,
@@ -14,6 +16,7 @@ import {
 } from '@/services/couponService'
 import type { CouponDiscountType } from '@/types'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 const label = 'mb-1.5 block text-[11px] font-bold uppercase tracking-[0.12em] text-charcoal'
 const control =
@@ -25,10 +28,14 @@ function Required() {
 
 export function NewCouponPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  const forcedBranchId = useForcedBranchId()
   const [params] = useSearchParams()
   const editId = params.get('edit')
   const existing = editId ? getCouponById(editId) : undefined
 
+  const branchOptions = useMemo(() => getBranches().filter((b) => b.status === 'active'), [])
   const services = useMemo(() => getServices().filter((s) => s.status === 'active'), [])
   const packages = useMemo(() => getPackagesCatalog().filter((p) => p.status === 'active'), [])
 
@@ -46,8 +53,14 @@ export function NewCouponPage() {
   const [validFrom, setValidFrom] = useState(existing?.validFrom ?? '')
   const [validUntil, setValidUntil] = useState(existing?.validUntil ?? '')
   const [newCustomersOnly, setNewCustomersOnly] = useState(existing?.newCustomersOnly ?? true)
-  const [branchId, setBranchId] = useState(existing?.branchId ?? demoBranches[0]?.id ?? '')
+  const [branchId, setBranchId] = useState(
+    existing?.branchId ?? forcedBranchId ?? branchOptions[0]?.id ?? '',
+  )
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (forcedBranchId) setBranchId(forcedBranchId)
+  }, [forcedBranchId])
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -68,7 +81,7 @@ export function NewCouponPage() {
       return
     }
 
-    const branch = demoBranches.find((b) => b.id === branchId)
+    const branch = branchOptions.find((b) => b.id === branchId)
     const service = services.find((s) => s.id === serviceId)
     const pkg = packages.find((p) => p.id === packageId)
 
@@ -281,9 +294,13 @@ export function NewCouponPage() {
                 className={control}
                 value={branchId}
                 onChange={(e) => setBranchId(e.target.value)}
+                disabled={franchiseOwner}
               >
                 <option value="">Select Branch</option>
-                {demoBranches.map((b) => (
+                {(franchiseOwner
+                  ? branchOptions.filter((b) => b.id === forcedBranchId)
+                  : branchOptions
+                ).map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.name.replace(/ Branch$/, '')}
                   </option>

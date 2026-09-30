@@ -61,6 +61,7 @@ export function createExpense(input: {
   status?: EntityStatus
   scope: ExpenseScope
   expenseDate: string
+  branchId?: string
   branchName?: string
   notes?: string
 }): OperationalExpense {
@@ -77,6 +78,7 @@ export function createExpense(input: {
     scope: input.scope,
     expenseDate: input.expenseDate,
     createdAt: today,
+    branchId: input.branchId,
     branchName: input.branchName,
     notes: input.notes,
   })

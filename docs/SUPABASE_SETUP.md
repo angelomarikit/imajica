@@ -61,8 +61,48 @@ Or in **Dashboard → SQL Editor**, paste and run **each file in order**. Confir
 | 21 | `supabase/migrations/20260929000021_branches_directory.sql` |
 | 22 | `supabase/migrations/20260929000022_sms_marketing.sql` |
 | 23 | `supabase/migrations/20260929000023_rls_core_gaps_and_clean_demo.sql` |
+| 24 | `supabase/migrations/20260929000024_treatment_branch_availability.sql` |
+| 25 | `supabase/migrations/20260929000025_product_detail_stock_history.sql` |
+| 26 | `supabase/migrations/20260929000026_sales_payment_type_labels.sql` |
+| 27 | `supabase/migrations/20260929000027_client_sales_entitlements.sql` |
+| 28 | `supabase/migrations/20260929000028_appointment_schedule_fields.sql` |
+| 29 | `supabase/migrations/20260929000029_franchise_branch_owner_rls.sql` |
+| 30 | `supabase/migrations/20260929000030_branch_accounts.sql` |
+| 31 | `supabase/migrations/20260929000031_branch_accounts_any_clinic.sql` |
+| 32 | `supabase/migrations/20260929000032_branch_account_rpc_service_role.sql` |
+| 33 | `supabase/migrations/20260929000033_clients_branch_scope.sql` |
+| 34 | `supabase/migrations/20260929000034_booking_checkout_fields.sql` |
+| 35 | `supabase/migrations/20260929000035_seed_team_user_accounts.sql` |
+| 36 | `supabase/migrations/20260929000036_branch_account_all_roles.sql` |
+| 37 | `supabase/migrations/20260929000037_staff_attendance.sql` |
 
 Step 23 adds missing RLS policies, creates the **Headquarters** sentinel branch (`00000000-0000-0000-0000-000000000001` / code `HQ`), and deletes any leftover demo transactional rows.
+
+Step 29 tightens RLS for **franchise branch owners** (`BRANCH_ADMIN` on a `branch_type = 'franchise'` branch): appointments, clients, sales, stock, expenses, waste, orders, staff, and promo coupons are limited to their branch; HQ central warehouse and global catalog CRUD stay HQ-only.
+
+Step 30 adds **Branches Accounts** (`v_branch_accounts_directory` + `upsert_branch_account_assignment`).
+
+Step 34 adds booking checkout fields on sales (`payment_type`, booking refs).
+
+Step 35 seeds **43 team login accounts** from the legacy User List into Auth + `profiles` + `user_roles` (password `Imajica123`). See `docs/TEAM_ACCOUNT_CREDENTIALS.md`. No Branch → `HQ_ADMIN`; named branch → `BRANCH_ADMIN` for that clinic.
+
+Step 36 lets HQ change any account role from Branches Accounts (all system roles; org roles land on the HQ sentinel).
+
+Step 37 adds **staff attendance** (`staff_attendance_logs` + private storage bucket `attendance-selfies`) for Time In / Time Out with selfie and geolocation.
+
+**Create accounts inside the web app** (recommended): the UI calls Edge Function `create-branch-account`, which creates Auth + profile + branch role. You do **not** add users in the Authentication dashboard for this flow.
+
+One-time setup:
+
+1. `.env` with **anon** key only (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`) — never the service role in Vite.
+2. Apply migration 30.
+3. Deploy once (service role is injected automatically by Supabase — you do not paste it into the app):
+
+```bash
+supabase functions deploy create-branch-account --no-verify-jwt
+```
+
+4. Sign in as HQ (`SUPER_ADMIN` / `HQ_ADMIN`), then use **Branches Accounts → Create Account**.
 
 ## 4. Seed (taxonomy only)
 
@@ -101,6 +141,65 @@ on conflict do nothing;
 ```
 
 Sign in to the app with that email/password.
+
+## 5b. Franchise branch owner
+
+1. Create the franchise branch in **Team → Branches** (or SQL) with `branch_type = 'franchise'`. Copy its UUID.
+2. **Authentication → Users → Add user** for the owner. Copy the auth user UUID.
+3. Run:
+
+```sql
+-- Profile
+insert into public.profiles (id, full_name, email, status)
+values (
+  'PASTE_FRANCHISE_OWNER_AUTH_UUID'::uuid,
+  'Franchise Owner Name',
+  'owner@franchise.example',
+  'active'
+)
+on conflict (id) do update
+  set full_name = excluded.full_name,
+      email = excluded.email,
+      updated_at = now();
+
+-- BRANCH_ADMIN on the franchise branch only (must be branch_type = franchise)
+insert into public.user_roles (user_id, role_id, branch_id)
+select
+  'PASTE_FRANCHISE_OWNER_AUTH_UUID'::uuid,
+  'BRANCH_ADMIN',
+  b.id
+from public.branches b
+where b.id = 'PASTE_FRANCHISE_BRANCH_UUID'::uuid
+  and b.branch_type = 'franchise'
+on conflict do nothing;
+```
+
+If the `insert into user_roles … select` inserts **0 rows**, the branch UUID is wrong or not a franchise — fix `branch_type` first.
+
+Offline demo login (works even when `.env` points at Supabase, if that Auth user does not exist yet):
+
+- Email: `franchise@imajica.ph`
+- Password: `password123`
+- Or click **Franchise** on the login screen
+
+This uses a local demo session locked to Dasmariñas, Cavite (`FR01`). It does **not** replace creating a real Auth user for production.
+
+## 5c. Branches Accounts (in-app create)
+
+After migration 30 + Edge Function deploy, HQ creates accounts from the app form (email, password, role, branch). No Authentication → Users step.
+
+Fallback SQL (only if you already have an Auth user UUID):
+
+```sql
+select public.upsert_branch_account_assignment(
+  'PASTE_AUTH_USER_UUID'::uuid,
+  'Owner Name',
+  'owner@branch.example',
+  'BRANCH_ADMIN',
+  'PASTE_BRANCH_UUID'::uuid,
+  'active'
+);
+```
 
 ## 6. Clear old browser demo data
 

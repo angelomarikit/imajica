@@ -88,7 +88,7 @@ export function RegisterPage() {
           <div className="flex items-center gap-3">
             <img src={logo} alt={BRAND.name} className="h-12 w-12 rounded-full object-cover" />
             <div>
-              <p className="font-display text-[22px] tracking-[0.06em] text-[#0A2E26]">IMAJICA</p>
+              <p className="font-brand text-[22px] tracking-[0.06em] text-[#0A2E26]">IMAJICA</p>
               <p className="text-[9px] font-medium uppercase tracking-[0.2em] text-[#C5A059]">
                 Medical Aesthetics
               </p>
@@ -98,7 +98,7 @@ export function RegisterPage() {
           <p className="mt-10 text-[11px] font-semibold uppercase tracking-[0.28em] text-[#C5A059]">
             Create Your Account
           </p>
-          <h1 className="mt-3 font-display text-[2.75rem] leading-[1.1] text-[#0A2E26] xl:text-[3.25rem]">
+          <h1 className="mt-3 font-brand text-[2.75rem] leading-[1.1] text-[#0A2E26] xl:text-[3.25rem]">
             Start Your Aesthetic Journey With Us
           </h1>
           <p className="mt-4 text-[15px] leading-relaxed text-[#5a5a5a]">
@@ -137,7 +137,7 @@ export function RegisterPage() {
           </ul>
 
           <div className="mt-14 flex items-center gap-4">
-            <p className="font-display text-xl italic text-[#C5A059]">Enhancing Natural Beauty</p>
+            <p className="font-brand text-xl italic text-[#C5A059]">Enhancing Natural Beauty</p>
             <div className="h-px flex-1 max-w-[120px] bg-[#C5A059]/50" />
           </div>
         </div>
@@ -148,7 +148,7 @@ export function RegisterPage() {
           className="w-full rounded-[24px] border border-[#EDE7DC] bg-white p-6 shadow-[0_20px_60px_rgba(10,46,38,0.1)] sm:p-8 lg:p-9"
         >
           <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
-            <h2 className="font-display text-[2rem] text-[#0A2E26]">Create Your Account</h2>
+            <h2 className="font-display text-[1.75rem] font-semibold tracking-tight text-[#0A2E26]">Create Your Account</h2>
             <Link to="/login" className="shrink-0 text-sm text-[#6b6b6b]">
               Already have an account?{' '}
               <span className="font-medium text-[#C5A059] hover:underline">Sign In →</span>
@@ -197,7 +197,7 @@ export function RegisterPage() {
           {step === 0 ? (
             <div className="space-y-4">
               <div>
-                <h3 className="font-display text-xl text-[#0A2E26]">Personal Information</h3>
+                <h3 className="font-display text-base font-semibold tracking-tight text-[#0A2E26]">Personal Information</h3>
                 <p className="text-sm text-[#6b6b6b]">Let’s get to know you.</p>
               </div>
 
@@ -280,7 +280,7 @@ export function RegisterPage() {
           {step === 1 ? (
             <div className="space-y-4">
               <div>
-                <h3 className="font-display text-xl text-[#0A2E26]">Account Details</h3>
+                <h3 className="font-display text-base font-semibold tracking-tight text-[#0A2E26]">Account Details</h3>
                 <p className="text-sm text-[#6b6b6b]">Create a secure password for your account.</p>
               </div>
               <Field
@@ -305,7 +305,7 @@ export function RegisterPage() {
           {step === 2 ? (
             <div className="space-y-4">
               <div>
-                <h3 className="font-display text-xl text-[#0A2E26]">Preferences</h3>
+                <h3 className="font-display text-base font-semibold tracking-tight text-[#0A2E26]">Preferences</h3>
                 <p className="text-sm text-[#6b6b6b]">Tell us where you’d like to book.</p>
               </div>
               <label className="block">

@@ -181,8 +181,15 @@ export function exportCsv(filename: string, header: string[], rows: string[][]) 
 }
 
 export function feeLabelForMethod(method: PaymentMethod) {
-  if (method === 'credit_card') return 'Credit Card (3%)'
-  if (method === 'gcash' || method === 'paymaya' || method === 'paymongo') return 'QRPH (₱15)'
+  if (method === 'credit_card' || method === 'debit_card') return 'Card (3%)'
+  if (
+    method === 'gcash' ||
+    method === 'paymaya' ||
+    method === 'paymongo' ||
+    method === 'qr_ph'
+  ) {
+    return 'QRPH (₱15)'
+  }
   return '—'
 }
 

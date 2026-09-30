@@ -4,10 +4,11 @@ import { Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { demoBranches } from '@/constants/demoData'
+import { getBranches } from '@/services/branchService'
 import { registerClient } from '@/services/clientService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 
 const fieldLabel =
   'mb-1.5 block text-[11px] font-bold uppercase tracking-[0.12em] text-charcoal'
@@ -23,6 +24,12 @@ function RequiredMark() {
 export function NewClientPage() {
   const navigate = useNavigate()
   const fileRef = useRef<HTMLInputElement>(null)
+  const forcedBranchId = useForcedBranchId()
+  const branchOptions = useMemo(() => {
+    const all = getBranches().filter((b) => b.code !== 'HQ')
+    if (forcedBranchId) return all.filter((b) => b.id === forcedBranchId)
+    return all
+  }, [forcedBranchId])
 
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -30,7 +37,7 @@ export function NewClientPage() {
   const [phone, setPhone] = useState('')
   const [dateOfBirth, setDateOfBirth] = useState('')
   const [gender, setGender] = useState<Client['gender'] | ''>('')
-  const [branchId, setBranchId] = useState(demoBranches[0]?.id ?? '')
+  const [branchId, setBranchId] = useState(forcedBranchId ?? branchOptions[0]?.id ?? '')
   const [occupation, setOccupation] = useState('')
   const [address, setAddress] = useState('')
   const [emergencyContactName, setEmergencyContactName] = useState('')
@@ -47,7 +54,7 @@ export function NewClientPage() {
     return (a + b || 'NA').toUpperCase()
   }, [firstName, lastName])
 
-  const branch = demoBranches.find((b) => b.id === branchId)
+  const branch = branchOptions.find((b) => b.id === branchId)
 
   function onPickImage(file: File | undefined) {
     if (!file) return
@@ -264,8 +271,9 @@ export function NewClientPage() {
                   className={fieldControl}
                   value={branchId}
                   onChange={(e) => setBranchId(e.target.value)}
+                  disabled={Boolean(forcedBranchId)}
                 >
-                  {demoBranches.map((b) => (
+                  {branchOptions.map((b) => (
                     <option key={b.id} value={b.id}>
                       {b.name.replace(/ Branch$/, '')}
                     </option>

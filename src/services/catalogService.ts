@@ -275,6 +275,74 @@ export function updateService(service: Treatment): Treatment {
   return upsertService(service)
 }
 
+/** Franchise owner: turn service live / off for one branch only */
+export function toggleServiceLiveForBranch(serviceId: string, branchId: string, live: boolean): Treatment | null {
+  const existing = getServiceById(serviceId)
+  if (!existing) return null
+  if (existing.availableGlobally && !live) {
+    // Leaving global: become branch-list without this branch (all other branches stay implied via explicit list of remaining)
+    // Simpler: keep global true only when live; when turning off a global item for one branch,
+    // convert to all branches except this one.
+    const others = getBranches()
+      .filter((b) => b.code !== 'HQ' && b.id !== branchId)
+      .map((b) => b.id)
+    return upsertService({
+      ...existing,
+      availableGlobally: false,
+      availableBranchIds: others,
+    })
+  }
+  const ids = new Set(existing.availableBranchIds ?? [])
+  if (existing.availableGlobally) {
+    // already live everywhere
+    return existing
+  }
+  if (live) ids.add(branchId)
+  else ids.delete(branchId)
+  const nextIds = [...ids]
+  return upsertService({
+    ...existing,
+    availableGlobally: false,
+    availableBranchIds: nextIds,
+  })
+}
+
+export function isServiceLiveAtBranch(service: Treatment, branchId: string): boolean {
+  if (service.availableGlobally) return true
+  if (service.availableBranchIds?.includes(branchId)) return true
+  return service.branchId === branchId
+}
+
+export function togglePackageLiveForBranch(packageId: string, branchId: string, live: boolean): Package | null {
+  const existing = getPackageById(packageId)
+  if (!existing) return null
+  if (existing.availableGlobally && !live) {
+    const others = getBranches()
+      .filter((b) => b.code !== 'HQ' && b.id !== branchId)
+      .map((b) => b.id)
+    return upsertPackage({
+      ...existing,
+      availableGlobally: false,
+      availableBranchIds: others,
+    })
+  }
+  if (existing.availableGlobally) return existing
+  const ids = new Set(existing.availableBranchIds ?? [])
+  if (live) ids.add(branchId)
+  else ids.delete(branchId)
+  return upsertPackage({
+    ...existing,
+    availableGlobally: false,
+    availableBranchIds: [...ids],
+  })
+}
+
+export function isPackageLiveAtBranch(pkg: Package, branchId: string): boolean {
+  if (pkg.availableGlobally) return true
+  if (pkg.availableBranchIds?.includes(branchId)) return true
+  return pkg.branchId === branchId
+}
+
 export function deleteService(id: string) {
   const extra = readJson<Treatment>(SERVICES_KEY).filter((s) => s.id !== id)
   localStorage.setItem(SERVICES_KEY, JSON.stringify(extra))

@@ -1,13 +1,16 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Save, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { demoBranches } from '@/constants/demoData'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { getBranches } from '@/services/branchService'
 import { DEPARTMENTS, getPositions } from '@/services/staffPositionsService'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 const fieldClass =
   'mt-1.5 w-full rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm text-[#073D2C] outline-none focus:border-emerald-800/40 focus:ring-2 focus:ring-emerald-900/10'
@@ -16,7 +19,11 @@ const labelClass = 'text-[11px] font-semibold uppercase tracking-wide text-slate
 
 export function NewStaffPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  const forcedBranchId = useForcedBranchId()
   const positions = getPositions().filter((p) => p.status === 'active')
+  const branchOptions = useMemo(() => getBranches().filter((b) => b.status === 'active'), [])
 
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -27,15 +34,21 @@ export function NewStaffPage() {
   const [department, setDepartment] = useState<string>(DEPARTMENTS[0])
   const [joinDate, setJoinDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [employmentType, setEmploymentType] = useState('Full-time')
-  const [branchId, setBranchId] = useState(demoBranches[0]?.id ?? '')
+  const [branchId, setBranchId] = useState(
+    forcedBranchId ?? branchOptions[0]?.id ?? '',
+  )
   const [address, setAddress] = useState('')
   const [emergencyName, setEmergencyName] = useState('')
   const [emergencyRelation, setEmergencyRelation] = useState('')
   const [emergencyPhone, setEmergencyPhone] = useState('')
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (forcedBranchId) setBranchId(forcedBranchId)
+  }, [forcedBranchId])
+
   const position = positions.find((p) => p.id === positionId)
-  const branch = demoBranches.find((b) => b.id === branchId)
+  const branch = branchOptions.find((b) => b.id === branchId)
   const fullName = [firstName, lastName].filter(Boolean).join(' ')
   const initials =
     `${firstName.charAt(0) || ''}${lastName.charAt(0) || ''}`.toUpperCase() || 'NA'
@@ -187,8 +200,12 @@ export function NewStaffPage() {
                   className={fieldClass}
                   value={branchId}
                   onChange={(e) => setBranchId(e.target.value)}
+                  disabled={franchiseOwner}
                 >
-                  {demoBranches.map((b) => (
+                  {(franchiseOwner
+                    ? branchOptions.filter((b) => b.id === forcedBranchId)
+                    : branchOptions
+                  ).map((b) => (
                     <option key={b.id} value={b.id}>
                       {b.name}
                     </option>

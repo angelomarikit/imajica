@@ -3,7 +3,10 @@ import { Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { demoBranches } from '@/constants/demoData'
+import { getBranches } from '@/services/branchService'
 import {
   getClients,
   registerClient,
@@ -11,6 +14,7 @@ import {
 } from '@/services/clientService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
+import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
 const field =
   'h-11 w-full rounded-[10px] border border-border bg-white px-3 text-sm placeholder:text-slate-ui/70 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/15'
@@ -25,6 +29,10 @@ export function SelectPatientModal({
   onClose: () => void
   onSelect: (client: Client) => void
 }) {
+  const { user } = useAuth()
+  const forcedBranchId = useForcedBranchId()
+  const hqView = isHqRole(user?.role)
+  const branchScoped = !hqView && (isBranchOwner(user) || Boolean(forcedBranchId))
   const [clients, setClients] = useState(() => getClients())
   const [query, setQuery] = useState('')
   const [applied, setApplied] = useState('')
@@ -50,16 +58,41 @@ export function SelectPatientModal({
     }
   }, [open])
 
+  const scopedClients = useMemo(() => {
+    if (!branchScoped) return clients
+    const branchId = forcedBranchId ?? user?.branchId
+    const branchName = user?.branchName?.toLowerCase()
+    return clients.filter((c) => {
+      if (branchId && c.preferredBranchId === branchId) return true
+      if (branchName && c.preferredBranchName?.toLowerCase() === branchName) return true
+      return false
+    })
+  }, [clients, branchScoped, forcedBranchId, user?.branchId, user?.branchName])
+
   const matches = useMemo(() => {
     const q = applied.trim().toLowerCase()
     if (!q) return []
-    return clients.filter(
+    return scopedClients.filter(
       (c) =>
         c.fullName.toLowerCase().includes(q) ||
         c.email.toLowerCase().includes(q) ||
         c.phone.replace(/\s/g, '').includes(q.replace(/\s/g, '')),
     )
-  }, [clients, applied])
+  }, [scopedClients, applied])
+
+  function resolveBranch() {
+    const branchId = forcedBranchId ?? user?.branchId
+    if (branchId) {
+      const fromDb = getBranches().find((b) => b.id === branchId)
+      if (fromDb) return { id: fromDb.id, name: fromDb.name.replace(/ Branch$/, '') }
+      if (user?.branchName) return { id: branchId, name: user.branchName.replace(/ Branch$/, '') }
+    }
+    const fallback = demoBranches[0]
+    return {
+      id: fallback?.id ?? 'br-pasig',
+      name: (fallback?.name ?? 'Pasig').replace(/ Branch$/, ''),
+    }
+  }
 
   function handleSearch(e?: FormEvent) {
     e?.preventDefault()
@@ -76,7 +109,7 @@ export function SelectPatientModal({
       toast.error('Contact number is required')
       return
     }
-    const branch = demoBranches[0]
+    const branch = resolveBranch()
     setSaving(true)
     try {
       const client = registerClient({
@@ -87,8 +120,8 @@ export function SelectPatientModal({
         phone: phone.startsWith('+63') || phone.startsWith('09') ? phone : `+63${phone.replace(/^0/, '')}`,
         dateOfBirth: birthdate || '1990-01-01',
         gender: gender || 'prefer_not_to_say',
-        branchId: branch?.id ?? 'br-pasig',
-        branchName: (branch?.name ?? 'Pasig').replace(/ Branch$/, ''),
+        branchId: branch.id,
+        branchName: branch.name,
         occupation,
         address: address || 'N/A',
         emergencyContactName: emergencyName,
@@ -131,7 +164,7 @@ export function SelectPatientModal({
       >
         <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4 sm:px-6">
           <div>
-            <h2 id="select-patient-title" className="font-display text-2xl text-[#073D2C] sm:text-3xl">
+            <h2 id="select-patient-title" className="font-display text-xl font-semibold tracking-tight text-[#073D2C] sm:text-2xl">
               Add New Patient
             </h2>
             <p className="text-sm text-slate-ui">

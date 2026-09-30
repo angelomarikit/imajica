@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  CalendarDays,
   ChevronLeft,
   ChevronRight,
-  Package,
   ShoppingBag,
   UserRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import {
+  BookingCheckoutModal,
+  type CheckoutCartLine,
+} from '@/components/booking/BookingCheckoutModal'
+import { EnterQuantityModal } from '@/components/booking/EnterQuantityModal'
 import { SelectPatientModal } from '@/components/booking/SelectPatientModal'
+import { TodaysBookingPanel } from '@/components/booking/TodaysBookingPanel'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { getPackagesCatalog, getServices } from '@/services/catalogService'
 import { getCoupons } from '@/services/couponService'
 import { getCatalogProducts } from '@/services/productCatalogService'
@@ -20,7 +25,14 @@ import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 
 type TabId = 'services' | 'products' | 'today' | 'list'
-type CartLine = { id: string; name: string; price: number; sessions: number; kind: string }
+
+type CatalogItem = {
+  id: string
+  name: string
+  price: number
+  sessions: number
+  kind: 'service' | 'package' | 'product'
+}
 
 function makeInvoiceId() {
   const now = new Date()
@@ -32,19 +44,22 @@ function makeInvoiceId() {
 }
 
 export function BookingPage() {
+  const forcedBranchId = useForcedBranchId()
   const [patient, setPatient] = useState<Client | null>(null)
   const [patientOpen, setPatientOpen] = useState(false)
+  const [qtyItem, setQtyItem] = useState<CatalogItem | null>(null)
+  const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [tab, setTab] = useState<TabId>('services')
   const [typeFilter, setTypeFilter] = useState('all')
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const pageSize = 8
-  const [cart, setCart] = useState<CartLine[]>([])
+  const [cart, setCart] = useState<CheckoutCartLine[]>([])
   const [couponCode, setCouponCode] = useState('')
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null)
   const [discountMode, setDiscountMode] = useState('none')
-  const [invoiceId] = useState(() => makeInvoiceId())
+  const [invoiceId, setInvoiceId] = useState(() => makeInvoiceId())
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
@@ -57,7 +72,7 @@ export function BookingPage() {
       .filter((s) => s.status === 'active')
       .map((s) => ({
         id: s.id,
-        name: s.name.toUpperCase(),
+        name: s.name,
         price: s.price,
         sessions: s.sessions ?? 1,
         kind: 'service' as const,
@@ -66,7 +81,7 @@ export function BookingPage() {
       .filter((p) => p.status === 'active')
       .map((p) => ({
         id: p.id,
-        name: p.name.toUpperCase(),
+        name: p.name,
         price: p.promoPrice ?? p.regularPrice,
         sessions: p.sessions,
         kind: 'package' as const,
@@ -103,7 +118,7 @@ export function BookingPage() {
   const start = (safePage - 1) * pageSize
   const pageRows = filtered.slice(start, start + pageSize)
 
-  const subtotal = cart.reduce((s, i) => s + i.price, 0)
+  const subtotal = cart.reduce((s, i) => s + i.unitPrice * i.quantity, 0)
   const coupon = appliedCoupon
     ? getCoupons().find((c) => c.code.toUpperCase() === appliedCoupon.toUpperCase())
     : undefined
@@ -120,25 +135,38 @@ export function BookingPage() {
   }
   const total = Math.max(0, subtotal - discount)
 
-  function addToCart(item: (typeof catalog)[number]) {
+  function requestAddToCart(item: CatalogItem) {
     if (!patient) {
       toast.error('Please select a patient before placing order')
       setPatientOpen(true)
       return
     }
+    setQtyItem(item)
+  }
+
+  function confirmQuantity(quantity: number) {
+    if (!qtyItem) return
+    const item = qtyItem
+    setQtyItem(null)
     setCart((prev) => {
-      if (prev.some((p) => p.id === item.id)) return prev
+      const existing = prev.find((p) => p.id === item.id)
+      if (existing) {
+        return prev.map((p) =>
+          p.id === item.id ? { ...p, quantity: p.quantity + quantity } : p,
+        )
+      }
       return [
         ...prev,
         {
           id: item.id,
           name: item.name,
-          price: item.price,
-          sessions: item.sessions,
+          unitPrice: item.price,
+          quantity,
           kind: item.kind,
         },
       ]
     })
+    toast.success(`Added ${item.name} × ${quantity}`)
   }
 
   function applyCoupon() {
@@ -154,7 +182,7 @@ export function BookingPage() {
     toast.success(`Coupon ${found.code} applied`)
   }
 
-  function checkout() {
+  function openCheckout() {
     if (!patient) {
       toast.error('Please select a patient before placing order')
       setPatientOpen(true)
@@ -164,10 +192,16 @@ export function BookingPage() {
       toast.error('Add at least one offering to the cart')
       return
     }
-    toast.success(`Checkout for ${patient.fullName} · ${formatPeso(total)}`)
+    setCheckoutOpen(true)
+  }
+
+  function handleOrderPlaced() {
     setCart([])
     setAppliedCoupon(null)
     setCouponCode('')
+    setDiscountMode('none')
+    setInvoiceId(makeInvoiceId())
+    setTab('today')
   }
 
   const clock = now.toLocaleString('en-US', {
@@ -185,6 +219,30 @@ export function BookingPage() {
         onClose={() => setPatientOpen(false)}
         onSelect={setPatient}
       />
+      <EnterQuantityModal
+        open={Boolean(qtyItem)}
+        itemName={qtyItem?.name ?? ''}
+        onClose={() => setQtyItem(null)}
+        onConfirm={confirmQuantity}
+      />
+      {patient ? (
+        <BookingCheckoutModal
+          open={checkoutOpen}
+          patient={patient}
+          cart={cart}
+          total={total}
+          discount={discount}
+          invoiceId={invoiceId}
+          promoLabel={appliedCoupon}
+          onClose={() => setCheckoutOpen(false)}
+          onPlaced={handleOrderPlaced}
+          onLineStaffChange={(lineId, staffId) =>
+            setCart((prev) =>
+              prev.map((l) => (l.id === lineId ? { ...l, lineStaffId: staffId } : l)),
+            )
+          }
+        />
+      ) : null}
 
       {/* Top status bar */}
       <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
@@ -221,10 +279,10 @@ export function BookingPage() {
       {/* Operations */}
       <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
         <div>
-          <h1 className="font-display text-2xl text-[#073D2C] sm:text-3xl">
-            Create a polished booking flow
+          <h1 className="page-title text-[1.35rem] sm:text-[1.5rem]">
+            Create booking
           </h1>
-          <p className="text-sm text-slate-ui">
+          <p className="page-subtitle">
             Select a patient, add services or products, then check out with coupons and discounts.
           </p>
         </div>
@@ -239,7 +297,14 @@ export function BookingPage() {
         </div>
       </Card>
 
-      <div className="grid gap-4 xl:grid-cols-[1.45fr_0.85fr]">
+      <div
+        className={cn(
+          'grid gap-4',
+          tab === 'services' || tab === 'products'
+            ? 'xl:grid-cols-[1.45fr_0.85fr]'
+            : 'grid-cols-1',
+        )}
+      >
         <div className="space-y-4">
           <div className="inline-flex flex-wrap gap-1 rounded-[12px] border border-border bg-white p-1">
             {(
@@ -271,10 +336,10 @@ export function BookingPage() {
 
           {tab === 'services' || tab === 'products' ? (
             <Card className="p-4 sm:p-5">
-              <h2 className="font-display text-2xl text-[#073D2C]">
+              <h2 className="section-title text-[1.2rem]">
                 {tab === 'products' ? 'Products' : 'Services and packages'}
               </h2>
-              <p className="text-sm text-slate-ui">
+              <p className="page-subtitle">
                 Pick one or more offerings for this patient.
               </p>
 
@@ -331,10 +396,10 @@ export function BookingPage() {
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => addToCart(item)}
+                    onClick={() => requestAddToCart(item)}
                     className="rounded-[12px] border border-border p-4 text-left transition hover:border-emerald-800/40 hover:bg-emerald-50/40"
                   >
-                    <p className="font-semibold uppercase tracking-wide text-[#073D2C]">
+                    <p className="text-[15px] font-semibold leading-snug tracking-tight text-[#073D2C]">
                       {item.name}
                     </p>
                     <p className="mt-1 text-xs text-slate-ui">
@@ -345,7 +410,9 @@ export function BookingPage() {
                           : 'Service offering'}
                     </p>
                     <div className="mt-3 flex items-end justify-between gap-2">
-                      <p className="font-metric text-xl font-semibold tracking-tight text-[#073D2C]">{formatPeso(item.price)}</p>
+                      <p className="font-metric text-xl font-semibold tracking-tight text-[#073D2C]">
+                        {formatPeso(item.price)}
+                      </p>
                       <p className="text-xs text-slate-ui">
                         {item.sessions} session{item.sessions === 1 ? '' : 's'}
                       </p>
@@ -411,104 +478,94 @@ export function BookingPage() {
                 </div>
               </div>
             </Card>
+          ) : tab === 'today' ? (
+            <TodaysBookingPanel branchId={forcedBranchId} mode="today" />
           ) : (
-            <Card className="p-8 text-center text-sm text-slate-ui">
-              {tab === 'today' ? (
-                <div className="mx-auto max-w-sm space-y-2">
-                  <CalendarDays className="mx-auto h-8 w-8 text-[#C5A059]" />
-                  <p className="font-medium text-[#073D2C]">Today&apos;s Booking</p>
-                  <p>Today&apos;s confirmed bookings will appear here once connected to Supabase.</p>
-                </div>
-              ) : (
-                <div className="mx-auto max-w-sm space-y-2">
-                  <Package className="mx-auto h-8 w-8 text-[#C5A059]" />
-                  <p className="font-medium text-[#073D2C]">Booking List</p>
-                  <p>Full booking history and filters will live in this tab.</p>
-                </div>
-              )}
-            </Card>
+            <TodaysBookingPanel branchId={forcedBranchId} mode="all" />
           )}
         </div>
 
         {/* Order summary */}
-        <Card className="flex h-fit flex-col p-4 sm:p-5">
-          <h2 className="font-display text-2xl text-[#073D2C]">Order Summary</h2>
+        {tab === 'services' || tab === 'products' ? (
+          <Card className="flex h-fit flex-col p-4 sm:p-5">
+            <h2 className="section-title text-[1.2rem]">Order Summary</h2>
 
-          <div className="mt-4 min-h-[140px] rounded-[12px] border border-dashed border-border bg-ivory-100/80 p-4">
-            {cart.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-2 py-6 text-center text-sm text-slate-ui">
-                <ShoppingBag className="h-8 w-8 text-slate-ui/50" />
-                <p>You haven&apos;t added anything to your cart yet.</p>
+            <div className="mt-4 min-h-[140px] rounded-[12px] border border-dashed border-border bg-ivory-100/80 p-4">
+              {cart.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center gap-2 py-6 text-center text-sm text-slate-ui">
+                  <ShoppingBag className="h-8 w-8 text-slate-ui/50" />
+                  <p>You haven&apos;t added anything to your cart yet.</p>
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {cart.map((line) => (
+                    <li key={line.id} className="flex items-start justify-between gap-2 text-sm">
+                      <div>
+                        <p className="font-medium text-[#073D2C]">{line.name}</p>
+                        <p className="text-xs text-slate-ui capitalize">
+                          {line.kind} · qty {line.quantity}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-medium">{formatPeso(line.unitPrice * line.quantity)}</p>
+                        <button
+                          type="button"
+                          className="text-[11px] text-red-600"
+                          onClick={() => setCart((prev) => prev.filter((p) => p.id !== line.id))}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-ui">Promotions</p>
+              <div className="flex gap-2">
+                <input
+                  className="h-10 flex-1 rounded-[10px] border border-border px-3 text-sm"
+                  placeholder="Enter coupon code"
+                  value={couponCode}
+                  onChange={(e) => setCouponCode(e.target.value)}
+                />
+                <Button type="button" onClick={applyCoupon}>
+                  Apply
+                </Button>
               </div>
-            ) : (
-              <ul className="space-y-2">
-                {cart.map((line) => (
-                  <li key={line.id} className="flex items-start justify-between gap-2 text-sm">
-                    <div>
-                      <p className="font-medium text-[#073D2C]">{line.name}</p>
-                      <p className="text-xs text-slate-ui capitalize">
-                        {line.kind} · {line.sessions} session{line.sessions === 1 ? '' : 's'}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-medium">{formatPeso(line.price)}</p>
-                      <button
-                        type="button"
-                        className="text-[11px] text-red-600"
-                        onClick={() => setCart((prev) => prev.filter((p) => p.id !== line.id))}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+              <select
+                className="h-10 w-full rounded-[10px] border border-border px-3 text-sm"
+                value={discountMode}
+                onChange={(e) => setDiscountMode(e.target.value)}
+              >
+                <option value="none">No Discount</option>
+                <option value="vip">VIP 5%</option>
+                <option value="10">Staff 10%</option>
+              </select>
+            </div>
 
-          <div className="mt-4 space-y-3">
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-ui">Promotions</p>
-            <div className="flex gap-2">
-              <input
-                className="h-10 flex-1 rounded-[10px] border border-border px-3 text-sm"
-                placeholder="Enter coupon code"
-                value={couponCode}
-                onChange={(e) => setCouponCode(e.target.value)}
-              />
-              <Button type="button" onClick={applyCoupon}>
-                Apply
-              </Button>
+            <div className="mt-4 space-y-2 border-t border-border pt-4 text-sm">
+              <div className="flex justify-between">
+                <span className="text-slate-ui">Sub-total</span>
+                <span>{formatPeso(subtotal)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-ui">Discount</span>
+                <span>-{formatPeso(discount)}</span>
+              </div>
+              <div className="flex justify-between font-metric text-xl font-semibold tracking-tight text-[#073D2C]">
+                <span>Total</span>
+                <span>{formatPeso(total)}</span>
+              </div>
             </div>
-            <select
-              className="h-10 w-full rounded-[10px] border border-border px-3 text-sm"
-              value={discountMode}
-              onChange={(e) => setDiscountMode(e.target.value)}
-            >
-              <option value="none">No Discount</option>
-              <option value="vip">VIP 5%</option>
-              <option value="10">Staff 10%</option>
-            </select>
-          </div>
 
-          <div className="mt-4 space-y-2 border-t border-border pt-4 text-sm">
-            <div className="flex justify-between">
-              <span className="text-slate-ui">Sub-total</span>
-              <span>{formatPeso(subtotal)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-ui">Discount</span>
-              <span>-{formatPeso(discount)}</span>
-            </div>
-            <div className="flex justify-between font-metric text-2xl font-semibold tracking-tight text-[#073D2C]">
-              <span>Total</span>
-              <span>{formatPeso(total)}</span>
-            </div>
-          </div>
-
-          <Button className="mt-5 w-full" onClick={checkout}>
-            CHECK OUT
-          </Button>
-        </Card>
+            <Button className="mt-5 w-full" onClick={openCheckout}>
+              CHECK OUT
+            </Button>
+          </Card>
+        ) : null}
       </div>
     </div>
   )

@@ -27,6 +27,9 @@ import { preloadSalesData, isSalesDataLoaded } from '@/services/salesService'
 import type { AnalyticsSaleType, Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useAuth } from '@/contexts/AuthContext'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 type TypeFilter = 'all' | AnalyticsSaleType
 
@@ -45,6 +48,9 @@ function typeBadge(type: AnalyticsSaleType | undefined) {
 }
 
 export function SalesReportsPage() {
+  const { user } = useAuth()
+  const forcedBranchId = useForcedBranchId()
+  const franchiseOwner = isFranchiseBranchOwner(user)
   const range = defaultAnalyticsRange()
   const [sales, setSales] = useState(() => getAnalyticsSales())
   const [dataReady, setDataReady] = useState(() => isSalesDataLoaded() && getAnalyticsSales().length > 0)
@@ -74,7 +80,12 @@ export function SalesReportsPage() {
     })
   }, [])
 
-  const summary = useMemo(() => salesSummary(sales, from, to), [sales, from, to])
+  const scopedSales = useMemo(() => {
+    if (!forcedBranchId) return sales
+    return sales.filter((s) => s.branchId === forcedBranchId)
+  }, [sales, forcedBranchId])
+
+  const summary = useMemo(() => salesSummary(scopedSales, from, to), [scopedSales, from, to])
 
   const filteredRows = useMemo(() => {
     return summary.rows.filter((s) => {
@@ -148,8 +159,12 @@ export function SalesReportsPage() {
   return (
     <div className="space-y-5">
       <AdminPageBanner
-        title="Imajica Sales Transactions"
-        description="Clinic performance overview, real-time transaction tracking, staff commissions, and operational profit-loss analytics in a unified showcase presentation."
+        title={franchiseOwner ? 'Branch Sales' : 'Imajica Sales Transactions'}
+        description={
+          franchiseOwner
+            ? `Sales performance for ${user?.branchName ?? 'your franchise branch'}.`
+            : 'Clinic performance overview, real-time transaction tracking, staff commissions, and operational profit-loss analytics in a unified showcase presentation.'
+        }
         stat={{
           value: summary.bookings.toFixed(2),
           label: 'Total Bookings',
