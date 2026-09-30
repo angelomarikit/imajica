@@ -206,18 +206,23 @@ export function MyAttendancePage() {
                     </p>
                     <p className="mt-0.5 text-sm text-slate-ui">{formatManilaTime(p.punchedAt)}</p>
                     <p className="text-xs text-slate-ui">{formatManilaDateTime(p.punchedAt)}</p>
-                    {p.latitude != null && p.longitude != null ? (
+                    {p.locationLabel || (p.latitude != null && p.longitude != null) ? (
                       <a
                         className="mt-2 inline-flex items-start gap-1 text-xs font-semibold text-emerald-800 underline"
-                        href={`https://www.google.com/maps?q=${p.latitude},${p.longitude}`}
+                        href={
+                          p.latitude != null && p.longitude != null
+                            ? `https://www.google.com/maps?q=${p.latitude},${p.longitude}`
+                            : undefined
+                        }
                         target="_blank"
                         rel="noreferrer"
                       >
                         <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                         <span>
-                          {p.locationLabel ||
-                            `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`}
-                          {p.accuracyM != null ? ` (±${Math.round(p.accuracyM)}m)` : ''}
+                          {p.locationLabel || 'Location on map'}
+                          {p.accuracyM != null && !p.locationLabel
+                            ? ` (±${Math.round(p.accuracyM)}m)`
+                            : ''}
                         </span>
                       </a>
                     ) : (

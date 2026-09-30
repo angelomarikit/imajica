@@ -62,54 +62,162 @@ function mapRow(row: DbRow): AttendancePunch {
 const ATTENDANCE_SELECT =
   'id, user_id, branch_id, punch_type, punched_at, photo_url, latitude, longitude, accuracy_m, location_label, created_at'
 
-/** Reverse-geocode coords to a street / place label (client-side BigDataCloud). */
+function looksLikeCoordinates(label: string | null | undefined): boolean {
+  if (!label?.trim()) return true
+  // "14.09518, 121.30232" or "Near 14.09518, 121.30232"
+  return /^-?\d+\.\d+\s*,\s*-?\d+\.\d+$/.test(label.trim().replace(/^near\s+/i, ''))
+}
+
+async function geocodeBigDataCloud(latitude: number, longitude: number): Promise<string | null> {
+  const url = new URL('https://api.bigdatacloud.net/data/reverse-geocode-client')
+  url.searchParams.set('latitude', String(latitude))
+  url.searchParams.set('longitude', String(longitude))
+  url.searchParams.set('localityLanguage', 'en')
+  const res = await fetch(url.toString())
+  if (!res.ok) return null
+  const data = (await res.json()) as {
+    locality?: string
+    city?: string
+    principalSubdivision?: string
+    countryName?: string
+    plusCode?: string
+    localityInfo?: {
+      informative?: Array<{ name?: string; description?: string; order?: number }>
+      administrative?: Array<{ name?: string; description?: string; order?: number }>
+    }
+  }
+
+  const informative = [...(data.localityInfo?.informative ?? [])].sort(
+    (a, b) => (a.order ?? 99) - (b.order ?? 99),
+  )
+  const administrative = [...(data.localityInfo?.administrative ?? [])].sort(
+    (a, b) => (a.order ?? 99) - (b.order ?? 99),
+  )
+
+  const street = informative.find((x) =>
+    /street|road|avenue|boulevard|highway|drive|lane/i.test(
+      `${x.description ?? ''} ${x.name ?? ''}`,
+    ),
+  )?.name
+  const barangay = informative.find((x) =>
+    /barangay|neighbourhood|neighborhood|suburb|village/i.test(
+      `${x.description ?? ''} ${x.name ?? ''}`,
+    ),
+  )?.name
+  const cityish =
+    data.city ||
+    data.locality ||
+    administrative.find((x) => /city|municipality|town/i.test(x.description ?? ''))?.name
+  const province =
+    data.principalSubdivision ||
+    administrative.find((x) => /province|region|state/i.test(x.description ?? ''))?.name
+
+  const parts = [street, barangay, cityish, province, data.countryName].filter(
+    (p): p is string => Boolean(p && String(p).trim()),
+  )
+  const unique: string[] = []
+  for (const p of parts) {
+    if (!unique.some((u) => u.toLowerCase() === p.toLowerCase())) unique.push(p)
+  }
+  return unique.length ? unique.slice(0, 4).join(', ') : null
+}
+
+async function geocodePhoton(latitude: number, longitude: number): Promise<string | null> {
+  const url = new URL('https://photon.komoot.io/reverse')
+  url.searchParams.set('lat', String(latitude))
+  url.searchParams.set('lon', String(longitude))
+  const res = await fetch(url.toString())
+  if (!res.ok) return null
+  const data = (await res.json()) as {
+    features?: Array<{
+      properties?: {
+        name?: string
+        street?: string
+        housenumber?: string
+        district?: string
+        city?: string
+        town?: string
+        village?: string
+        municipality?: string
+        county?: string
+        state?: string
+        country?: string
+      }
+    }>
+  }
+  const p = data.features?.[0]?.properties
+  if (!p) return null
+  const streetLine = [p.housenumber, p.street || p.name].filter(Boolean).join(' ')
+  const parts = [
+    streetLine || null,
+    p.district,
+    p.city || p.town || p.village || p.municipality,
+    p.county,
+    p.state,
+    p.country,
+  ].filter((x): x is string => Boolean(x && String(x).trim()))
+  const unique: string[] = []
+  for (const part of parts) {
+    if (!unique.some((u) => u.toLowerCase() === part.toLowerCase())) unique.push(part)
+  }
+  return unique.length ? unique.slice(0, 4).join(', ') : null
+}
+
+/** Reverse-geocode coords to a street / place label (multi-provider). */
 export async function reverseGeocodeLabel(
   latitude: number,
   longitude: number,
 ): Promise<string> {
-  try {
-    const url = new URL('https://api.bigdatacloud.net/data/reverse-geocode-client')
-    url.searchParams.set('latitude', String(latitude))
-    url.searchParams.set('longitude', String(longitude))
-    url.searchParams.set('localityLanguage', 'en')
-    const res = await fetch(url.toString())
-    if (!res.ok) throw new Error('geocode failed')
-    const data = (await res.json()) as {
-      locality?: string
-      city?: string
-      principalSubdivision?: string
-      countryName?: string
-      localityInfo?: {
-        informative?: Array<{ name?: string; description?: string }>
-        administrative?: Array<{ name?: string }>
-      }
+  const providers = [geocodePhoton, geocodeBigDataCloud]
+  for (const provider of providers) {
+    try {
+      const label = await provider(latitude, longitude)
+      if (label && !looksLikeCoordinates(label)) return label
+    } catch {
+      /* try next */
     }
-
-    const streetish =
-      data.localityInfo?.informative?.find((x) =>
-        /street|road|avenue|boulevard|barangay|neighbourhood|neighborhood/i.test(
-          `${x.description ?? ''} ${x.name ?? ''}`,
-        ),
-      )?.name ??
-      data.localityInfo?.administrative?.[0]?.name
-
-    const parts = [
-      streetish,
-      data.locality,
-      data.city && data.city !== data.locality ? data.city : null,
-      data.principalSubdivision,
-      data.countryName,
-    ].filter((p): p is string => Boolean(p && String(p).trim()))
-
-    const unique: string[] = []
-    for (const p of parts) {
-      if (!unique.some((u) => u.toLowerCase() === p.toLowerCase())) unique.push(p)
-    }
-    if (unique.length) return unique.slice(0, 4).join(', ')
-  } catch {
-    /* fall through */
   }
   return `Near ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`
+}
+
+/** Fill missing place names for punches that only have coordinates. */
+export async function enrichAttendanceLabels(
+  punches: AttendancePunch[],
+): Promise<AttendancePunch[]> {
+  const next = [...punches]
+  let changed = false
+  for (let i = 0; i < next.length; i++) {
+    const p = next[i]!
+    if (p.latitude == null || p.longitude == null) continue
+    if (p.locationLabel && !looksLikeCoordinates(p.locationLabel)) continue
+    try {
+      const label = await reverseGeocodeLabel(p.latitude, p.longitude)
+      if (!label || looksLikeCoordinates(label)) continue
+      next[i] = { ...p, locationLabel: label }
+      changed = true
+      await persistAttendanceLabel(p.id, label)
+    } catch {
+      /* keep coords fallback */
+    }
+  }
+  if (changed && !isSupabaseConfigured) {
+    const byId = new Map(next.map((p) => [p.id, p]))
+    writeLocal(readLocal().map((p) => byId.get(p.id) ?? p))
+  }
+  return next
+}
+
+async function persistAttendanceLabel(id: string, locationLabel: string) {
+  if (isSupabaseConfigured && supabase) {
+    await supabase
+      .from('staff_attendance_logs')
+      .update({ location_label: locationLabel })
+      .eq('id', id)
+    return
+  }
+  writeLocal(
+    readLocal().map((p) => (p.id === id ? { ...p, locationLabel } : p)),
+  )
 }
 
 /** Manila calendar date key YYYY-MM-DD for a timestamp */
@@ -173,18 +281,37 @@ export function subscribeAttendance(listener: () => void) {
 }
 
 export async function listMyAttendance(userId: string): Promise<AttendancePunch[]> {
+  let rows: AttendancePunch[]
   if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('staff_attendance_logs')
       .select(ATTENDANCE_SELECT)
       .eq('user_id', userId)
       .order('punched_at', { ascending: false })
+
+    if (error && /location_label/i.test(error.message)) {
+      const fallback = await supabase
+        .from('staff_attendance_logs')
+        .select(
+          'id, user_id, branch_id, punch_type, punched_at, photo_url, latitude, longitude, accuracy_m, created_at',
+        )
+        .eq('user_id', userId)
+        .order('punched_at', { ascending: false })
+      data = (fallback.data as DbRow[] | null)?.map((r) => ({
+        ...r,
+        location_label: null,
+      })) as typeof data
+      error = fallback.error
+    }
+
     if (error) throw new Error(error.message)
-    return ((data as DbRow[] | null) ?? []).map(mapRow)
+    rows = ((data as DbRow[] | null) ?? []).map(mapRow)
+  } else {
+    rows = readLocal()
+      .filter((p) => p.userId === userId)
+      .sort((a, b) => b.punchedAt.localeCompare(a.punchedAt))
   }
-  return readLocal()
-    .filter((p) => p.userId === userId)
-    .sort((a, b) => b.punchedAt.localeCompare(a.punchedAt))
+  return enrichAttendanceLabels(rows)
 }
 
 export async function listMyAttendanceForDay(
@@ -295,24 +422,46 @@ export async function recordAttendancePunch(input: {
   const photoUrl = await uploadSelfie(input.userId, input.photoBlob)
 
   if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
+    const payload = {
+      user_id: input.userId,
+      branch_id: input.branchId,
+      punch_type: input.punchType,
+      punched_at: punchedAt,
+      photo_url: photoUrl,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      accuracy_m: input.accuracyM,
+      location_label: input.locationLabel,
+    }
+    let { data, error } = await supabase
       .from('staff_attendance_logs')
-      .insert({
-        user_id: input.userId,
-        branch_id: input.branchId,
-        punch_type: input.punchType,
-        punched_at: punchedAt,
-        photo_url: photoUrl,
-        latitude: input.latitude,
-        longitude: input.longitude,
-        accuracy_m: input.accuracyM,
-        location_label: input.locationLabel,
-      })
+      .insert(payload)
       .select(ATTENDANCE_SELECT)
       .single()
+
+    // Column may be missing if migration 38 not applied yet — retry without label
+    if (error && /location_label/i.test(error.message)) {
+      const { location_label: _omit, ...withoutLabel } = payload
+      void _omit
+      const retry = await supabase
+        .from('staff_attendance_logs')
+        .insert(withoutLabel)
+        .select(
+          'id, user_id, branch_id, punch_type, punched_at, photo_url, latitude, longitude, accuracy_m, created_at',
+        )
+        .single()
+      data = retry.data
+        ? ({ ...retry.data, location_label: input.locationLabel } as DbRow)
+        : null
+      error = retry.error
+    }
+
     if (error) throw new Error(error.message)
     emit()
-    return mapRow(data as DbRow)
+    return mapRow({
+      ...(data as DbRow),
+      location_label: (data as DbRow).location_label ?? input.locationLabel,
+    })
   }
 
   const row: AttendancePunch = {
