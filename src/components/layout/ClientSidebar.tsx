@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import logo from '@/assets/logo-imajica.jpg'
 import { Button } from '@/components/ui/Button'
+import { MobileDrawer } from '@/components/ui/MobileDrawer'
 import { BRAND } from '@/constants/brand'
 import { cn } from '@/utils/cn'
 
@@ -132,27 +133,20 @@ export function ClientSidebar({
   return (
     <>
       <aside className="hidden w-64 shrink-0 lg:block">{content}</aside>
-      {open ? (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/40"
+      <MobileDrawer open={open} onClose={close} side="left" panelClassName="bg-emerald-950">
+        <div className="relative h-full">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute right-2 top-2 z-10 text-white"
             onClick={close}
-            aria-label="Close menu"
-          />
-          <div className="relative h-full w-72 max-w-[85vw]">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute right-2 top-2 z-10 text-white"
-              onClick={close}
-            >
-              <X className="h-5 w-5" />
-            </Button>
-            {content}
-          </div>
+            aria-label="Close sidebar"
+          >
+            <X className="h-5 w-5" />
+          </Button>
+          {content}
         </div>
-      ) : null}
+      </MobileDrawer>
     </>
   )
 }

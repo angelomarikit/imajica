@@ -255,9 +255,28 @@ a[href] {
   }
 }
 
+@keyframes drawerLinkIn {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .admin-page-banner__glow,
   .admin-page-banner__shimmer {
     animation: none;
+  }
+
+  @keyframes drawerLinkIn {
+    from,
+    to {
+      opacity: 1;
+      transform: none;
+    }
   }
 }

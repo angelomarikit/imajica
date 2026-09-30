@@ -11,7 +11,7 @@ export function ClientShell() {
     <div className="flex min-h-screen bg-ivory">
       <ClientSidebar open={menuOpen} onOpenChange={setMenuOpen} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <ClientHeader onOpenMenu={() => setMenuOpen(true)} />
+        <ClientHeader menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((v) => !v)} />
         <main className="flex-1 px-4 py-5 lg:px-6 lg:py-6">
           <Outlet />
         </main>

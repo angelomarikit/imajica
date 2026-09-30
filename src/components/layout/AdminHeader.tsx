@@ -1,38 +1,58 @@
-import { Bell, ChevronDown, LogOut, Menu } from 'lucide-react'
+import { Bell, ChevronDown, LogOut, Menu, X } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
 import { SearchInput, Select } from '@/components/ui/SearchInput'
 import { Button } from '@/components/ui/Button'
+import { cn } from '@/utils/cn'
 
 export function AdminHeader({
   searchPlaceholder = 'Search clients, appointments, or treatments...',
-  onOpenMenu,
+  menuOpen = false,
+  onToggleMenu,
 }: {
   searchPlaceholder?: string
-  onOpenMenu?: () => void
+  menuOpen?: boolean
+  onToggleMenu?: () => void
 }) {
   const { user, logout } = useAuth()
   const { branches, selectedBranchId, setSelectedBranchId } = useBranch()
   const [query, setQuery] = useState('')
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
   const navigate = useNavigate()
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/80 bg-ivory/90 backdrop-blur">
       <div className="flex flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center lg:gap-4 lg:px-6">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          {onOpenMenu ? (
+          {onToggleMenu ? (
             <Button
               type="button"
               variant="secondary"
               size="icon"
-              className="shrink-0 lg:hidden"
-              onClick={onOpenMenu}
-              aria-label="Open menu"
+              className={cn(
+                'shrink-0 transition duration-300 lg:hidden',
+                menuOpen && 'border-emerald-800 bg-emerald-900 text-white hover:bg-emerald-800 hover:text-white',
+              )}
+              onClick={onToggleMenu}
+              aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={menuOpen}
             >
-              <Menu className="h-5 w-5" />
+              <span className="relative h-5 w-5">
+                <Menu
+                  className={cn(
+                    'absolute inset-0 h-5 w-5 transition duration-300',
+                    menuOpen ? 'scale-75 rotate-90 opacity-0' : 'scale-100 rotate-0 opacity-100',
+                  )}
+                />
+                <X
+                  className={cn(
+                    'absolute inset-0 h-5 w-5 transition duration-300',
+                    menuOpen ? 'scale-100 rotate-0 opacity-100' : 'scale-75 -rotate-90 opacity-0',
+                  )}
+                />
+              </span>
             </Button>
           ) : null}
           <SearchInput
@@ -63,7 +83,7 @@ export function AdminHeader({
           <div className="relative shrink-0">
             <button
               type="button"
-              onClick={() => setMenuOpen((v) => !v)}
+              onClick={() => setAccountOpen((v) => !v)}
               className="flex items-center gap-2 rounded-full border border-border bg-white py-1.5 pl-1.5 pr-2 sm:pr-3"
             >
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-xs font-semibold text-emerald-900">
@@ -75,7 +95,7 @@ export function AdminHeader({
               </div>
               <ChevronDown className="h-4 w-4 text-slate-ui" />
             </button>
-            {menuOpen ? (
+            {accountOpen ? (
               <div className="absolute right-0 mt-2 w-44 rounded-[10px] border border-border bg-white p-1 shadow-lg">
                 <button
                   type="button"

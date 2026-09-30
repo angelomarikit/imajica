@@ -20,6 +20,7 @@ import logo from '@/assets/logo-imajica.jpg'
 import { landingAssets } from '@/assets/landing'
 import { BookAppointmentModal } from '@/components/booking/BookAppointmentModal'
 import { SpecialPromoModal } from '@/components/marketing/SpecialPromoModal'
+import { MobileDrawer } from '@/components/ui/MobileDrawer'
 import { BRAND } from '@/constants/brand'
 import {
   getActiveLandingPromos,
@@ -219,73 +220,88 @@ export function LandingPage() {
               </button>
               <button
                 type="button"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#073D2C]/20 bg-white/70 text-[#073D2C] backdrop-blur-sm xl:hidden"
-                aria-label="Open menu"
+                className={cn(
+                  'inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#073D2C]/20 bg-white/70 text-[#073D2C] backdrop-blur-sm transition duration-300 xl:hidden',
+                  mobileNavOpen && 'bg-[#073D2C] text-white',
+                )}
+                aria-label={mobileNavOpen ? 'Close menu' : 'Open menu'}
                 aria-expanded={mobileNavOpen}
-                onClick={() => setMobileNavOpen(true)}
+                onClick={() => setMobileNavOpen((v) => !v)}
               >
-                <Menu className="h-5 w-5" />
+                <span className="relative h-5 w-5">
+                  <Menu
+                    className={cn(
+                      'absolute inset-0 h-5 w-5 transition duration-300',
+                      mobileNavOpen ? 'scale-75 rotate-90 opacity-0' : 'scale-100 rotate-0 opacity-100',
+                    )}
+                  />
+                  <X
+                    className={cn(
+                      'absolute inset-0 h-5 w-5 transition duration-300',
+                      mobileNavOpen ? 'scale-100 rotate-0 opacity-100' : 'scale-75 -rotate-90 opacity-0',
+                    )}
+                  />
+                </span>
               </button>
             </div>
           </div>
         </div>
 
-        {/* Mobile / tablet nav drawer */}
-        {mobileNavOpen ? (
-          <div className="fixed inset-0 z-[60] xl:hidden">
-            <button
-              type="button"
-              className="absolute inset-0 bg-[#041c18]/45 backdrop-blur-[1px]"
-              aria-label="Close menu"
-              onClick={() => setMobileNavOpen(false)}
-            />
-            <div className="absolute right-0 top-0 flex h-full w-[min(100%,320px)] flex-col bg-[#FAF8F2] shadow-2xl">
-              <div className="flex items-center justify-between border-b border-[#E8E2D6] px-4 py-3">
-                <p className="font-brand text-lg font-semibold text-[#073D2C]">Menu</p>
-                <button
-                  type="button"
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[#073D2C] hover:bg-black/5"
-                  aria-label="Close menu"
+        <MobileDrawer
+          open={mobileNavOpen}
+          onClose={() => setMobileNavOpen(false)}
+          side="right"
+          widthClassName="w-[min(100%,320px)]"
+          panelClassName="bg-[#FAF8F2]"
+          rootClassName="fixed inset-0 z-[60] xl:hidden"
+        >
+          <div className="flex h-full flex-col">
+            <div className="flex items-center justify-between border-b border-[#E8E2D6] px-4 py-3">
+              <p className="font-brand text-lg font-semibold text-[#073D2C]">Menu</p>
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[#073D2C] hover:bg-black/5"
+                aria-label="Close menu"
+                onClick={() => setMobileNavOpen(false)}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <nav className="flex-1 overflow-y-auto px-3 py-3">
+              {navLinks.map((item, idx) => (
+                <a
+                  key={item.label}
+                  href={item.href}
+                  className="block rounded-[10px] px-3 py-3 text-sm font-semibold text-[#073D2C] opacity-0 animate-[drawerLinkIn_0.35s_ease_forwards] hover:bg-white"
+                  style={{ animationDelay: `${80 + idx * 40}ms` }}
                   onClick={() => setMobileNavOpen(false)}
                 >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-              <nav className="flex-1 overflow-y-auto px-3 py-3">
-                {navLinks.map((item) => (
-                  <a
-                    key={item.label}
-                    href={item.href}
-                    className="block rounded-[10px] px-3 py-3 text-sm font-semibold text-[#073D2C] hover:bg-white"
-                    onClick={() => setMobileNavOpen(false)}
-                  >
-                    {item.label}
-                  </a>
-                ))}
-              </nav>
-              <div className="space-y-2 border-t border-[#E8E2D6] p-4">
-                <Link
-                  to="/login"
-                  className="flex h-11 w-full items-center justify-center rounded-full border border-[#073D2C]/25 bg-white text-sm font-semibold text-[#073D2C]"
-                  onClick={() => setMobileNavOpen(false)}
-                >
-                  Login / Register
-                </Link>
-                <button
-                  type="button"
-                  className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-[#073D2C] text-sm font-semibold text-white"
-                  onClick={() => {
-                    setMobileNavOpen(false)
-                    setBookOpen(true)
-                  }}
-                >
-                  <CalendarDays className="h-4 w-4" />
-                  Book Appointment
-                </button>
-              </div>
+                  {item.label}
+                </a>
+              ))}
+            </nav>
+            <div className="space-y-2 border-t border-[#E8E2D6] p-4">
+              <Link
+                to="/login"
+                className="flex h-11 w-full items-center justify-center rounded-full border border-[#073D2C]/25 bg-white text-sm font-semibold text-[#073D2C]"
+                onClick={() => setMobileNavOpen(false)}
+              >
+                Login / Register
+              </Link>
+              <button
+                type="button"
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-[#073D2C] text-sm font-semibold text-white"
+                onClick={() => {
+                  setMobileNavOpen(false)
+                  setBookOpen(true)
+                }}
+              >
+                <CalendarDays className="h-4 w-4" />
+                Book Appointment
+              </button>
             </div>
           </div>
-        ) : null}
+        </MobileDrawer>
       </header>
 
       {/* HERO — taller so portrait + copy are fully visible */}
