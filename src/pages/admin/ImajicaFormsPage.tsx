@@ -73,7 +73,10 @@ export function ImajicaFormsPage() {
   const filteredHistory = useMemo(() => {
     let list = history
     if (franchiseOwner && user?.branchName) {
-      list = list.filter((h) => h.branch === user.branchName || h.branch.includes(user.branchName.split(',')[0]))
+      const branchName = user.branchName
+      list = list.filter(
+        (h) => h.branch === branchName || h.branch.includes(branchName.split(',')[0] ?? branchName),
+      )
     }
     if (!search.trim()) return list
     const q = search.toLowerCase()
