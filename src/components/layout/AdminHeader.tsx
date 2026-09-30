@@ -42,7 +42,7 @@ export function AdminHeader({
             className="min-w-0 flex-1"
           />
         </div>
-        <div className="flex items-center justify-end gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
           <Select
             value={selectedBranchId}
             onChange={setSelectedBranchId}
@@ -50,21 +50,21 @@ export function AdminHeader({
               { value: 'all', label: 'All Branches' },
               ...branches.map((b) => ({ value: b.id, label: b.name })),
             ]}
-            className="w-44"
+            className="min-w-0 flex-1 basis-[10rem] sm:w-44 sm:flex-none"
           />
           <button
             type="button"
-            className="relative rounded-full border border-border bg-white p-2.5"
+            className="relative shrink-0 rounded-full border border-border bg-white p-2.5"
             aria-label="Notifications"
           >
             <Bell className="h-4 w-4 text-charcoal" />
             <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500" />
           </button>
-          <div className="relative">
+          <div className="relative shrink-0">
             <button
               type="button"
               onClick={() => setMenuOpen((v) => !v)}
-              className="flex items-center gap-2 rounded-full border border-border bg-white py-1.5 pl-1.5 pr-3"
+              className="flex items-center gap-2 rounded-full border border-border bg-white py-1.5 pl-1.5 pr-2 sm:pr-3"
             >
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-xs font-semibold text-emerald-900">
                 {user?.fullName?.slice(0, 1) ?? 'U'}

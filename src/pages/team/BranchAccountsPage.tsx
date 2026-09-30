@@ -502,9 +502,9 @@ function RoleSaveControl({
   }, [user.id, user.role])
 
   return (
-    <div className="flex min-w-[200px] items-center gap-2">
+    <div className="flex min-w-[160px] max-w-[220px] items-center gap-1.5 sm:min-w-[200px] sm:gap-2">
       <select
-        className="h-9 flex-1 rounded-[8px] border border-border bg-white px-2 text-xs font-medium text-[#073D2C]"
+        className="h-9 min-w-0 flex-1 rounded-[8px] border border-border bg-white px-1.5 text-[10px] font-medium text-[#073D2C] sm:px-2 sm:text-xs"
         value={role}
         onChange={(e) => setRole(e.target.value)}
         aria-label={`Role for ${user.fullName}`}

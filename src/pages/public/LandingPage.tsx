@@ -8,11 +8,13 @@ import {
   ChevronRight,
   Flower2,
   Heart,
+  Menu,
   Search,
   Shield,
   Sparkles,
   Star,
   UserRound,
+  X,
 } from 'lucide-react'
 import logo from '@/assets/logo-imajica.jpg'
 import { landingAssets } from '@/assets/landing'
@@ -130,6 +132,7 @@ export function LandingPage() {
   const [testimonialPage, setTestimonialPage] = useState(0)
   const [bookOpen, setBookOpen] = useState(false)
   const [promoOpen, setPromoOpen] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [promo, setPromo] = useState<LandingPromo>(() => getLandingPromo())
   const [activePromos, setActivePromos] = useState<LandingPromo[]>(() => getActiveLandingPromos())
   const testimonialPageCount = Math.ceil(testimonials.length / TESTIMONIAL_PAGE_SIZE)
@@ -160,14 +163,14 @@ export function LandingPage() {
       {/* HEADER — transparent, overlaps hero */}
       <header className="absolute inset-x-0 top-0 z-50 bg-transparent">
         <div className={cn(shell, 'flex h-[58px] items-center')}>
-          <div className={cn(content, 'flex items-center justify-between')}>
-            <Link to="/" className="flex shrink-0 items-center gap-2.5">
-              <img src={logo} alt={BRAND.name} className="h-9 w-9 rounded-full object-cover" />
-              <div className="leading-none">
-                <p className="font-brand text-[18px] font-semibold tracking-[0.04em] text-[#073D2C]">
+          <div className={cn(content, 'flex items-center justify-between gap-2')}>
+            <Link to="/" className="flex min-w-0 shrink items-center gap-2 sm:gap-2.5">
+              <img src={logo} alt={BRAND.name} className="h-8 w-8 shrink-0 rounded-full object-cover sm:h-9 sm:w-9" />
+              <div className="min-w-0 leading-none">
+                <p className="font-brand text-[16px] font-semibold tracking-[0.04em] text-[#073D2C] sm:text-[18px]">
                   IMAJICA
                 </p>
-                <p className="mt-0.5 text-[7.5px] font-medium uppercase tracking-[0.24em] text-[#C5A059]">
+                <p className="mt-0.5 text-[7px] font-medium uppercase tracking-[0.18em] text-[#C5A059] sm:text-[7.5px] sm:tracking-[0.24em]">
                   Medical Aesthetics
                 </p>
               </div>
@@ -190,31 +193,99 @@ export function LandingPage() {
               ))}
             </nav>
 
-            <div className="flex items-center gap-2 sm:gap-2.5">
+            <div className="flex shrink-0 items-center gap-1.5 sm:gap-2.5">
               <button
                 type="button"
                 aria-label="Search"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[#073D2C] transition duration-300 hover:scale-105 hover:bg-black/5"
+                className="hidden h-9 w-9 items-center justify-center rounded-full text-[#073D2C] transition duration-300 hover:scale-105 hover:bg-black/5 sm:inline-flex"
               >
                 <Search className="h-4 w-4" strokeWidth={1.75} />
               </button>
               <Link
                 to="/login"
-                className="hidden h-[40px] items-center rounded-full border border-[#073D2C]/25 bg-white/70 px-3.5 text-[12px] font-semibold text-[#073D2C] backdrop-blur-sm transition duration-300 hover:-translate-y-0.5 hover:border-[#C5A059] hover:text-[#C5A059] hover:shadow-[0_8px_20px_rgba(197,160,89,0.2)] sm:inline-flex"
+                className="inline-flex h-9 items-center rounded-full border border-[#073D2C]/25 bg-white/80 px-2.5 text-[11px] font-semibold text-[#073D2C] backdrop-blur-sm transition duration-300 hover:-translate-y-0.5 hover:border-[#C5A059] hover:text-[#C5A059] hover:shadow-[0_8px_20px_rgba(197,160,89,0.2)] sm:h-[40px] sm:px-3.5 sm:text-[12px]"
               >
-                Login / Register
+                <span className="sm:hidden">Login</span>
+                <span className="hidden sm:inline">Login / Register</span>
               </Link>
               <button
                 type="button"
                 onClick={() => setBookOpen(true)}
-                className="group inline-flex h-[44px] items-center gap-2 rounded-full bg-[#073D2C] px-4 text-[13px] font-medium text-white transition duration-300 hover:-translate-y-0.5 hover:bg-[#063B2A] hover:shadow-[0_12px_28px_rgba(7,61,44,0.28)]"
+                className="group inline-flex h-9 items-center gap-1.5 rounded-full bg-[#073D2C] px-2.5 text-[11px] font-medium text-white transition duration-300 hover:-translate-y-0.5 hover:bg-[#063B2A] hover:shadow-[0_12px_28px_rgba(7,61,44,0.28)] sm:h-[44px] sm:gap-2 sm:px-4 sm:text-[13px]"
               >
-                <CalendarDays className="h-4 w-4 transition duration-300 group-hover:scale-110" />
-                Book Appointment
+                <CalendarDays className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <span className="sm:hidden">Book</span>
+                <span className="hidden sm:inline">Book Appointment</span>
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#073D2C]/20 bg-white/70 text-[#073D2C] backdrop-blur-sm xl:hidden"
+                aria-label="Open menu"
+                aria-expanded={mobileNavOpen}
+                onClick={() => setMobileNavOpen(true)}
+              >
+                <Menu className="h-5 w-5" />
               </button>
             </div>
           </div>
         </div>
+
+        {/* Mobile / tablet nav drawer */}
+        {mobileNavOpen ? (
+          <div className="fixed inset-0 z-[60] xl:hidden">
+            <button
+              type="button"
+              className="absolute inset-0 bg-[#041c18]/45 backdrop-blur-[1px]"
+              aria-label="Close menu"
+              onClick={() => setMobileNavOpen(false)}
+            />
+            <div className="absolute right-0 top-0 flex h-full w-[min(100%,320px)] flex-col bg-[#FAF8F2] shadow-2xl">
+              <div className="flex items-center justify-between border-b border-[#E8E2D6] px-4 py-3">
+                <p className="font-brand text-lg font-semibold text-[#073D2C]">Menu</p>
+                <button
+                  type="button"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[#073D2C] hover:bg-black/5"
+                  aria-label="Close menu"
+                  onClick={() => setMobileNavOpen(false)}
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <nav className="flex-1 overflow-y-auto px-3 py-3">
+                {navLinks.map((item) => (
+                  <a
+                    key={item.label}
+                    href={item.href}
+                    className="block rounded-[10px] px-3 py-3 text-sm font-semibold text-[#073D2C] hover:bg-white"
+                    onClick={() => setMobileNavOpen(false)}
+                  >
+                    {item.label}
+                  </a>
+                ))}
+              </nav>
+              <div className="space-y-2 border-t border-[#E8E2D6] p-4">
+                <Link
+                  to="/login"
+                  className="flex h-11 w-full items-center justify-center rounded-full border border-[#073D2C]/25 bg-white text-sm font-semibold text-[#073D2C]"
+                  onClick={() => setMobileNavOpen(false)}
+                >
+                  Login / Register
+                </Link>
+                <button
+                  type="button"
+                  className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-[#073D2C] text-sm font-semibold text-white"
+                  onClick={() => {
+                    setMobileNavOpen(false)
+                    setBookOpen(true)
+                  }}
+                >
+                  <CalendarDays className="h-4 w-4" />
+                  Book Appointment
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </header>
 
       {/* HERO — taller so portrait + copy are fully visible */}
@@ -228,7 +299,7 @@ export function LandingPage() {
           className="absolute inset-0 h-full w-full object-cover object-center"
         />
         {/* Soft cream wash on the left so copy stays readable over botanicals */}
-        <div className="pointer-events-none absolute inset-y-0 left-0 z-[1] w-[52%] bg-gradient-to-r from-[#FAF8F2] via-[#FAF8F2]/92 to-transparent" />
+        <div className="pointer-events-none absolute inset-y-0 left-0 z-[1] w-full bg-gradient-to-b from-[#FAF8F2]/95 via-[#FAF8F2]/55 to-transparent xl:w-[52%] xl:bg-gradient-to-r xl:from-[#FAF8F2] xl:via-[#FAF8F2]/92 xl:to-transparent" />
         <img
           src={landingAssets.heroBotanicalLeft}
           alt=""
@@ -249,26 +320,26 @@ export function LandingPage() {
               <p className="text-[13px] font-bold uppercase tracking-[0.28em] text-[#B8860B]">
                 Beauty. Science. Confidence.
               </p>
-              <h1 className="mt-4 max-w-[500px] font-brand text-[42px] font-semibold leading-[0.94] text-[#073D2C] xl:text-[62px]">
+              <h1 className="mt-4 max-w-[500px] font-brand text-[34px] font-semibold leading-[0.94] text-[#073D2C] sm:text-[42px] xl:text-[62px]">
                 Enhance Your Natural Beauty
               </h1>
-              <p className="mt-4 max-w-[500px] text-[17px] font-medium leading-[1.5] text-[#2F2F2F]">
+              <p className="mt-4 max-w-[500px] text-[15px] font-medium leading-[1.5] text-[#2F2F2F] sm:text-[17px]">
                 At Imajica Medical Aesthetics, we provide advanced, safe, and personalized aesthetic
                 treatments to help you look and feel your best.
               </p>
 
-              <div className="mt-7 flex flex-wrap gap-3">
+              <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 <button
                   type="button"
                   onClick={() => setBookOpen(true)}
-                  className="group inline-flex h-[44px] items-center gap-2 rounded-full bg-[#073D2C] px-6 text-[15px] font-semibold text-white shadow-[0_8px_20px_rgba(7,61,44,0.18)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#063B2A] hover:shadow-[0_14px_32px_rgba(7,61,44,0.28)]"
+                  className="group inline-flex h-[44px] w-full items-center justify-center gap-2 rounded-full bg-[#073D2C] px-6 text-[15px] font-semibold text-white shadow-[0_8px_20px_rgba(7,61,44,0.18)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#063B2A] hover:shadow-[0_14px_32px_rgba(7,61,44,0.28)] sm:w-auto"
                 >
                   Book an Appointment
                   <ArrowRight className="h-4 w-4 transition duration-300 group-hover:translate-x-1" />
                 </button>
                 <a
                   href="#services"
-                  className="group inline-flex h-[44px] items-center gap-2 rounded-full border-2 border-[#B8860B] bg-[#FAF8F2]/90 px-6 text-[15px] font-semibold text-[#073D2C] transition duration-300 hover:-translate-y-0.5 hover:border-[#C5A059] hover:bg-[#C5A059]/15 hover:shadow-[0_10px_24px_rgba(197,160,89,0.18)]"
+                  className="group inline-flex h-[44px] w-full items-center justify-center gap-2 rounded-full border-2 border-[#B8860B] bg-[#FAF8F2]/90 px-6 text-[15px] font-semibold text-[#073D2C] transition duration-300 hover:-translate-y-0.5 hover:border-[#C5A059] hover:bg-[#C5A059]/15 hover:shadow-[0_10px_24px_rgba(197,160,89,0.18)] sm:w-auto"
                 >
                   Explore Services
                   <ArrowRight className="h-4 w-4 transition duration-300 group-hover:translate-x-1" />
@@ -632,6 +703,9 @@ export function LandingPage() {
                     {item.label}
                   </a>
                 ))}
+                <Link to="/login" className="font-semibold text-[#C5A059] transition hover:text-white">
+                  Login
+                </Link>
               </nav>
 
               <div className="flex flex-wrap items-center gap-4">
