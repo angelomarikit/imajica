@@ -1,5 +1,77 @@
 import { demoStaff } from '@/constants/demoData'
-import type { Staff } from '@/types'
+import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
+import { getBranches } from '@/services/branchService'
+import { getAccessUsers } from '@/services/userAccessService'
+import type { AccessUser, Staff, UserRole } from '@/types'
+import { TIMECLOCK_ROLES } from '@/utils/franchiseAccess'
+
+/** Map old demo branch ids → current clinic UUIDs */
+const LEGACY_BRANCH_IDS: Record<string, string> = {
+  'br-pasig': BRANCH_IDS.pasig,
+  'br-san-mateo': BRANCH_IDS.sanMateo,
+  'br-cainta': BRANCH_IDS.cainta,
+  'br-dasma': BRANCH_IDS.dasma,
+  'br-bacoor': BRANCH_IDS.bacoor,
+  'br-makati': BRANCH_IDS.pasig,
+}
+
+function normalizeBranchLabel(value: string | null | undefined): string {
+  return (value ?? '')
+    .toLowerCase()
+    .replace(/,/g, ' ')
+    .replace(/\bcity\b/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** True when a staff/account belongs to the given clinic branch. */
+export function matchesStaffBranch(
+  row: { branchId?: string | null; branchName?: string | null },
+  branchId: string,
+): boolean {
+  if (!branchId) return false
+  if (row.branchId === branchId) return true
+  if (row.branchId && LEGACY_BRANCH_IDS[row.branchId] === branchId) return true
+
+  const branch = getBranches().find((b) => b.id === branchId)
+  if (!branch) return false
+  const a = normalizeBranchLabel(row.branchName)
+  const b = normalizeBranchLabel(branch.name)
+  if (!a || !b) return false
+  return a === b || a.includes(b) || b.includes(a)
+}
+
+function accessUserToStaff(u: AccessUser): Staff {
+  return {
+    id: u.id,
+    code: u.employeeCode ? `EMP-${u.employeeCode}` : u.id.slice(0, 8).toUpperCase(),
+    fullName: u.fullName,
+    email: u.email,
+    phone: '',
+    role: (u.role as Staff['role']) || 'STAFF',
+    title: u.role.replaceAll('_', ' '),
+    department: 'Operation Departments',
+    branchId: u.branchId ?? '',
+    branchName: u.branchName ?? '',
+    status: u.status,
+    specializations: [],
+    hireDate: new Date().toISOString().slice(0, 10),
+    employmentType: 'Full-time',
+    rating: 0,
+    reviewCount: 0,
+    baseSalary: 0,
+  }
+}
+
+function mergeStaffById(rows: Staff[]): Staff[] {
+  const byEmail = new Map<string, Staff>()
+  for (const row of rows) {
+    const key = row.email.trim().toLowerCase() || row.id
+    if (!byEmail.has(key)) byEmail.set(key, row)
+  }
+  return [...byEmail.values()].sort((a, b) => a.fullName.localeCompare(b.fullName))
+}
 
 /** Shared staff directory rows (Staff page + booking checkout pickers). */
 const DIRECTORY_EXTRA: Staff[] = [
@@ -12,7 +84,7 @@ const DIRECTORY_EXTRA: Staff[] = [
     role: 'AESTHETICIAN',
     title: 'Aesthetician',
     department: 'Operation Departments',
-    branchId: '22222222-2222-2222-2222-222222222205',
+    branchId: BRANCH_IDS.dasma,
     branchName: 'Dasmariñas, Cavite',
     status: 'active',
     specializations: ['Facials'],
@@ -32,7 +104,7 @@ const DIRECTORY_EXTRA: Staff[] = [
     role: 'RECEPTIONIST',
     title: 'Receptionist',
     department: 'Operation Departments',
-    branchId: '22222222-2222-2222-2222-222222222205',
+    branchId: BRANCH_IDS.dasma,
     branchName: 'Dasmariñas, Cavite',
     status: 'active',
     specializations: ['Front Desk'],
@@ -52,7 +124,7 @@ const DIRECTORY_EXTRA: Staff[] = [
     role: 'AESTHETICIAN',
     title: 'Aesthetician',
     department: 'Operation Departments',
-    branchId: 'br-pasig',
+    branchId: BRANCH_IDS.pasig,
     branchName: 'Pasig City',
     status: 'active',
     specializations: ['Facials'],
@@ -67,12 +139,12 @@ const DIRECTORY_EXTRA: Staff[] = [
     id: 'st-veronica',
     code: 'MJ-AE-011',
     fullName: 'Veronica Mayo',
-    email: 'veronica.mayo@imajica.ph',
+    email: 'veronica.mayo@imajica.com',
     phone: '09171234567',
     role: 'AESTHETICIAN',
     title: 'Aesthetician',
     department: 'Operation Departments',
-    branchId: 'br-pasig',
+    branchId: BRANCH_IDS.cainta,
     branchName: 'Cainta, Rizal',
     status: 'active',
     specializations: ['Facials'],
@@ -86,12 +158,12 @@ const DIRECTORY_EXTRA: Staff[] = [
     id: 'st-sonayah',
     code: 'MJ-BM-012',
     fullName: 'Sonayah Arsila',
-    email: 'sonayah.arsila@imajica.ph',
+    email: 'sonayah.arsila@imajica.com',
     phone: '09181234567',
-    role: 'BRANCH_ADMIN',
-    title: 'Branch Manager',
+    role: 'STAFF',
+    title: 'Staff',
     department: 'Operation Departments',
-    branchId: 'br-pasig',
+    branchId: BRANCH_IDS.sanMateo,
     branchName: 'San Mateo, Rizal',
     status: 'active',
     specializations: ['Operations'],
@@ -110,7 +182,7 @@ const DIRECTORY_EXTRA: Staff[] = [
     role: 'AESTHETICIAN',
     title: 'Aesthetician',
     department: 'Operation Departments',
-    branchId: 'br-makati',
+    branchId: BRANCH_IDS.bacoor,
     branchName: 'Bacoor, Cavite',
     status: 'inactive',
     specializations: ['Facials'],
@@ -129,7 +201,7 @@ const DIRECTORY_EXTRA: Staff[] = [
     role: 'DOCTOR',
     title: 'Aesthetic Physician',
     department: 'Medical Departments',
-    branchId: 'br-pasig',
+    branchId: BRANCH_IDS.pasig,
     branchName: 'Pasig City',
     status: 'active',
     specializations: ['Injectables', 'Dermatology'],
@@ -148,8 +220,8 @@ const DIRECTORY_EXTRA: Staff[] = [
     role: 'DOCTOR',
     title: 'Aesthetic Physician',
     department: 'Medical Departments',
-    branchId: 'br-makati',
-    branchName: 'Makati City',
+    branchId: BRANCH_IDS.cainta,
+    branchName: 'Cainta, Rizal',
     status: 'active',
     specializations: ['Laser', 'Skin'],
     hireDate: '2023-02-15',
@@ -174,20 +246,53 @@ export function getDirectoryStaff(): Staff[] {
   return [...extras, ...demo.filter((d) => !ids.has(d.id))]
 }
 
+/**
+ * Active non-doctor staff for booking checkout.
+ * When branchId is set, only that clinic’s registered staff are returned (no all-branch fallback).
+ */
 export function getActiveStaffForBooking(branchId?: string): Staff[] {
-  return getDirectoryStaff().filter((s) => {
+  const directory = getDirectoryStaff().filter((s) => {
     if (s.status !== 'active') return false
     if (s.role === 'DOCTOR') return false
-    if (branchId && s.branchId !== branchId) return false
+    if (branchId && !matchesStaffBranch(s, branchId)) return false
     return true
   })
+
+  if (!branchId) return mergeStaffById(directory)
+
+  const bookingRoles = new Set<string>([
+    ...TIMECLOCK_ROLES.filter((r) => r !== 'DOCTOR'),
+    'BRANCH_ADMIN',
+  ])
+
+  const fromAccounts = getAccessUsers()
+    .filter(
+      (u) =>
+        u.status === 'active' &&
+        u.branchId === branchId &&
+        bookingRoles.has(u.role as UserRole),
+    )
+    .map(accessUserToStaff)
+
+  return mergeStaffById([...directory, ...fromAccounts])
 }
 
+/** Active doctors for booking checkout, scoped to a branch when provided. */
 export function getActiveDoctorsForBooking(branchId?: string): Staff[] {
-  return getDirectoryStaff().filter((s) => {
+  const directory = getDirectoryStaff().filter((s) => {
     if (s.status !== 'active') return false
     if (s.role !== 'DOCTOR') return false
-    if (branchId && s.branchId !== branchId) return false
+    if (branchId && !matchesStaffBranch(s, branchId)) return false
     return true
   })
+
+  if (!branchId) return mergeStaffById(directory)
+
+  const fromAccounts = getAccessUsers()
+    .filter(
+      (u) => u.status === 'active' && u.branchId === branchId && u.role === 'DOCTOR',
+    )
+    .map(accessUserToStaff)
+
+  return mergeStaffById([...directory, ...fromAccounts])
 }

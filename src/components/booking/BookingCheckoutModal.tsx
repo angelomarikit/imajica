@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useBranch } from '@/contexts/BranchContext'
 import { createAppointment, toDateKey } from '@/services/appointmentService'
 import { getBranches } from '@/services/branchService'
 import { getClients, saveClient } from '@/services/clientService'
@@ -15,7 +16,6 @@ import {
 import type { Client, PaymentMethod } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { isHqRole } from '@/utils/franchiseAccess'
 import { useAuth } from '@/contexts/AuthContext'
 
 export type CheckoutCartLine = {
@@ -100,31 +100,43 @@ export function BookingCheckoutModal({
   onLineStaffChange: (lineId: string, staffId: string) => void
 }) {
   const { user } = useAuth()
+  const { selectedBranchId, selectedBranch } = useBranch()
   const forcedBranchId = useForcedBranchId()
-  const branchId = forcedBranchId ?? patient.preferredBranchId
-  const hqView = isHqRole(user?.role)
+
+  /** Checkout clinic: locked branch → header branch → patient preferred branch */
+  const branchId =
+    forcedBranchId ||
+    (selectedBranchId !== 'all' ? selectedBranchId : '') ||
+    patient.preferredBranchId ||
+    ''
+  const branchName =
+    selectedBranch?.name ||
+    getBranches().find((b) => b.id === branchId)?.name ||
+    patient.preferredBranchName ||
+    ''
 
   const staffOptions = useMemo(() => {
-    const scoped = getActiveStaffForBooking(hqView ? undefined : branchId)
-    return scoped.length ? scoped : getActiveStaffForBooking()
-  }, [branchId, hqView])
+    if (!branchId) return []
+    return getActiveStaffForBooking(branchId)
+  }, [branchId])
 
   const doctorOptions = useMemo(() => {
-    const scoped = getActiveDoctorsForBooking(hqView ? undefined : branchId)
-    return scoped.length ? scoped : getActiveDoctorsForBooking()
-  }, [branchId, hqView])
+    if (!branchId) return []
+    return getActiveDoctorsForBooking(branchId)
+  }, [branchId])
 
   const referrers = useMemo(() => {
     let list = getClients().filter((c) => c.id !== patient.id && c.status !== 'inactive')
-    if (!hqView && branchId) {
+    if (branchId) {
       list = list.filter(
         (c) =>
           c.preferredBranchId === branchId ||
-          c.preferredBranchName?.toLowerCase() === patient.preferredBranchName?.toLowerCase(),
+          (branchName &&
+            c.preferredBranchName?.toLowerCase().includes(branchName.toLowerCase().split(',')[0]!.trim())),
       )
     }
     return list
-  }, [patient, branchId, hqView])
+  }, [patient, branchId, branchName])
 
   const [leadSource, setLeadSource] = useState<string>('Walk-in')
   const [paymentType, setPaymentType] = useState<BookingPaymentType>('Full Payment')

@@ -430,8 +430,12 @@ export function KioskTimeClockPage() {
 
         <div className="overflow-hidden rounded-[18px] border border-[#073D2C]/10 bg-white shadow-[0_24px_60px_rgba(7,61,44,0.14)] md:grid md:grid-cols-2">
           <div className="flex flex-col px-5 py-6 sm:px-8 sm:py-8">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center overflow-hidden rounded-[12px] border border-[#E8E2D6] bg-[#FAF8F2] sm:h-20 sm:w-20">
-              <img src={logo} alt={BRAND.name} className="h-full w-full object-cover" />
+            <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center overflow-hidden rounded-[14px] border border-[#E8E2D6] bg-[#0A2E26] shadow-sm sm:h-24 sm:w-24">
+              <img
+                src={logo}
+                alt={BRAND.name}
+                className="h-full w-full object-cover"
+              />
             </div>
 
             <div className="rounded-[12px] bg-[#F3F0E8] px-4 py-3 text-center">
