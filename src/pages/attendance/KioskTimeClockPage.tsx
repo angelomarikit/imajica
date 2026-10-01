@@ -14,6 +14,7 @@ import type { AttendancePunchType } from '@/types'
 import { cn } from '@/utils/cn'
 
 type GeoState =
+  | { status: 'idle' }
   | { status: 'loading' }
   | {
       status: 'ready'
@@ -24,16 +25,56 @@ type GeoState =
     }
   | { status: 'error'; message: string }
 
-type SelfieSession = {
+type PendingSelfie = {
   punchType: AttendancePunchType
-  phase: 'camera' | 'preview'
-  photoBlob?: Blob
-  photoPreview?: string
+  photoBlob: Blob
+  photoPreview: string
+  latitude: number
+  longitude: number
+  accuracyM: number | null
+  locationLabel: string
+}
+
+/** Prefer front/user camera on phones; fall back until something works. */
+async function openSelfieCamera(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error('Camera is not supported in this browser')
+  }
+  if (!window.isSecureContext && location.hostname !== 'localhost') {
+    throw new Error('Camera needs HTTPS (or localhost). Open this page on a secure link.')
+  }
+
+  const attempts: MediaStreamConstraints[] = [
+    {
+      audio: false,
+      video: {
+        facingMode: { ideal: 'user' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    },
+    { audio: false, video: { facingMode: 'user' } },
+    { audio: false, video: { facingMode: { exact: 'user' } } },
+    { audio: false, video: true },
+  ]
+
+  let lastError: unknown
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (err) {
+      lastError = err
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Camera permission is required to take a selfie')
 }
 
 /**
  * Shared clinic kiosk — no login.
- * Enter employee # → Time In / Out → take selfie → confirm punch (with location).
+ * Same camera flow as staff Time In / Out: live phone front-camera preview,
+ * Take selfie (manual), then Confirm with location.
  */
 export function KioskTimeClockPage() {
   const [now, setNow] = useState(() => new Date())
@@ -44,8 +85,11 @@ export function KioskTimeClockPage() {
   const [geo, setGeo] = useState<GeoState>({ status: 'loading' })
   const [saving, setSaving] = useState(false)
   const [lastSuccess, setLastSuccess] = useState<string | null>(null)
-  const [session, setSession] = useState<SelfieSession | null>(null)
+
+  const [punchType, setPunchType] = useState<AttendancePunchType | null>(null)
+  const [livePreview, setLivePreview] = useState(false)
   const [cameraReady, setCameraReady] = useState(false)
+  const [pending, setPending] = useState<PendingSelfie | null>(null)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -62,50 +106,42 @@ export function KioskTimeClockPage() {
     }
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    async function loadLocation() {
-      setGeo({ status: 'loading' })
-      try {
-        const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-          if (!navigator.geolocation) {
-            reject(new Error('Geolocation is not supported on this device'))
-            return
-          }
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
+  async function loadLocation() {
+    setGeo({ status: 'loading' })
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('Geolocation is not supported on this device'))
+          return
+        }
+        navigator.geolocation.getCurrentPosition(
+          resolve,
+          () => reject(new Error('Location permission is required to Time In / Out')),
+          {
             enableHighAccuracy: true,
-            timeout: 20000,
-            maximumAge: 30_000,
-          })
-        })
-        const latitude = position.coords.latitude
-        const longitude = position.coords.longitude
-        const accuracyM =
-          typeof position.coords.accuracy === 'number' ? position.coords.accuracy : null
-        let locationLabel = `Near ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`
-        try {
-          locationLabel = await reverseGeocodeLabel(latitude, longitude)
-        } catch {
-          /* keep coords fallback */
-        }
-        if (!cancelled) {
-          setGeo({ status: 'ready', latitude, longitude, accuracyM, locationLabel })
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setGeo({
-            status: 'error',
-            message: err instanceof Error ? err.message : 'Could not fetch location',
-          })
-        }
-      }
+            timeout: 25000,
+            maximumAge: 0,
+          },
+        )
+      })
+      const latitude = position.coords.latitude
+      const longitude = position.coords.longitude
+      const accuracyM = position.coords.accuracy ?? null
+      const locationLabel = await reverseGeocodeLabel(latitude, longitude)
+      setGeo({ status: 'ready', latitude, longitude, accuracyM, locationLabel })
+    } catch (err) {
+      setGeo({
+        status: 'error',
+        message: err instanceof Error ? err.message : 'Could not get location',
+      })
     }
+  }
+
+  useEffect(() => {
     void loadLocation()
     const refreshId = window.setInterval(() => void loadLocation(), 5 * 60_000)
-    return () => {
-      cancelled = true
-      window.clearInterval(refreshId)
-    }
+    return () => window.clearInterval(refreshId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -152,43 +188,54 @@ export function KioskTimeClockPage() {
     }
   }, [])
 
-  function cancelSelfie() {
-    if (session?.photoPreview) URL.revokeObjectURL(session.photoPreview)
-    stopCamera()
-    punchTypeRef.current = null
-    setSession(null)
-  }
+  // When location finishes after selfie was taken, merge into pending
+  useEffect(() => {
+    if (!pending || pending.locationLabel) return
+    if (geo.status !== 'ready') return
+    setPending((prev) =>
+      prev
+        ? {
+            ...prev,
+            latitude: geo.latitude,
+            longitude: geo.longitude,
+            accuracyM: geo.accuracyM,
+            locationLabel: geo.locationLabel,
+          }
+        : prev,
+    )
+  }, [geo, pending])
 
-  async function beginSelfie(punchType: AttendancePunchType) {
+  async function beginSession(nextPunch: AttendancePunchType) {
     if (!employee) {
       toast.error('Enter a valid employee number first')
       return
     }
-    if (geo.status === 'error') {
-      toast.error(geo.message)
-      return
-    }
-    if (punchType === 'time_in' && !employee.canTimeIn) {
+    if (nextPunch === 'time_in' && !employee.canTimeIn) {
       toast.error('Already timed in. Please Time Out first.')
       return
     }
-    if (punchType === 'time_out' && !employee.canTimeOut) {
+    if (nextPunch === 'time_out' && !employee.canTimeOut) {
       toast.error('Time In is required before Time Out.')
       return
     }
 
-    if (session?.photoPreview) URL.revokeObjectURL(session.photoPreview)
+    if (pending?.photoPreview) URL.revokeObjectURL(pending.photoPreview)
+    setPending(null)
     stopCamera()
-    punchTypeRef.current = punchType
-    setSession({ punchType, phase: 'camera' })
+    punchTypeRef.current = nextPunch
+    setPunchType(nextPunch)
+    setLivePreview(true)
     setCameraReady(false)
+    void loadLocation()
+
+    // Let the <video> mount before requesting the stream (same as staff timeclock)
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve())
+    })
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user' },
-        audio: false,
-      })
-      if (punchTypeRef.current !== punchType) {
+      const stream = await openSelfieCamera()
+      if (punchTypeRef.current !== nextPunch) {
         stream.getTracks().forEach((t) => t.stop())
         return
       }
@@ -199,20 +246,27 @@ export function KioskTimeClockPage() {
         await video.play()
         setCameraReady(true)
       }
+      // If video not mounted yet, callback ref will attach
     } catch (err) {
-      cancelSelfie()
+      stopCamera()
+      setLivePreview(false)
+      setPunchType(null)
+      punchTypeRef.current = null
       toast.error(
-        err instanceof Error ? err.message : 'Camera permission is required to take a selfie',
+        err instanceof Error
+          ? err.message
+          : 'Camera permission is required to take a selfie',
       )
     }
   }
 
-  function takeSelfie() {
+  /** ONLY from Take selfie — never auto-capture */
+  function handleTakeSelfieClick() {
     const activePunch = punchTypeRef.current
-    if (!activePunch || session?.phase !== 'camera') return
+    if (!activePunch || !livePreview) return
     const video = videoRef.current
     if (!video || !streamRef.current) {
-      toast.error('Camera is not ready yet')
+      toast.error('Camera is not ready yet — wait for the live preview')
       return
     }
     if (video.videoWidth < 2) {
@@ -238,11 +292,29 @@ export function KioskTimeClockPage() {
           }
           const photoPreview = URL.createObjectURL(blob)
           stopCamera()
-          setSession({
+          setLivePreview(false)
+
+          if (geo.status === 'ready') {
+            setPending({
+              punchType: activePunch,
+              photoBlob: blob,
+              photoPreview,
+              latitude: geo.latitude,
+              longitude: geo.longitude,
+              accuracyM: geo.accuracyM,
+              locationLabel: geo.locationLabel,
+            })
+            return
+          }
+
+          setPending({
             punchType: activePunch,
-            phase: 'preview',
             photoBlob: blob,
             photoPreview,
+            latitude: 0,
+            longitude: 0,
+            accuracyM: null,
+            locationLabel: '',
           })
         },
         'image/jpeg',
@@ -254,31 +326,51 @@ export function KioskTimeClockPage() {
   }
 
   async function confirmPunch() {
-    if (!employee || !session?.photoBlob) return
-    if (geo.status !== 'ready') {
-      toast.error('Wait for location before confirming')
+    if (!pending || !employee) return
+    if (!pending.locationLabel || geo.status === 'loading') {
+      toast.error('Wait for your place name to finish loading')
+      return
+    }
+    if (geo.status === 'error') {
+      toast.error(geo.message)
       return
     }
 
     setSaving(true)
     try {
+      let label = pending.locationLabel
+      let lat = pending.latitude
+      let lng = pending.longitude
+      let accuracy = pending.accuracyM
+      if (geo.status === 'ready') {
+        label = geo.locationLabel
+        lat = geo.latitude
+        lng = geo.longitude
+        accuracy = geo.accuracyM
+      }
+      if (!label) {
+        label = await reverseGeocodeLabel(lat, lng)
+      }
+
       const result = await kioskAttendancePunch({
         employeeCode: employee.employeeCode,
-        punchType: session.punchType,
-        photoBlob: session.photoBlob,
-        latitude: geo.latitude,
-        longitude: geo.longitude,
-        accuracyM: geo.accuracyM,
-        locationLabel: geo.locationLabel,
+        punchType: pending.punchType,
+        photoBlob: pending.photoBlob,
+        latitude: lat,
+        longitude: lng,
+        accuracyM: accuracy,
+        locationLabel: label,
       })
-      const label = session.punchType === 'time_in' ? 'Time In' : 'Time Out'
-      toast.success(`${result.fullName} — ${label} recorded`)
+
+      const punchLabel = pending.punchType === 'time_in' ? 'Time In' : 'Time Out'
+      toast.success(`${result.fullName} — ${punchLabel} recorded`)
       setLastSuccess(
-        `${result.fullName} · ${label} · #${result.employeeCode} · ${result.branchName}`,
+        `${result.fullName} · ${punchLabel} · #${result.employeeCode} · ${result.branchName}`,
       )
-      if (session.photoPreview) URL.revokeObjectURL(session.photoPreview)
+      URL.revokeObjectURL(pending.photoPreview)
+      setPending(null)
+      setPunchType(null)
       punchTypeRef.current = null
-      setSession(null)
       setCode('')
       setEmployee(null)
       window.setTimeout(() => setLastSuccess(null), 4500)
@@ -289,18 +381,35 @@ export function KioskTimeClockPage() {
     }
   }
 
+  function cancelAll() {
+    if (pending?.photoPreview) URL.revokeObjectURL(pending.photoPreview)
+    stopCamera()
+    setPending(null)
+    setLivePreview(false)
+    setPunchType(null)
+    punchTypeRef.current = null
+  }
+
+  function retake() {
+    if (!pending) return
+    const next = pending.punchType
+    URL.revokeObjectURL(pending.photoPreview)
+    setPending(null)
+    void beginSession(next)
+  }
+
   function pressDigit(d: string) {
-    if (session) return
+    if (livePreview || pending) return
     setCode((prev) => (prev + d).replace(/\D/g, '').slice(0, 3))
   }
 
   function backspace() {
-    if (session) return
+    if (livePreview || pending) return
     setCode((prev) => prev.slice(0, -1))
   }
 
   function clearCode() {
-    if (session) return
+    if (livePreview || pending) return
     setCode('')
     setEmployee(null)
     setLookupError(null)
@@ -308,15 +417,9 @@ export function KioskTimeClockPage() {
   }
 
   const displayCode = code || '— — —'
-  const locationText =
-    geo.status === 'loading'
-      ? 'Fetching Location…'
-      : geo.status === 'error'
-        ? geo.message
-        : geo.locationLabel
-
-  const punchLabel = session?.punchType === 'time_out' ? 'Time Out' : 'Time In'
-  const inSelfie = Boolean(session)
+  const locationReady =
+    geo.status === 'ready' && Boolean(pending?.locationLabel || geo.locationLabel)
+  const inCapture = livePreview || Boolean(pending)
 
   return (
     <div className="min-h-dvh bg-[linear-gradient(160deg,#F7F4EC_0%,#EFE8DA_45%,#E4DDD0_100%)] px-3 py-5 sm:px-6 sm:py-8">
@@ -326,7 +429,6 @@ export function KioskTimeClockPage() {
         </p>
 
         <div className="overflow-hidden rounded-[18px] border border-[#073D2C]/10 bg-white shadow-[0_24px_60px_rgba(7,61,44,0.14)] md:grid md:grid-cols-2">
-          {/* Left — controls */}
           <div className="flex flex-col px-5 py-6 sm:px-8 sm:py-8">
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center overflow-hidden rounded-[12px] border border-[#E8E2D6] bg-[#FAF8F2] sm:h-20 sm:w-20">
               <img src={logo} alt={BRAND.name} className="h-full w-full object-cover" />
@@ -350,12 +452,9 @@ export function KioskTimeClockPage() {
               </p>
             </div>
 
-            <div className="mt-3 flex items-start gap-2 rounded-[10px] border border-[#E8E2D6] bg-[#FAF8F2] px-3 py-2.5 text-sm text-[#073D2C]">
-              <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#C5A059]" />
-              <span className="min-w-0 break-words leading-snug">{locationText}</span>
-            </div>
+            <LocationPanel geo={geo} onRetry={() => void loadLocation()} />
 
-            {!inSelfie ? (
+            {!inCapture ? (
               <>
                 <div className="mx-auto mt-5 grid w-full max-w-xs grid-cols-3 gap-2 sm:gap-2.5">
                   {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => (
@@ -395,8 +494,8 @@ export function KioskTimeClockPage() {
                 <div className="mt-5 grid grid-cols-2 gap-3">
                   <button
                     type="button"
-                    disabled={!employee || geo.status === 'error' || !employee.canTimeIn}
-                    onClick={() => void beginSelfie('time_in')}
+                    disabled={!employee || !employee.canTimeIn}
+                    onClick={() => void beginSession('time_in')}
                     className={cn(
                       'h-12 rounded-full text-sm font-bold uppercase tracking-wide text-white transition sm:h-14',
                       'bg-[#073D2C] hover:bg-[#0a4f3a] disabled:cursor-not-allowed disabled:opacity-40',
@@ -406,8 +505,8 @@ export function KioskTimeClockPage() {
                   </button>
                   <button
                     type="button"
-                    disabled={!employee || geo.status === 'error' || !employee.canTimeOut}
-                    onClick={() => void beginSelfie('time_out')}
+                    disabled={!employee || !employee.canTimeOut}
+                    onClick={() => void beginSession('time_out')}
                     className={cn(
                       'h-12 rounded-full text-sm font-bold uppercase tracking-wide text-white transition sm:h-14',
                       'bg-[#0d5c45] hover:bg-[#0a4f3a] disabled:cursor-not-allowed disabled:opacity-40',
@@ -417,59 +516,102 @@ export function KioskTimeClockPage() {
                   </button>
                 </div>
               </>
-            ) : (
-              <div className="mt-5 space-y-3">
-                <p className="text-center text-sm font-semibold text-[#073D2C]">
-                  {session.phase === 'camera'
-                    ? `Take a selfie to ${punchLabel}`
-                    : `Confirm selfie for ${punchLabel}`}
-                </p>
+            ) : null}
 
-                {session.phase === 'camera' ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={cancelSelfie}
-                      className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-[#073D2C]/20 bg-white text-sm font-semibold text-[#073D2C]"
-                    >
-                      <X className="h-4 w-4" />
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!cameraReady}
-                      onClick={takeSelfie}
-                      className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-[#073D2C] text-sm font-bold uppercase tracking-wide text-white disabled:opacity-40"
-                    >
-                      <Camera className="h-4 w-4" />
-                      Take selfie
-                    </button>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      disabled={saving}
-                      onClick={() => void beginSelfie(session.punchType)}
-                      className="h-12 rounded-full border border-[#073D2C]/20 bg-white text-sm font-semibold text-[#073D2C]"
-                    >
-                      Retake
-                    </button>
-                    <button
-                      type="button"
-                      disabled={saving || geo.status !== 'ready'}
-                      onClick={() => void confirmPunch()}
-                      className="h-12 rounded-full bg-[#073D2C] text-sm font-bold uppercase tracking-wide text-white disabled:opacity-40"
-                    >
-                      {saving ? 'Saving…' : `Confirm ${punchLabel}`}
-                    </button>
-                  </div>
-                )}
-                <p className="text-center text-xs text-slate-ui md:hidden">
-                  Camera opens below
+            {livePreview ? (
+              <div className="mt-5 space-y-3">
+                <p className="rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-950">
+                  Live preview only — nothing is saved until you press{' '}
+                  <span className="font-bold">Take selfie</span>, then Confirm.
                 </p>
+                <p className="text-sm text-[#073D2C]">
+                  {punchType === 'time_in' ? 'Time In' : 'Time Out'}: allow camera access if asked,
+                  center your face, then tap Take selfie.
+                </p>
+                <div className="relative overflow-hidden rounded-[14px] border border-border bg-black">
+                  <video
+                    ref={attachStreamToVideo}
+                    playsInline
+                    muted
+                    autoPlay
+                    className="mx-auto max-h-[420px] min-h-[240px] w-full scale-x-[-1] object-cover"
+                  />
+                  <div className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-1 text-xs text-white">
+                    <Camera className="h-3.5 w-3.5" />
+                    {cameraReady ? 'Waiting for you to take selfie' : 'Detecting camera…'}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    disabled={!cameraReady}
+                    onClick={handleTakeSelfieClick}
+                    className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-full bg-[#073D2C] text-sm font-bold uppercase tracking-wide text-white disabled:opacity-40"
+                  >
+                    <Camera className="h-5 w-5" />
+                    Take selfie
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelAll}
+                    className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-[#073D2C]/20 bg-white px-5 text-sm font-semibold text-[#073D2C]"
+                  >
+                    <X className="h-4 w-4" />
+                    Cancel
+                  </button>
+                </div>
               </div>
-            )}
+            ) : null}
+
+            {pending ? (
+              <div className="mt-5 space-y-4">
+                <p className="text-sm font-medium text-[#073D2C]">
+                  Confirm your {pending.punchType === 'time_in' ? 'Time In' : 'Time Out'}
+                </p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <img
+                    src={pending.photoPreview}
+                    alt="Selfie preview"
+                    className="h-56 w-full rounded-[14px] border border-border object-cover"
+                  />
+                  <div className="space-y-3 rounded-[14px] border border-border bg-[#FAF8F2] p-4 text-sm">
+                    <LocationPanel geo={geo} onRetry={() => void loadLocation()} />
+                    {pending.locationLabel ? (
+                      <p className="font-medium text-[#073D2C]">{pending.locationLabel}</p>
+                    ) : null}
+                    <p className="text-xs text-slate-ui">
+                      Time is recorded when you press Confirm ({formatManilaClock(now)}).
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                  <button
+                    type="button"
+                    disabled={saving || !locationReady}
+                    onClick={() => void confirmPunch()}
+                    className="inline-flex h-12 flex-1 items-center justify-center rounded-full bg-[#073D2C] px-5 text-sm font-bold uppercase tracking-wide text-white disabled:opacity-40"
+                  >
+                    {saving ? 'Saving…' : locationReady ? 'Confirm' : 'Waiting for location…'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={retake}
+                    className="h-12 rounded-full border border-[#073D2C]/20 bg-white px-5 text-sm font-semibold text-[#073D2C]"
+                  >
+                    Retake selfie
+                  </button>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={cancelAll}
+                    className="h-12 rounded-full px-4 text-sm font-semibold text-slate-ui"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             {lastSuccess ? (
               <p className="mt-3 rounded-[10px] bg-emerald-50 px-3 py-2 text-center text-xs font-medium text-emerald-900">
@@ -479,73 +621,34 @@ export function KioskTimeClockPage() {
 
             <p className="mt-5 text-center text-[10px] leading-relaxed text-slate-ui sm:text-[11px]">
               By using the Imajica timekeeping kiosk, you agree that your employee number, selfie,
-              and device location are recorded for attendance.
+              and device location are recorded for attendance. Use your phone’s front camera for
+              the selfie.
             </p>
           </div>
 
-          {/* Right — brand / live selfie panel (also shown on mobile during selfie) */}
-          <div
-            className={cn(
-              'relative min-h-[280px] overflow-hidden sm:min-h-[360px] md:min-h-[420px]',
-              inSelfie ? 'block' : 'hidden md:block',
-            )}
-          >
-            {session?.phase === 'camera' ? (
-              <>
-                <video
-                  ref={attachStreamToVideo}
-                  muted
-                  playsInline
-                  autoPlay
-                  className="absolute inset-0 h-full w-full scale-x-[-1] object-cover"
-                />
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-6 py-5 text-center text-white">
-                  <p className="text-sm font-semibold">{punchLabel} selfie</p>
-                  <p className="mt-1 text-xs text-white/75">
-                    {cameraReady ? 'Center your face, then Take selfie' : 'Starting camera…'}
-                  </p>
-                </div>
-              </>
-            ) : session?.phase === 'preview' && session.photoPreview ? (
-              <>
-                <img
-                  src={session.photoPreview}
-                  alt="Selfie preview"
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-6 py-5 text-center text-white">
-                  <p className="text-sm font-semibold">Preview · {punchLabel}</p>
-                  <p className="mt-1 text-xs text-white/75">Confirm to register, or Retake</p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="absolute inset-0 bg-[linear-gradient(145deg,#0A2E26_0%,#073D2C_40%,#0d5c45_70%,#C5A059_160%)]" />
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(197,160,89,0.28),transparent_55%)]" />
-                <div className="relative flex h-full flex-col items-center justify-center px-8 py-10 text-center text-white">
-                  <p className="font-brand text-3xl tracking-[0.12em] text-[#E8D9B8] lg:text-4xl">
-                    IMAJICA
-                  </p>
-                  <p className="mt-1 text-xs uppercase tracking-[0.28em] text-white/70">
-                    Medical Aesthetics
-                  </p>
-                  <div className="my-6 h-px w-16 bg-[#C5A059]/70" />
-                  <p className="max-w-xs text-sm leading-relaxed text-white/85">
-                    Enter your employee number, then Time In or Time Out and take a selfie to
-                    register.
-                  </p>
-                  {employee ? (
-                    <p className="mt-6 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-[#E8D9B8]">
-                      {employee.branchName}
-                    </p>
-                  ) : (
-                    <p className="mt-6 text-xs uppercase tracking-[0.2em] text-white/50">
-                      Staff kiosk
-                    </p>
-                  )}
-                </div>
-              </>
-            )}
+          <div className="relative hidden min-h-[420px] overflow-hidden md:block">
+            <div className="absolute inset-0 bg-[linear-gradient(145deg,#0A2E26_0%,#073D2C_40%,#0d5c45_70%,#C5A059_160%)]" />
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(197,160,89,0.28),transparent_55%)]" />
+            <div className="relative flex h-full flex-col items-center justify-center px-8 py-10 text-center text-white">
+              <p className="font-brand text-3xl tracking-[0.12em] text-[#E8D9B8] lg:text-4xl">
+                IMAJICA
+              </p>
+              <p className="mt-1 text-xs uppercase tracking-[0.28em] text-white/70">
+                Medical Aesthetics
+              </p>
+              <div className="my-6 h-px w-16 bg-[#C5A059]/70" />
+              <p className="max-w-xs text-sm leading-relaxed text-white/85">
+                Enter your number, tap Time In or Time Out, allow the camera, take a selfie, then
+                Confirm.
+              </p>
+              {employee ? (
+                <p className="mt-6 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-[#E8D9B8]">
+                  {employee.branchName}
+                </p>
+              ) : (
+                <p className="mt-6 text-xs uppercase tracking-[0.2em] text-white/50">Staff kiosk</p>
+              )}
+            </div>
           </div>
         </div>
 
@@ -553,6 +656,38 @@ export function KioskTimeClockPage() {
           <p className="font-brand text-lg tracking-wide text-[#E8D9B8]">IMAJICA</p>
           <p className="text-[10px] uppercase tracking-[0.2em] text-white/65">Staff timeclock</p>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function LocationPanel({
+  geo,
+  onRetry,
+}: {
+  geo: GeoState
+  onRetry: () => void
+}) {
+  return (
+    <div className="mt-3 flex items-start gap-2 rounded-[10px] border border-[#E8E2D6] bg-[#FAF8F2] px-3 py-2.5 text-sm text-[#073D2C]">
+      <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#C5A059]" />
+      <div className="min-w-0 flex-1">
+        {geo.status === 'loading' || geo.status === 'idle' ? (
+          <p className="leading-snug">Fetching Location…</p>
+        ) : geo.status === 'error' ? (
+          <div className="space-y-1">
+            <p className="leading-snug text-red-700">{geo.message}</p>
+            <button
+              type="button"
+              onClick={onRetry}
+              className="text-xs font-semibold text-[#073D2C] underline"
+            >
+              Retry location
+            </button>
+          </div>
+        ) : (
+          <p className="min-w-0 break-words leading-snug">{geo.locationLabel}</p>
+        )}
       </div>
     </div>
   )
