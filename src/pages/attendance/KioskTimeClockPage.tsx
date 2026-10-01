@@ -584,12 +584,12 @@ export function KioskTimeClockPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                <div className="flex w-full flex-col gap-3">
                   <button
                     type="button"
                     disabled={saving || !locationReady}
                     onClick={() => void confirmPunch()}
-                    className="inline-flex h-12 flex-1 items-center justify-center rounded-full bg-[#073D2C] px-5 text-sm font-bold uppercase tracking-wide text-white disabled:opacity-40"
+                    className="inline-flex h-16 w-full items-center justify-center rounded-full bg-[#073D2C] px-6 text-base font-bold uppercase tracking-wide text-white shadow-md transition hover:bg-[#0a4f3a] disabled:cursor-not-allowed disabled:opacity-40 sm:h-[4.25rem] sm:text-lg"
                   >
                     {saving ? 'Saving…' : locationReady ? 'Confirm' : 'Waiting for location…'}
                   </button>
@@ -597,7 +597,7 @@ export function KioskTimeClockPage() {
                     type="button"
                     disabled={saving}
                     onClick={retake}
-                    className="h-12 rounded-full border border-[#073D2C]/20 bg-white px-5 text-sm font-semibold text-[#073D2C]"
+                    className="inline-flex h-14 w-full items-center justify-center rounded-full border border-[#073D2C]/25 bg-white px-5 text-sm font-semibold text-[#073D2C] sm:h-14 sm:text-base"
                   >
                     Retake selfie
                   </button>
@@ -605,7 +605,7 @@ export function KioskTimeClockPage() {
                     type="button"
                     disabled={saving}
                     onClick={cancelAll}
-                    className="h-12 rounded-full px-4 text-sm font-semibold text-slate-ui"
+                    className="inline-flex h-11 w-full items-center justify-center rounded-full text-sm font-semibold text-slate-ui"
                   >
                     Cancel
                   </button>

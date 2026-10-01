@@ -6,6 +6,7 @@ import {
   MapPin,
   Search,
   Users,
+  X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Navigate } from 'react-router-dom'
@@ -15,7 +16,7 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
-import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   exportBranchAttendanceXlsx,
   formatAttendanceHours,
@@ -23,8 +24,10 @@ import {
   formatManilaTime,
   listBranchAttendance,
   manilaDateKey,
+  resolveAttendancePhotoUrl,
   subscribeAttendance,
   summarizeStaffAttendance,
+  type AttendanceSession,
   type StaffAttendanceSummary,
 } from '@/services/attendanceService'
 import { listAccessUsers } from '@/services/userAccessService'
@@ -46,11 +49,15 @@ function roleLabel(role: string) {
 
 export function BranchAttendancePage() {
   const { user } = useAuth()
-  const { branches, selectedBranchId } = useBranch()
+  const { branches } = useBranch()
   const forcedBranchId = useForcedBranchId()
+  const effectiveBranchId = useEffectiveBranchId()
   const allowed = isBranchOwner(user) || canAccessHqAdmin(user)
 
-  const branchId = forcedBranchId ?? (selectedBranchId === 'all' ? '' : selectedBranchId)
+  // Branch admins are always locked to their clinic; HQ must pick a branch (not "all")
+  const branchId =
+    forcedBranchId ??
+    (effectiveBranchId === 'all' ? '' : effectiveBranchId)
   const branchName =
     branches.find((b) => b.id === branchId)?.name ??
     user?.branchName ??
@@ -66,6 +73,10 @@ export function BranchAttendancePage() {
   const [exporting, setExporting] = useState(false)
   const [summaries, setSummaries] = useState<StaffAttendanceSummary[]>([])
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
+  const [sessionModal, setSessionModal] = useState<{
+    staff: StaffAttendanceSummary
+    session: AttendanceSession
+  } | null>(null)
 
   async function load() {
     if (!branchId) {
@@ -79,39 +90,55 @@ export function BranchAttendancePage() {
         listBranchAttendance(branchId, from, to),
         listAccessUsers(),
       ])
-      const branchPeople = users.filter(
+
+      // Strict: only this branch's timeclock staff (never other clinics)
+      const branchStaff = users.filter(
         (u) =>
           u.branchId === branchId &&
-          (TIMECLOCK_ROLES.includes(u.role as UserRole) ||
-            punches.some((p) => p.userId === u.id)),
+          TIMECLOCK_ROLES.includes(u.role as UserRole),
       )
-      // Include anyone with punches even if missing from directory
-      const punchUserIds = new Set(punches.map((p) => p.userId))
+
       const peopleMap = new Map<string, AccessUser>()
-      for (const u of branchPeople) peopleMap.set(u.id, u)
-      for (const id of punchUserIds) {
-        if (!peopleMap.has(id)) {
-          const known = users.find((u) => u.id === id)
-          peopleMap.set(id, {
-            id,
-            fullName: known?.fullName ?? `Staff ${id.slice(0, 8)}`,
-            email: known?.email ?? '',
-            role: known?.role ?? 'STAFF',
-            branchId,
-            branchName,
-            status: known?.status ?? 'active',
-          })
-        }
+      for (const u of branchStaff) peopleMap.set(u.id, u)
+
+      // Punches are already branch-scoped; attach unknown punchers only if
+      // directory says they belong here (or directory has no branch conflict)
+      for (const punch of punches) {
+        if (peopleMap.has(punch.userId)) continue
+        if (punch.branchId !== branchId) continue
+        const known = users.find((u) => u.id === punch.userId)
+        if (known?.branchId && known.branchId !== branchId) continue
+        if (known && !TIMECLOCK_ROLES.includes(known.role as UserRole)) continue
+        peopleMap.set(punch.userId, {
+          id: punch.userId,
+          fullName: known?.fullName ?? `Staff ${punch.userId.slice(0, 8)}`,
+          email: known?.email ?? '',
+          role: known?.role ?? 'STAFF',
+          branchId,
+          branchName,
+          status: known?.status ?? 'active',
+        })
       }
+
+      // Only punches for people in this branch roster
+      const rosterIds = new Set(peopleMap.keys())
+      const scopedPunches = punches.filter(
+        (p) => p.branchId === branchId && rosterIds.has(p.userId),
+      )
+
       const next = summarizeStaffAttendance(
-        punches,
+        scopedPunches,
         [...peopleMap.values()].map((u) => ({
           id: u.id,
           fullName: u.fullName,
           role: u.role,
           email: u.email,
         })),
-      )
+      ).filter((s) => {
+        const person = peopleMap.get(s.userId)
+        return Boolean(person && person.branchId === branchId)
+      })
+
       setSummaries(next)
       setSelectedUserId((prev) => {
         if (prev && next.some((s) => s.userId === prev)) return prev
@@ -199,7 +226,7 @@ export function BranchAttendancePage() {
     <div className="space-y-5">
       <AdminPageBanner
         title="Branch Attendance"
-        description={`Review Time In / Time Out for ${branchName} staff. Filter by date, open a staff card, and export hours for payroll or audits.`}
+        description={`Review Time In / Time Out for ${branchName} staff only. Tap a session row to see selfie and punch details.`}
         stat={{
           value: formatAttendanceHours(branchTotals.totalHours),
           label: 'Total hours',
@@ -376,7 +403,11 @@ export function BranchAttendancePage() {
                   No Time In / Time Out records in this date range.
                 </p>
               ) : (
-                <div className="overflow-x-auto rounded-[12px] border border-border">
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-ui">
+                    Tap a row to open selfie and punch details.
+                  </p>
+                  <div className="overflow-x-auto rounded-[12px] border border-border">
                   <table className="min-w-full text-left text-sm">
                     <thead className="bg-ivory-50 text-[11px] uppercase tracking-wide text-slate-ui">
                       <tr>
@@ -390,7 +421,11 @@ export function BranchAttendancePage() {
                     </thead>
                     <tbody className="divide-y divide-border/70">
                       {selected.sessions.map((session) => (
-                        <tr key={session.timeIn.id} className="bg-white">
+                        <tr
+                          key={session.timeIn.id}
+                          className="cursor-pointer bg-white transition hover:bg-emerald-50/70"
+                          onClick={() => setSessionModal({ staff: selected, session })}
+                        >
                           <td className="whitespace-nowrap px-3 py-3 font-medium text-charcoal">
                             {session.dateKey}
                           </td>
@@ -438,11 +473,23 @@ export function BranchAttendancePage() {
                     </tbody>
                   </table>
                 </div>
+                </div>
               )}
             </div>
           )}
         </Card>
       </div>
+
+      {sessionModal ? (
+        <AttendanceSessionModal
+          staffName={sessionModal.staff.fullName}
+          staffRole={sessionModal.staff.role}
+          staffEmail={sessionModal.staff.email}
+          branchName={branchName}
+          session={sessionModal.session}
+          onClose={() => setSessionModal(null)}
+        />
+      ) : null}
     </div>
   )
 }
@@ -485,6 +532,176 @@ function MiniStat({ label, value }: { label: string; value: string }) {
     <div className="rounded-[10px] border border-border bg-ivory-50 px-3 py-2 text-center">
       <p className="text-[10px] uppercase tracking-wide text-slate-ui">{label}</p>
       <p className="text-sm font-semibold text-[#073D2C]">{value}</p>
+    </div>
+  )
+}
+
+function AttendanceSessionModal({
+  staffName,
+  staffRole,
+  staffEmail,
+  branchName,
+  session,
+  onClose,
+}: {
+  staffName: string
+  staffRole: string
+  staffEmail: string
+  branchName: string
+  session: AttendanceSession
+  onClose: () => void
+}) {
+  const [timeInPhoto, setTimeInPhoto] = useState<string | null>(null)
+  const [timeOutPhoto, setTimeOutPhoto] = useState<string | null>(null)
+  const [loadingPhotos, setLoadingPhotos] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadingPhotos(true)
+    void (async () => {
+      try {
+        const [inUrl, outUrl] = await Promise.all([
+          resolveAttendancePhotoUrl(session.timeIn.photoUrl),
+          session.timeOut
+            ? resolveAttendancePhotoUrl(session.timeOut.photoUrl)
+            : Promise.resolve(null),
+        ])
+        if (!cancelled) {
+          setTimeInPhoto(inUrl)
+          setTimeOutPhoto(outUrl)
+        }
+      } finally {
+        if (!cancelled) setLoadingPhotos(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [session])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-emerald-950/45 backdrop-blur-[1px]"
+        aria-label="Close"
+        onClick={onClose}
+      />
+      <div className="relative z-10 flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-[18px] bg-white shadow-2xl sm:rounded-[18px]">
+        <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-ui">
+              Attendance detail
+            </p>
+            <h3 className="truncate font-display text-lg font-semibold text-charcoal">
+              {staffName}
+            </h3>
+            <p className="truncate text-xs capitalize text-slate-ui">
+              {roleLabel(staffRole)}
+              {staffEmail ? ` · ${staffEmail}` : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border text-charcoal hover:bg-ivory-50"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 overflow-y-auto px-4 py-4 sm:px-5">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={session.timeOut ? 'success' : 'warning'}>
+              {session.timeOut ? 'Complete' : 'Open'}
+            </Badge>
+            <span className="rounded-full bg-ivory-100 px-2.5 py-0.5 text-xs font-medium text-slate-ui">
+              {session.dateKey}
+            </span>
+            <span className="rounded-full bg-ivory-100 px-2.5 py-0.5 text-xs font-medium text-slate-ui">
+              {branchName}
+            </span>
+            <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900">
+              {formatAttendanceHours(session.hours)}
+            </span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <PunchPhotoCard
+              title="Time In"
+              when={formatManilaDateTime(session.timeIn.punchedAt)}
+              location={session.timeIn.locationLabel}
+              photoUrl={timeInPhoto}
+              loading={loadingPhotos}
+            />
+            <PunchPhotoCard
+              title="Time Out"
+              when={
+                session.timeOut
+                  ? formatManilaDateTime(session.timeOut.punchedAt)
+                  : null
+              }
+              location={session.timeOut?.locationLabel ?? null}
+              photoUrl={timeOutPhoto}
+              loading={loadingPhotos}
+              emptyLabel="No Time Out yet"
+            />
+          </div>
+        </div>
+
+        <div className="border-t border-border px-4 py-3 sm:px-5">
+          <Button type="button" className="w-full" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PunchPhotoCard({
+  title,
+  when,
+  location,
+  photoUrl,
+  loading,
+  emptyLabel,
+}: {
+  title: string
+  when: string | null
+  location: string | null | undefined
+  photoUrl: string | null
+  loading: boolean
+  emptyLabel?: string
+}) {
+  return (
+    <div className="overflow-hidden rounded-[14px] border border-border bg-ivory-50/50">
+      <div className="border-b border-border/70 px-3 py-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-ui">{title}</p>
+        {when ? (
+          <p className="mt-0.5 text-sm font-medium text-[#073D2C]">{when}</p>
+        ) : (
+          <p className="mt-0.5 text-sm text-slate-ui">{emptyLabel ?? '—'}</p>
+        )}
+      </div>
+      <div className="aspect-[4/3] bg-[#0A2E26]/90">
+        {loading ? (
+          <div className="grid h-full place-items-center text-xs text-white/70">Loading…</div>
+        ) : photoUrl ? (
+          <img src={photoUrl} alt={`${title} selfie`} className="h-full w-full object-cover" />
+        ) : (
+          <div className="grid h-full place-items-center px-3 text-center text-xs text-white/65">
+            {when ? 'No selfie on file' : emptyLabel ?? '—'}
+          </div>
+        )}
+      </div>
+      {location ? (
+        <p className="flex items-start gap-1.5 px-3 py-2 text-[11px] leading-snug text-slate-ui">
+          <MapPin className="mt-0.5 h-3 w-3 shrink-0 text-[#C5A059]" />
+          <span>{location}</span>
+        </p>
+      ) : null}
     </div>
   )
 }
