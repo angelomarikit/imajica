@@ -16,7 +16,6 @@ import {
 import type { Client, PaymentMethod } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { useAuth } from '@/contexts/AuthContext'
 
 export type CheckoutCartLine = {
   id: string
@@ -99,7 +98,6 @@ export function BookingCheckoutModal({
   onPlaced: () => void
   onLineStaffChange: (lineId: string, staffId: string) => void
 }) {
-  const { user } = useAuth()
   const { selectedBranchId, selectedBranch } = useBranch()
   const forcedBranchId = useForcedBranchId()
 
