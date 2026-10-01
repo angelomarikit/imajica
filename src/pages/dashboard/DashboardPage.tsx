@@ -33,8 +33,7 @@ import { getDirectoryStaff } from '@/services/staffDirectoryService'
 import type { Appointment, Client, OperationalExpense, Sale, Staff } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { isBranchOwner, isHqRole, isTimeclockStaff } from '@/utils/franchiseAccess'
-import { TimeClockPage } from '@/pages/attendance/TimeClockPage'
+import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
 const COMMISSION_RATE = 0.05
 
@@ -215,10 +214,6 @@ function BirthdayBlock({
 }
 
 export function DashboardPage() {
-  const { user } = useAuth()
-  if (isTimeclockStaff(user)) {
-    return <TimeClockPage />
-  }
   return <BranchOpsDashboard />
 }
 

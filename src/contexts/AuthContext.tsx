@@ -12,6 +12,7 @@ import type { AuthSessionUser, UserRole } from '@/types'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { getBranches } from '@/services/branchService'
 import { teamAccountsAsDemoUsers } from '@/constants/teamAccountsSeed'
+import { kioskStaffAsDemoUsers } from '@/constants/kioskStaffSeed'
 
 interface AuthContextValue {
   user: AuthSessionUser | null
@@ -71,6 +72,7 @@ const DEMO_USERS: Record<string, AuthSessionUser & { password: string }> = {
     password: 'password123',
   },
   ...teamAccountsAsDemoUsers(),
+  ...kioskStaffAsDemoUsers(),
 }
 
 const STAFF_ROLES: UserRole[] = [

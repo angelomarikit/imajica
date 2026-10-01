@@ -280,7 +280,7 @@ function buildTimeclockStaffNavSections(): NavSection[] {
   const sections: NavSection[] = [
     {
       items: [
-        { to: '/admin/dashboard', label: 'Time In / Out', icon: Clock },
+        { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { to: '/admin/attendance', label: 'My Attendance', icon: CalendarDays },
       ],
     },

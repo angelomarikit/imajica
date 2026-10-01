@@ -281,6 +281,12 @@ export function LoginPage() {
               Create an account
             </Link>
           </p>
+          <p className="mt-3 text-center text-sm text-[#6b6b6b]">
+            Staff attendance?{' '}
+            <Link to="/timeclock" className="font-medium text-[#C5A059] hover:underline">
+              Open timeclock kiosk
+            </Link>
+          </p>
         </form>
 
         <p className="absolute bottom-4 right-5 text-[11px] text-[#8a8a8a]">{BRAND.copyright}</p>

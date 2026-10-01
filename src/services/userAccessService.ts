@@ -1,6 +1,7 @@
 import type { AccessUser } from '@/types'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { teamAccountsAsAccessUsers } from '@/constants/teamAccountsSeed'
+import { kioskStaffAsAccessUsers } from '@/constants/kioskStaffSeed'
 
 const KEY = 'imajica_access_users'
 const CHANGE = 'imajica:access-users-changed'
@@ -54,6 +55,7 @@ function mapRow(row: DirectoryRow): AccessUser {
 function localUsers(): AccessUser[] {
   const byId = new Map<string, AccessUser>()
   for (const u of SEED) byId.set(u.id, u)
+  for (const u of kioskStaffAsAccessUsers()) byId.set(u.id, u)
   for (const u of readStored()) {
     if (u.deleted) byId.delete(u.id)
     else byId.set(u.id, u)

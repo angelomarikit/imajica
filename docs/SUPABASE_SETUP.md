@@ -77,6 +77,7 @@ Or in **Dashboard → SQL Editor**, paste and run **each file in order**. Confir
 | 37 | `supabase/migrations/20260929000037_staff_attendance.sql` |
 | 38 | `supabase/migrations/20260929000038_attendance_location_label.sql` |
 | 39 | `supabase/migrations/20260929000039_attendance_delete_own.sql` |
+| 40 | `supabase/migrations/20260929000040_kiosk_employee_codes.sql` |
 
 Step 23 adds missing RLS policies, creates the **Headquarters** sentinel branch (`00000000-0000-0000-0000-000000000001` / code `HQ`), and deletes any leftover demo transactional rows.
 
@@ -91,6 +92,8 @@ Step 35 seeds **43 team login accounts** from the legacy User List into Auth + `
 Step 36 lets HQ change any account role from Branches Accounts (all system roles; org roles land on the HQ sentinel).
 
 Step 37 adds **staff attendance** (`staff_attendance_logs` + private storage bucket `attendance-selfies`) for Time In / Time Out with selfie and geolocation.
+
+Step 40 adds **kiosk employee numbers** (`profiles.employee_code`), seeds 13 `@imajica.com` STAFF accounts, and public RPCs for the shared `/timeclock` page (no login). See `docs/KIOSK_STAFF_CREDENTIALS.md`.
 
 **Create accounts inside the web app** (recommended): the UI calls Edge Function `create-branch-account`, which creates Auth + profile + branch role. You do **not** add users in the Authentication dashboard for this flow.
 

@@ -767,3 +767,145 @@ export async function exportBranchAttendanceXlsx(input: {
     : `${input.filename}.xlsx`
   XLSX.writeFile(workbook, name)
 }
+
+export type KioskEmployeeLookup = {
+  ok: true
+  userId: string
+  fullName: string
+  employeeCode: string
+  branchId: string | null
+  branchName: string
+  role: string
+  canTimeIn: boolean
+  canTimeOut: boolean
+}
+
+export type KioskPunchResult = {
+  ok: true
+  id: string
+  fullName: string
+  employeeCode: string
+  punchType: AttendancePunchType
+  punchedAt: string
+  branchName: string
+  locationLabel: string | null
+}
+
+/** Resolve employee by kiosk number (works offline via seed; online via RPC). */
+export async function kioskLookupEmployee(employeeCode: string): Promise<KioskEmployeeLookup> {
+  const { findKioskStaffByCode, normalizeEmployeeCode } = await import('@/constants/kioskStaffSeed')
+  const code = normalizeEmployeeCode(employeeCode)
+
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase.rpc('kiosk_lookup_employee', {
+      p_employee_code: code,
+    })
+    if (error) throw new Error(error.message)
+    const row = data as Record<string, unknown> | null
+    if (!row || row.ok !== true) {
+      throw new Error(String(row?.error ?? 'Employee number not found'))
+    }
+    return {
+      ok: true,
+      userId: String(row.userId),
+      fullName: String(row.fullName),
+      employeeCode: String(row.employeeCode),
+      branchId: row.branchId ? String(row.branchId) : null,
+      branchName: String(row.branchName ?? 'Branch'),
+      role: String(row.role ?? 'STAFF'),
+      canTimeIn: Boolean(row.canTimeIn),
+      canTimeOut: Boolean(row.canTimeOut),
+    }
+  }
+
+  const staff = findKioskStaffByCode(code)
+  if (!staff) throw new Error('Employee number not found')
+  const status = await getTodayAttendanceStatus(staff.id)
+  return {
+    ok: true,
+    userId: staff.id,
+    fullName: staff.fullName,
+    employeeCode: staff.employeeCode,
+    branchId: staff.branchId,
+    branchName: staff.branchName,
+    role: staff.role,
+    canTimeIn: status.canTimeIn,
+    canTimeOut: status.canTimeOut,
+  }
+}
+
+/** Shared kiosk punch — no login; employee number + GPS only (no selfie). */
+export async function kioskAttendancePunch(input: {
+  employeeCode: string
+  punchType: AttendancePunchType
+  latitude: number
+  longitude: number
+  accuracyM: number | null
+  locationLabel: string
+}): Promise<KioskPunchResult> {
+  const { findKioskStaffByCode, normalizeEmployeeCode } = await import('@/constants/kioskStaffSeed')
+  const code = normalizeEmployeeCode(input.employeeCode)
+
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase.rpc('kiosk_attendance_punch', {
+      p_employee_code: code,
+      p_punch_type: input.punchType,
+      p_latitude: input.latitude,
+      p_longitude: input.longitude,
+      p_accuracy_m: input.accuracyM,
+      p_location_label: input.locationLabel,
+    })
+    if (error) throw new Error(error.message)
+    const row = data as Record<string, unknown> | null
+    if (!row || row.ok !== true) {
+      throw new Error(String(row?.error ?? 'Punch failed'))
+    }
+    emit()
+    return {
+      ok: true,
+      id: String(row.id),
+      fullName: String(row.fullName),
+      employeeCode: String(row.employeeCode),
+      punchType: row.punchType as AttendancePunchType,
+      punchedAt: String(row.punchedAt),
+      branchName: String(row.branchName ?? 'Branch'),
+      locationLabel: row.locationLabel ? String(row.locationLabel) : null,
+    }
+  }
+
+  const staff = findKioskStaffByCode(code)
+  if (!staff) throw new Error('Employee number not found')
+  const status = await getTodayAttendanceStatus(staff.id)
+  if (input.punchType === 'time_in' && !status.canTimeIn) {
+    throw new Error('Already timed in. Please Time Out first.')
+  }
+  if (input.punchType === 'time_out' && !status.canTimeOut) {
+    throw new Error('Time In is required before Time Out.')
+  }
+
+  const punchedAt = new Date().toISOString()
+  const row: AttendancePunch = {
+    id: `att-${crypto.randomUUID()}`,
+    userId: staff.id,
+    branchId: staff.branchId,
+    punchType: input.punchType,
+    punchedAt,
+    photoUrl: null,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    accuracyM: input.accuracyM,
+    locationLabel: input.locationLabel,
+    createdAt: punchedAt,
+  }
+  writeLocal([row, ...readLocal()])
+  return {
+    ok: true,
+    id: row.id,
+    fullName: staff.fullName,
+    employeeCode: staff.employeeCode,
+    punchType: input.punchType,
+    punchedAt,
+    branchName: staff.branchName,
+    locationLabel: input.locationLabel,
+  }
+}

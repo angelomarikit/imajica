@@ -60,6 +60,7 @@ import { ViewProductPage } from '@/pages/catalog/ViewProductPage'
 import { EditProductPage } from '@/pages/catalog/EditProductPage'
 import { ServiceListPage } from '@/pages/catalog/ServiceListPage'
 import { DashboardPage } from '@/pages/dashboard/DashboardPage'
+import { KioskTimeClockPage } from '@/pages/attendance/KioskTimeClockPage'
 import { MyAttendancePage } from '@/pages/attendance/MyAttendancePage'
 import { BranchAttendancePage } from '@/pages/attendance/BranchAttendancePage'
 import { InventoryPage } from '@/pages/inventory/InventoryPage'
@@ -90,6 +91,7 @@ export default function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<HomeRedirect />} />
+              <Route path="/timeclock" element={<KioskTimeClockPage />} />
 
               <Route element={<PublicOnly />}>
                 <Route path="/login" element={<LoginPage />} />
