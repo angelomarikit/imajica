@@ -236,11 +236,6 @@ export function BookingPage() {
           promoLabel={appliedCoupon}
           onClose={() => setCheckoutOpen(false)}
           onPlaced={handleOrderPlaced}
-          onLineStaffChange={(lineId, staffId) =>
-            setCart((prev) =>
-              prev.map((l) => (l.id === lineId ? { ...l, lineStaffId: staffId } : l)),
-            )
-          }
         />
       ) : null}
 

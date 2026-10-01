@@ -23,7 +23,6 @@ export type CheckoutCartLine = {
   unitPrice: number
   quantity: number
   kind: string
-  lineStaffId?: string
 }
 
 export type BookingPaymentType = 'Full Payment' | 'Installment' | 'Split Payment'
@@ -60,11 +59,6 @@ const fieldLabel = 'mb-1 block text-[10px] font-bold uppercase tracking-[0.08em]
 const fieldControl =
   'h-10 w-full rounded-[10px] border border-border bg-white px-3 text-sm text-charcoal outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/15'
 
-function toDatetimeLocalValue(d: Date) {
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 function timeLabelFromDate(d: Date) {
   return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
 }
@@ -85,7 +79,6 @@ export function BookingCheckoutModal({
   promoLabel,
   onClose,
   onPlaced,
-  onLineStaffChange,
 }: {
   open: boolean
   patient: Client
@@ -96,7 +89,6 @@ export function BookingCheckoutModal({
   promoLabel?: string | null
   onClose: () => void
   onPlaced: () => void
-  onLineStaffChange: (lineId: string, staffId: string) => void
 }) {
   const { selectedBranchId, selectedBranch } = useBranch()
   const forcedBranchId = useForcedBranchId()
@@ -145,12 +137,6 @@ export function BookingCheckoutModal({
   const [usePoints, setUsePoints] = useState(false)
   const [primaryStaffId, setPrimaryStaffId] = useState('')
   const [doctorId, setDoctorId] = useState('')
-  const [startLocal, setStartLocal] = useState(() => toDatetimeLocalValue(new Date()))
-  const [endLocal, setEndLocal] = useState(() => {
-    const end = new Date()
-    end.setHours(end.getHours() + 1)
-    return toDatetimeLocalValue(end)
-  })
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -164,11 +150,17 @@ export function BookingCheckoutModal({
     setUsePoints(false)
     setPrimaryStaffId('')
     setDoctorId('')
-    const start = new Date()
-    const end = new Date(start.getTime() + 60 * 60_000)
-    setStartLocal(toDatetimeLocalValue(start))
-    setEndLocal(toDatetimeLocalValue(end))
   }, [open, total, patient.id])
+
+  // Drop invalid staff selection when branch roster changes
+  useEffect(() => {
+    if (primaryStaffId && !staffOptions.some((s) => s.id === primaryStaffId)) {
+      setPrimaryStaffId('')
+    }
+    if (doctorId && !doctorOptions.some((d) => d.id === doctorId)) {
+      setDoctorId('')
+    }
+  }, [staffOptions, doctorOptions, primaryStaffId, doctorId])
 
   const referrerMatches = useMemo(() => {
     const q = referrerQuery.trim().toLowerCase()
@@ -192,29 +184,31 @@ export function BookingCheckoutModal({
       return
     }
     if (!primaryStaffId) {
-      toast.error('Select primary staff')
+      toast.error('Select staff for this order')
       return
     }
     if (!cart.length) {
       toast.error('Cart is empty')
       return
     }
-
-    const primaryStaff = staffOptions.find((s) => s.id === primaryStaffId)
-    const doctor = doctorOptions.find((d) => d.id === doctorId)
-    const start = new Date(startLocal)
-    const end = new Date(endLocal)
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
-      toast.error('Enter a valid start and end time')
+    if (!branchId) {
+      toast.error('Select a branch first so staff can be assigned')
       return
     }
 
+    const primaryStaff = staffOptions.find((s) => s.id === primaryStaffId)
+    if (!primaryStaff) {
+      toast.error('Selected staff is not registered to this branch')
+      return
+    }
+    const doctor = doctorOptions.find((d) => d.id === doctorId)
+    const start = new Date()
     const amount = Math.max(0, Number(paymentAmount) || total)
     const pointsDiscount = usePoints ? Math.min(patient.rewardPoints ?? 0, amount) : 0
     const paidAmount = Math.max(0, amount - pointsDiscount)
     const createdAt = new Date().toISOString()
     const bookingRef = invoiceId
-    const durationMinutes = Math.max(15, Math.round((end.getTime() - start.getTime()) / 60_000))
+    const durationMinutes = 60
 
     const branches = getBranches()
     const resolvedBranch =
@@ -237,7 +231,6 @@ export function BookingCheckoutModal({
       const wasFirstVisit = (patient.totalVisits ?? 0) === 0 && !patient.lastSaleId
 
       for (const line of cart) {
-        const lineStaff = staffOptions.find((s) => s.id === (line.lineStaffId || primaryStaffId))
         const lineTotal =
           cart.length === 1
             ? paidAmount
@@ -250,8 +243,8 @@ export function BookingCheckoutModal({
           clientName: patient.fullName,
           branchId: saleBranchId,
           branchName: saleBranchName,
-          staffId: lineStaff?.id ?? primaryStaff?.id,
-          staffName: lineStaff?.fullName ?? primaryStaff?.fullName,
+          staffId: primaryStaff.id,
+          staffName: primaryStaff.fullName,
           doctorId: doctor?.id,
           doctorName: doctor?.fullName,
           treatmentOrPackage: line.name,
@@ -280,8 +273,8 @@ export function BookingCheckoutModal({
         branchId: saleBranchId,
         treatmentId: cart[0]?.id,
         treatmentName: cart.map((c) => c.name).join(', '),
-        staffId: primaryStaff?.id,
-        staffName: primaryStaff?.fullName,
+        staffId: primaryStaff.id,
+        staffName: primaryStaff.fullName,
         date: toDateKey(start),
         timeLabel: timeLabelFromDate(start),
         durationMinutes,
@@ -367,16 +360,15 @@ export function BookingCheckoutModal({
               <h3 className="text-sm font-semibold text-[#073D2C]">Order Summary</h3>
               <Badge variant="neutral">Ready to Pay</Badge>
             </div>
-            <div className="hidden grid-cols-[1.4fr_0.7fr_1fr] gap-2 px-1 text-[10px] font-bold uppercase tracking-wide text-slate-ui sm:grid">
+            <div className="hidden grid-cols-[1fr_auto] gap-2 px-1 text-[10px] font-bold uppercase tracking-wide text-slate-ui sm:grid">
               <span>Service Name</span>
               <span>Price</span>
-              <span>Staff</span>
             </div>
             <ul className="mt-1.5 space-y-2">
               {cart.map((line) => (
                 <li
                   key={line.id}
-                  className="grid gap-2 rounded-[10px] border border-border/70 bg-ivory-100/40 p-2.5 sm:grid-cols-[1.4fr_0.7fr_1fr] sm:items-center sm:border-0 sm:bg-transparent sm:p-0"
+                  className="grid gap-2 rounded-[10px] border border-border/70 bg-ivory-100/40 p-2.5 sm:grid-cols-[1fr_auto] sm:items-center sm:border-0 sm:bg-transparent sm:p-0"
                 >
                   <div>
                     <p className="text-[10px] font-bold uppercase text-slate-ui sm:hidden">
@@ -387,28 +379,13 @@ export function BookingCheckoutModal({
                       Qty {line.quantity} · {line.kind}
                     </p>
                   </div>
-                  <div>
+                  <div className="sm:min-w-[8.5rem]">
                     <p className="text-[10px] font-bold uppercase text-slate-ui sm:hidden">Price</p>
                     <input
                       readOnly
                       className={fieldControl}
                       value={formatPesoExact(line.unitPrice * line.quantity)}
                     />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold uppercase text-slate-ui sm:hidden">Staff</p>
-                    <select
-                      className={fieldControl}
-                      value={line.lineStaffId || ''}
-                      onChange={(e) => onLineStaffChange(line.id, e.target.value)}
-                    >
-                      <option value="">Select Staff</option>
-                      {staffOptions.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.fullName}
-                        </option>
-                      ))}
-                    </select>
                   </div>
                 </li>
               ))}
@@ -554,29 +531,42 @@ export function BookingCheckoutModal({
           {/* Booking Details */}
           <section className="rounded-[12px] border border-border bg-white p-3 sm:p-3.5">
             <h3 className="mb-2 text-sm font-semibold text-[#073D2C]">Booking Details</h3>
-            <div className="grid gap-2.5 sm:grid-cols-2">
-              <label className="block sm:col-span-2">
-                <span className={fieldLabel}>Primary Staff</span>
+            <div className="grid gap-2.5">
+              <label className="block">
+                <span className={fieldLabel}>Staff</span>
                 <select
                   className={cn(fieldControl, !primaryStaffId && 'text-slate-ui/70')}
                   value={primaryStaffId}
                   onChange={(e) => setPrimaryStaffId(e.target.value)}
                   required
+                  disabled={!branchId || staffOptions.length === 0}
                 >
-                  <option value="">Select Staff</option>
+                  <option value="">
+                    {!branchId
+                      ? 'Select a branch first'
+                      : staffOptions.length === 0
+                        ? 'No staff tagged to this branch'
+                        : 'Select Staff'}
+                  </option>
                   {staffOptions.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.fullName} · {s.title}
+                      {s.fullName}
                     </option>
                   ))}
                 </select>
+                {branchName ? (
+                  <p className="mt-1 text-[11px] text-slate-ui">
+                    Showing staff registered to {branchName} only
+                  </p>
+                ) : null}
               </label>
-              <label className="block sm:col-span-2">
+              <label className="block">
                 <span className={fieldLabel}>Doctor (Optional)</span>
                 <select
                   className={cn(fieldControl, !doctorId && 'text-slate-ui/70')}
                   value={doctorId}
                   onChange={(e) => setDoctorId(e.target.value)}
+                  disabled={!branchId}
                 >
                   <option value="">Select Doctor (optional)</option>
                   {doctorOptions.map((d) => (
@@ -585,26 +575,6 @@ export function BookingCheckoutModal({
                     </option>
                   ))}
                 </select>
-              </label>
-              <label className="block">
-                <span className={fieldLabel}>Start</span>
-                <input
-                  type="datetime-local"
-                  className={fieldControl}
-                  value={startLocal}
-                  onChange={(e) => setStartLocal(e.target.value)}
-                  required
-                />
-              </label>
-              <label className="block">
-                <span className={fieldLabel}>End</span>
-                <input
-                  type="datetime-local"
-                  className={fieldControl}
-                  value={endLocal}
-                  onChange={(e) => setEndLocal(e.target.value)}
-                  required
-                />
               </label>
             </div>
           </section>

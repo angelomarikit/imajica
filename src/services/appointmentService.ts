@@ -276,6 +276,7 @@ async function ensureRemoteBranch(branch: {
 }
 
 async function ensureRemoteClient(input: {
+  clientId?: string
   fullName: string
   email?: string
   phone?: string
@@ -286,6 +287,75 @@ async function ensureRemoteClient(input: {
   const fullName = input.fullName.trim()
   const email = input.email?.trim() || ''
   const phone = input.phone?.trim() || ''
+  const branchId = isUuid(input.branchId) ? input.branchId : null
+  const clientId = isUuid(input.clientId) ? input.clientId! : null
+
+  // Prefer security-definer RPC (avoids RLS SELECT blind spots on existing clients)
+  const { data: rpcData, error: rpcError } = await supabase.rpc('ensure_booking_client', {
+    p_full_name: fullName,
+    p_email: email || null,
+    p_phone: phone || null,
+    p_branch_id: branchId,
+    p_client_id: clientId,
+  })
+
+  if (!rpcError && rpcData) {
+    const row = rpcData as Record<string, unknown>
+    if (row.ok === true && row.id) {
+      const id = String(row.id)
+      const remoteName = String(row.fullName ?? fullName)
+      const remoteEmail = row.email ? String(row.email) : email
+      const remotePhone = row.phone ? String(row.phone) : phone
+      saveClient({
+        id,
+        code: `MJ-${id.slice(0, 8).toUpperCase()}`,
+        fullName: remoteName,
+        email: remoteEmail || '',
+        phone: remotePhone || '',
+        dateOfBirth: '',
+        gender: 'prefer_not_to_say',
+        preferredBranchId: input.branchId,
+        preferredBranchName: '',
+        status: 'active',
+        isVip: false,
+        registeredAt: new Date().toISOString().slice(0, 10),
+        totalVisits: 0,
+        totalSpent: 0,
+      })
+      return {
+        id,
+        fullName: remoteName,
+        email: remoteEmail || undefined,
+        phone: remotePhone || undefined,
+      }
+    }
+    if (row.ok === false && row.error) {
+      // Fall through to direct insert path if RPC missing older schema message
+      const msg = String(row.error)
+      if (!/function|schema cache|not found/i.test(msg)) {
+        throw new Error(msg)
+      }
+    }
+  } else if (rpcError && !/function|schema cache|does not exist|404/i.test(rpcError.message)) {
+    throw new Error(supabaseErrorMessage(rpcError))
+  }
+
+  // Legacy fallback when RPC not applied yet
+  if (clientId) {
+    const { data } = await supabase
+      .from('clients')
+      .select('id, full_name, email, phone')
+      .eq('id', clientId)
+      .maybeSingle()
+    if (data?.id) {
+      return {
+        id: data.id,
+        fullName: data.full_name,
+        email: data.email ?? undefined,
+        phone: data.phone ?? undefined,
+      }
+    }
+  }
 
   if (email) {
     const { data } = await supabase
@@ -329,7 +399,7 @@ async function ensureRemoteClient(input: {
       full_name: fullName,
       email: email || null,
       phone: phone || null,
-      preferred_branch_id: isUuid(input.branchId) ? input.branchId : null,
+      preferred_branch_id: branchId,
       gender: 'prefer_not_to_say',
       status: 'active',
     })
@@ -340,7 +410,6 @@ async function ensureRemoteClient(input: {
     throw new Error(supabaseErrorMessage(error || { message: 'Could not create client' }))
   }
 
-  // Keep local registry in sync with the remote UUID
   saveClient({
     id: data.id,
     code,
@@ -447,6 +516,7 @@ export async function createAppointment(input: CreateAppointmentInput): Promise<
   if (isSupabaseConfigured && supabase) {
     const remoteBranchId = await ensureRemoteBranch(branch)
     const remoteClient = await ensureRemoteClient({
+      clientId: input.clientId,
       fullName: input.clientName,
       email: input.clientEmail,
       phone: input.clientPhone,

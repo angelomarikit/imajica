@@ -248,51 +248,45 @@ export function getDirectoryStaff(): Staff[] {
 
 /**
  * Active non-doctor staff for booking checkout.
- * When branchId is set, only that clinic’s registered staff are returned (no all-branch fallback).
+ * When branchId is set, only accounts tagged to that clinic (Branches Accounts / kiosk).
  */
 export function getActiveStaffForBooking(branchId?: string): Staff[] {
-  const directory = getDirectoryStaff().filter((s) => {
-    if (s.status !== 'active') return false
-    if (s.role === 'DOCTOR') return false
-    if (branchId && !matchesStaffBranch(s, branchId)) return false
-    return true
-  })
-
-  if (!branchId) return mergeStaffById(directory)
+  if (!branchId) {
+    return mergeStaffById(
+      getDirectoryStaff().filter((s) => s.status === 'active' && s.role !== 'DOCTOR'),
+    )
+  }
 
   const bookingRoles = new Set<string>([
     ...TIMECLOCK_ROLES.filter((r) => r !== 'DOCTOR'),
     'BRANCH_ADMIN',
   ])
 
-  const fromAccounts = getAccessUsers()
-    .filter(
-      (u) =>
-        u.status === 'active' &&
-        u.branchId === branchId &&
-        bookingRoles.has(u.role as UserRole),
-    )
-    .map(accessUserToStaff)
-
-  return mergeStaffById([...directory, ...fromAccounts])
+  return mergeStaffById(
+    getAccessUsers()
+      .filter(
+        (u) =>
+          u.status === 'active' &&
+          u.branchId === branchId &&
+          bookingRoles.has(u.role as UserRole),
+      )
+      .map(accessUserToStaff),
+  )
 }
 
 /** Active doctors for booking checkout, scoped to a branch when provided. */
 export function getActiveDoctorsForBooking(branchId?: string): Staff[] {
-  const directory = getDirectoryStaff().filter((s) => {
-    if (s.status !== 'active') return false
-    if (s.role !== 'DOCTOR') return false
-    if (branchId && !matchesStaffBranch(s, branchId)) return false
-    return true
-  })
-
-  if (!branchId) return mergeStaffById(directory)
-
-  const fromAccounts = getAccessUsers()
-    .filter(
-      (u) => u.status === 'active' && u.branchId === branchId && u.role === 'DOCTOR',
+  if (!branchId) {
+    return mergeStaffById(
+      getDirectoryStaff().filter((s) => s.status === 'active' && s.role === 'DOCTOR'),
     )
-    .map(accessUserToStaff)
+  }
 
-  return mergeStaffById([...directory, ...fromAccounts])
+  return mergeStaffById(
+    getAccessUsers()
+      .filter(
+        (u) => u.status === 'active' && u.branchId === branchId && u.role === 'DOCTOR',
+      )
+      .map(accessUserToStaff),
+  )
 }
