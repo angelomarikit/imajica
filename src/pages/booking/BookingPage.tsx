@@ -16,10 +16,11 @@ import { TodaysBookingPanel } from '@/components/booking/TodaysBookingPanel'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { getPackagesCatalog, getServices } from '@/services/catalogService'
 import { getCoupons } from '@/services/couponService'
 import { getCatalogProducts } from '@/services/productCatalogService'
+import { preloadSalesData } from '@/services/salesService'
 import type { Client } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -45,6 +46,10 @@ function makeInvoiceId() {
 
 export function BookingPage() {
   const forcedBranchId = useForcedBranchId()
+  const effectiveBranchId = useEffectiveBranchId()
+  const bookingListBranchId =
+    forcedBranchId ||
+    (effectiveBranchId !== 'all' ? effectiveBranchId : undefined)
   const [patient, setPatient] = useState<Client | null>(null)
   const [patientOpen, setPatientOpen] = useState(false)
   const [qtyItem, setQtyItem] = useState<CatalogItem | null>(null)
@@ -202,6 +207,7 @@ export function BookingPage() {
     setDiscountMode('none')
     setInvoiceId(makeInvoiceId())
     setTab('today')
+    void preloadSalesData()
   }
 
   const clock = now.toLocaleString('en-US', {
@@ -474,9 +480,9 @@ export function BookingPage() {
               </div>
             </Card>
           ) : tab === 'today' ? (
-            <TodaysBookingPanel branchId={forcedBranchId} mode="today" />
+            <TodaysBookingPanel branchId={bookingListBranchId} mode="today" />
           ) : (
-            <TodaysBookingPanel branchId={forcedBranchId} mode="all" />
+            <TodaysBookingPanel branchId={bookingListBranchId} mode="all" />
           )}
         </div>
 

@@ -6,6 +6,7 @@ import {
   syncClientsFromImportedSales,
 } from '@/services/clientSalesProfileService'
 import { getClientById, saveClient } from '@/services/clientService'
+import { isUuid } from '@/utils/uuid'
 
 const EXTRA_KEY = 'imajica_analytics_sales'
 const CHANGE = 'imajica:analytics-changed'
@@ -18,13 +19,6 @@ let loaded = false
 
 function emitChange() {
   window.dispatchEvent(new Event(CHANGE))
-}
-
-function isUuid(value: string | undefined | null): boolean {
-  if (!value) return false
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  )
 }
 
 function readExtraSales(): Sale[] {
@@ -165,7 +159,7 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
   return out
 }
 
-async function fetchRemoteLiveSales(): Promise<Sale[]> {
+async function fetchRemoteLiveSales(): Promise<Sale[] | null> {
   if (!isSupabaseConfigured || !supabase) return []
 
   const { data, error } = await supabase
@@ -176,8 +170,8 @@ async function fetchRemoteLiveSales(): Promise<Sale[]> {
       invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
       sale_items ( id, name, quantity, unit_price, line_total, item_type, sku ),
       payments ( payment_method, payment_status ),
-      clients ( full_name ),
-      branches ( name )
+      clients!client_id ( full_name ),
+      branches!branch_id ( name )
     `,
     )
     .order('created_at', { ascending: false })
@@ -185,7 +179,7 @@ async function fetchRemoteLiveSales(): Promise<Sale[]> {
 
   if (error) {
     console.error('[sales] remote fetch failed', error.message)
-    return []
+    return null
   }
   return mapRemoteSales((data as RemoteSaleRow[] | null) ?? [])
 }
@@ -195,8 +189,11 @@ export async function preloadSalesData(): Promise<void> {
   if (loaded) {
     // Refresh remote on each call after first load so re-login picks up DB rows
     if (isSupabaseConfigured) {
-      remoteLiveSales = await fetchRemoteLiveSales()
-      emitChange()
+      const remote = await fetchRemoteLiveSales()
+      if (remote) {
+        remoteLiveSales = remote
+        emitChange()
+      }
     }
     return
   }
@@ -217,10 +214,10 @@ export async function preloadSalesData(): Promise<void> {
     }
 
     try {
-      remoteLiveSales = await fetchRemoteLiveSales()
+      const remote = await fetchRemoteLiveSales()
+      if (remote) remoteLiveSales = remote
     } catch (err) {
       console.error('[sales] remote preload failed', err)
-      remoteLiveSales = []
     } finally {
       loaded = true
       emitChange()
@@ -257,7 +254,7 @@ export function subscribeSalesData(listener: () => void): () => void {
 
 /** Future: booking checkout appends here and recomputes client profile */
 export function appendExtraSale(sale: Sale): void {
-  const extra = readExtraSales()
+  const extra = readExtraSales().filter((s) => s.id !== sale.id)
   extra.unshift(sale)
   localStorage.setItem(EXTRA_KEY, JSON.stringify(extra.slice(0, 500)))
   emitChange()
@@ -309,8 +306,11 @@ export async function recordBookingCheckout(
   }))
 
   if (isSupabaseConfigured && supabase) {
-    if (!isUuid(head.branchId)) {
-      throw new Error('Branch is not linked to the database. Pick a clinic branch and try again.')
+    const branchId = head.branchId?.trim() ?? ''
+    if (!isUuid(branchId)) {
+      throw new Error(
+        'Branch is not linked to the database. Pick San Mateo, Cainta, Pasig, or another clinic branch and try again.',
+      )
     }
     if (!isUuid(head.clientId)) {
       throw new Error('Customer is not linked to the database. Re-select the patient and try again.')
@@ -320,7 +320,7 @@ export async function recordBookingCheckout(
     const { error: saleError } = await supabase.from('sales').insert({
       id: saleId,
       client_id: head.clientId,
-      branch_id: head.branchId,
+      branch_id: branchId,
       // Access-user / kiosk ids are not public.staff rows — store name only
       staff_id: null,
       staff_name: head.staffName ?? null,
@@ -399,6 +399,8 @@ export async function recordBookingCheckout(
     })
 
     remoteLiveSales = [...persisted, ...remoteLiveSales]
+    // Also mirror to localStorage so Today's Booking stays visible if remote refresh fails
+    for (const sale of persisted) appendExtraSale(sale)
   } else {
     for (const sale of persisted) appendExtraSale(sale)
   }

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { useBranch } from '@/contexts/BranchContext'
 import { createAppointment, ensureBookingClient, toDateKey } from '@/services/appointmentService'
-import { getBranches } from '@/services/branchService'
+import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import { getClients, saveClient } from '@/services/clientService'
 import { recordBookingCheckout } from '@/services/salesService'
 import {
@@ -16,6 +16,7 @@ import {
 import type { Client, PaymentMethod } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { isUuid } from '@/utils/uuid'
 
 export type CheckoutCartLine = {
   id: string
@@ -94,11 +95,12 @@ export function BookingCheckoutModal({
   const forcedBranchId = useForcedBranchId()
 
   /** Checkout clinic: locked branch → header branch → patient preferred branch */
-  const branchId =
+  const rawBranchId =
     forcedBranchId ||
     (selectedBranchId !== 'all' ? selectedBranchId : '') ||
     patient.preferredBranchId ||
     ''
+  const branchId = resolveClinicBranchId(rawBranchId) || (isUuid(rawBranchId) ? rawBranchId : '')
   const branchName =
     selectedBranch?.name ||
     getBranches().find((b) => b.id === branchId)?.name ||
@@ -211,16 +213,20 @@ export function BookingCheckoutModal({
     const durationMinutes = 60
 
     const branches = getBranches()
+    const resolvedId =
+      resolveClinicBranchId(branchId) ||
+      resolveClinicBranchId(patient.preferredBranchId) ||
+      resolveClinicBranchId(patient.preferredBranchName)
     const resolvedBranch =
+      branches.find((b) => b.id === resolvedId) ||
       branches.find((b) => b.id === branchId) ||
       branches.find(
         (b) =>
           patient.preferredBranchName &&
           b.name.toLowerCase().includes(patient.preferredBranchName.toLowerCase().split(',')[0]!),
-      ) ||
-      branches[0]
-    if (!resolvedBranch) {
-      toast.error('No branch available for this booking')
+      )
+    if (!resolvedBranch || !isUuid(resolvedBranch.id)) {
+      toast.error('Select a clinic branch (San Mateo, Cainta, Pasig, …) before placing the order')
       return
     }
     const saleBranchId = resolvedBranch.id

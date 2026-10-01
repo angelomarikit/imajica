@@ -151,6 +151,26 @@ export function getBranches(): Branch[] {
   return [...byId.values()].sort((a, b) => a.code.localeCompare(b.code))
 }
 
+/** Resolve a clinic branch UUID for Supabase writes (id, code, or name). */
+export function resolveClinicBranchId(
+  branchIdOrName: string | null | undefined,
+): string | null {
+  if (!branchIdOrName) return null
+  const raw = branchIdOrName.trim()
+  if (!raw) return null
+  const branches = getBranches().filter((b) => b.branchType !== 'warehouse')
+  const byId = branches.find((b) => b.id === raw)
+  if (byId) return byId.id
+  const byCode = branches.find((b) => b.code.toLowerCase() === raw.toLowerCase())
+  if (byCode) return byCode.id
+  const needle = raw.toLowerCase().replace(/,/g, ' ').replace(/\s+/g, ' ').trim()
+  const byName = branches.find((b) => {
+    const name = b.name.toLowerCase().replace(/,/g, ' ').replace(/\s+/g, ' ').trim()
+    return name === needle || name.includes(needle) || needle.includes(name.split(' ')[0]!)
+  })
+  return byName?.id ?? null
+}
+
 export function subscribeBranches(listener: () => void) {
   const onStorage = (e: StorageEvent) => {
     if (e.key === KEY) listener()

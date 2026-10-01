@@ -2,6 +2,7 @@ import { getBranches } from '@/services/branchService'
 import { getClients, registerClient, saveClient } from '@/services/clientService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import type { Appointment, AppointmentStatus } from '@/types'
+import { isUuid } from '@/utils/uuid'
 
 const STORAGE_KEY = 'imajica_appointments'
 const CHANGE_EVENT = 'imajica:appointments-changed'
@@ -213,13 +214,6 @@ const SELECT_FIELDS = `
   treatments ( name ),
   staff ( full_name )
 `
-
-function isUuid(value: string | undefined | null): boolean {
-  if (!value) return false
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  )
-}
 
 function supabaseErrorMessage(error: { message?: string; details?: string; hint?: string; code?: string }) {
   return [error.message, error.details, error.hint].filter(Boolean).join(' — ') || 'Request failed'

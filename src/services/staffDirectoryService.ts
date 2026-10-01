@@ -267,7 +267,8 @@ export function getActiveStaffForBooking(branchId?: string): Staff[] {
       .filter(
         (u) =>
           u.status === 'active' &&
-          u.branchId === branchId &&
+          Boolean(u.branchId) &&
+          matchesStaffBranch(u, branchId) &&
           bookingRoles.has(u.role as UserRole),
       )
       .map(accessUserToStaff),
@@ -285,7 +286,11 @@ export function getActiveDoctorsForBooking(branchId?: string): Staff[] {
   return mergeStaffById(
     getAccessUsers()
       .filter(
-        (u) => u.status === 'active' && u.branchId === branchId && u.role === 'DOCTOR',
+        (u) =>
+          u.status === 'active' &&
+          u.role === 'DOCTOR' &&
+          Boolean(u.branchId) &&
+          matchesStaffBranch(u, branchId),
       )
       .map(accessUserToStaff),
   )
