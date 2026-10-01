@@ -211,11 +211,19 @@ export function KioskTimeClockPage() {
       return
     }
     if (nextPunch === 'time_in' && !employee.canTimeIn) {
-      toast.error('Already timed in. Please Time Out first.')
+      toast.error(
+        employee.canTimeOut
+          ? 'Already timed in. Please Time Out first.'
+          : 'You already completed attendance for today. Try again tomorrow.',
+      )
       return
     }
     if (nextPunch === 'time_out' && !employee.canTimeOut) {
-      toast.error('Time In is required before Time Out.')
+      toast.error(
+        employee.canTimeIn
+          ? 'Time In is required before Time Out.'
+          : 'You already timed out for today.',
+      )
       return
     }
 

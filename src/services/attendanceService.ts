@@ -336,14 +336,14 @@ export async function getTodayAttendanceStatus(userId: string): Promise<TodayAtt
   const today = manilaDateKey()
   const punches = await listMyAttendanceForDay(userId, today)
   const lastPunch = punches.length ? punches[punches.length - 1]! : null
-  const openTimeIn =
-    lastPunch?.punchType === 'time_in'
-      ? lastPunch
-      : null
+  const hasTimedInToday = punches.some((p) => p.punchType === 'time_in')
+  /** Open session = last punch today is Time In (waiting for Time Out). */
+  const openTimeIn = lastPunch?.punchType === 'time_in' ? lastPunch : null
   return {
     punches,
     lastPunch,
-    canTimeIn: !openTimeIn,
+    // One Time In per Manila day — after Time Out, wait until tomorrow
+    canTimeIn: !hasTimedInToday,
     canTimeOut: Boolean(openTimeIn),
     openTimeIn,
   }
@@ -412,10 +412,18 @@ export async function recordAttendancePunch(input: {
 }): Promise<AttendancePunch> {
   const status = await getTodayAttendanceStatus(input.userId)
   if (input.punchType === 'time_in' && !status.canTimeIn) {
-    throw new Error('You already timed in. Please Time Out first.')
+    throw new Error(
+      status.openTimeIn
+        ? 'Already timed in. Please Time Out first.'
+        : 'You already completed attendance for today. Try again tomorrow.',
+    )
   }
   if (input.punchType === 'time_out' && !status.canTimeOut) {
-    throw new Error('Time In is required before Time Out.')
+    throw new Error(
+      status.punches.some((p) => p.punchType === 'time_out')
+        ? 'You already timed out for today.'
+        : 'Time In is required before Time Out.',
+    )
   }
 
   const punchedAt = new Date().toISOString()
@@ -520,12 +528,24 @@ export async function listBranchAttendance(
   fromDateKey?: string,
   toDateKey?: string,
 ): Promise<AttendancePunch[]> {
+  return listAttendanceForBranches([branchId], fromDateKey, toDateKey)
+}
+
+/** Multi-branch punches for HQ group attendance views. */
+export async function listAttendanceForBranches(
+  branchIds: string[],
+  fromDateKey?: string,
+  toDateKey?: string,
+): Promise<AttendancePunch[]> {
+  const ids = [...new Set(branchIds.filter(Boolean))]
+  if (!ids.length) return []
+
   let rows: AttendancePunch[]
   if (isSupabaseConfigured && supabase) {
     let query = supabase
       .from('staff_attendance_logs')
       .select(ATTENDANCE_SELECT)
-      .eq('branch_id', branchId)
+      .in('branch_id', ids)
       .order('punched_at', { ascending: false })
 
     if (fromDateKey) {
@@ -543,7 +563,7 @@ export async function listBranchAttendance(
         .select(
           'id, user_id, branch_id, punch_type, punched_at, photo_url, latitude, longitude, accuracy_m, created_at',
         )
-        .eq('branch_id', branchId)
+        .in('branch_id', ids)
         .order('punched_at', { ascending: false })
       if (fromDateKey) fallback = fallback.gte('punched_at', `${fromDateKey}T00:00:00+08:00`)
       if (toDateKey) fallback = fallback.lte('punched_at', `${toDateKey}T23:59:59.999+08:00`)
@@ -558,8 +578,9 @@ export async function listBranchAttendance(
     if (error) throw new Error(error.message)
     rows = ((data as DbRow[] | null) ?? []).map(mapRow)
   } else {
+    const idSet = new Set(ids)
     rows = readLocal()
-      .filter((p) => p.branchId === branchId)
+      .filter((p) => idSet.has(p.branchId))
       .filter((p) => {
         const key = manilaDateKey(p.punchedAt)
         if (fromDateKey && key < fromDateKey) return false
@@ -636,6 +657,8 @@ export type StaffAttendanceSummary = {
   fullName: string
   role: string
   email: string
+  branchId?: string | null
+  branchName?: string | null
   daysPresent: number
   sessionCount: number
   completedSessions: number
@@ -647,7 +670,14 @@ export type StaffAttendanceSummary = {
 
 export function summarizeStaffAttendance(
   punches: AttendancePunch[],
-  people: Array<{ id: string; fullName: string; role: string; email: string }>,
+  people: Array<{
+    id: string
+    fullName: string
+    role: string
+    email: string
+    branchId?: string | null
+    branchName?: string | null
+  }>,
 ): StaffAttendanceSummary[] {
   const byUser = new Map<string, AttendancePunch[]>()
   for (const p of punches) {
@@ -673,6 +703,8 @@ export function summarizeStaffAttendance(
       fullName: person?.fullName ?? `Staff ${id.slice(0, 8)}`,
       role: person?.role ?? 'STAFF',
       email: person?.email ?? '',
+      branchId: person?.branchId ?? userPunches[0]?.branchId ?? null,
+      branchName: person?.branchName ?? null,
       daysPresent: days.size,
       sessionCount: sessions.length,
       completedSessions: completed.length,
@@ -703,6 +735,7 @@ export async function exportBranchAttendanceXlsx(input: {
     [],
     [
       'Staff',
+      'Branch',
       'Role',
       'Email',
       'Days Present',
@@ -714,6 +747,7 @@ export async function exportBranchAttendanceXlsx(input: {
     ],
     ...input.summaries.map((s) => [
       s.fullName,
+      s.branchName ?? input.branchName,
       s.role.replaceAll('_', ' '),
       s.email,
       s.daysPresent,
@@ -733,6 +767,7 @@ export async function exportBranchAttendanceXlsx(input: {
   const detailRows: (string | number)[][] = [
     [
       'Staff',
+      'Branch',
       'Role',
       'Date',
       'Time In',
@@ -748,6 +783,7 @@ export async function exportBranchAttendanceXlsx(input: {
     for (const session of [...s.sessions].reverse()) {
       detailRows.push([
         s.fullName,
+        s.branchName ?? input.branchName,
         s.role.replaceAll('_', ' '),
         session.dateKey,
         formatManilaDateTime(session.timeIn.punchedAt),
@@ -880,10 +916,18 @@ export async function kioskAttendancePunch(input: {
   if (!staff) throw new Error('Employee number not found')
   const status = await getTodayAttendanceStatus(staff.id)
   if (input.punchType === 'time_in' && !status.canTimeIn) {
-    throw new Error('Already timed in. Please Time Out first.')
+    throw new Error(
+      status.openTimeIn
+        ? 'Already timed in. Please Time Out first.'
+        : 'You already completed attendance for today. Try again tomorrow.',
+    )
   }
   if (input.punchType === 'time_out' && !status.canTimeOut) {
-    throw new Error('Time In is required before Time Out.')
+    throw new Error(
+      status.punches.some((p) => p.punchType === 'time_out')
+        ? 'You already timed out for today.'
+        : 'Time In is required before Time Out.',
+    )
   }
 
   const punchedAt = new Date().toISOString()

@@ -210,9 +210,19 @@ const hqNavSections: NavSection[] = [
         label: 'New Client Sales',
         icon: UserPlus,
       },
+    ],
+  },
+  {
+    category: 'Attendance and Payroll',
+    items: [
       {
-        to: '/admin/reports/branch-attendance',
-        label: 'Branch Attendance',
+        to: '/admin/reports/branches-attendance',
+        label: 'Branches Attendance',
+        icon: Clock,
+      },
+      {
+        to: '/admin/reports/franchise-attendance',
+        label: 'Franchise Attendance',
         icon: Clock,
       },
     ],
@@ -275,8 +285,8 @@ function buildTimeclockStaffNavSections(): NavSection[] {
     '/admin/analytics/sales-product-report',
     '/admin/analytics/best-selling-treatments',
     '/admin/analytics/new-client-sales',
-    '/admin/reports/branch-attendance',
   ])
+  const hqOnlyCategories = new Set(['Attendance and Payroll'])
   const sections: NavSection[] = [
     {
       items: [
@@ -288,6 +298,7 @@ function buildTimeclockStaffNavSections(): NavSection[] {
   for (const section of hqNavSections) {
     if (!section.category) continue
     if (section.category === 'Team' || section.category === 'Marketing') continue
+    if (hqOnlyCategories.has(section.category)) continue
     if (section.category === 'Analytics') {
       const items = section.items.filter(
         (item) => !('to' in item && item.to && hqOnlyAnalytics.has(item.to)),

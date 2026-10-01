@@ -63,6 +63,8 @@ import { DashboardPage } from '@/pages/dashboard/DashboardPage'
 import { KioskTimeClockPage } from '@/pages/attendance/KioskTimeClockPage'
 import { MyAttendancePage } from '@/pages/attendance/MyAttendancePage'
 import { BranchAttendancePage } from '@/pages/attendance/BranchAttendancePage'
+import { BranchesAttendancePage } from '@/pages/attendance/BranchesAttendancePage'
+import { FranchiseAttendancePage } from '@/pages/attendance/FranchiseAttendancePage'
 import { InventoryPage } from '@/pages/inventory/InventoryPage'
 import { MarketingPage } from '@/pages/marketing/MarketingPage'
 import { PackagesPage } from '@/pages/packages/PackagesPage'
@@ -119,6 +121,22 @@ export default function App() {
                     <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'BRANCH_ADMIN']}>
                       <BranchAttendancePage />
                     </RequireRole>
+                  }
+                />
+                <Route
+                  path="reports/branches-attendance"
+                  element={
+                    <RequireHqAdmin>
+                      <BranchesAttendancePage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="reports/franchise-attendance"
+                  element={
+                    <RequireHqAdmin>
+                      <FranchiseAttendancePage />
+                    </RequireHqAdmin>
                   }
                 />
                 <Route path="appointments" element={<AppointmentsPage />} />
