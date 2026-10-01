@@ -1,7 +1,11 @@
 import type { AccessUser } from '@/types'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { teamAccountsAsAccessUsers } from '@/constants/teamAccountsSeed'
-import { kioskStaffAsAccessUsers } from '@/constants/kioskStaffSeed'
+import {
+  employeeCodeForFullName,
+  kioskStaffAsAccessUsers,
+  normalizeEmployeeCode,
+} from '@/constants/kioskStaffSeed'
 
 const KEY = 'imajica_access_users'
 const CHANGE = 'imajica:access-users-changed'
@@ -18,6 +22,7 @@ type DirectoryRow = {
   role_id: string | null
   branch_id: string | null
   branch_name: string | null
+  employee_code?: string | null
 }
 
 function emit() {
@@ -41,6 +46,7 @@ function writeStored(rows: Stored[]) {
 }
 
 function mapRow(row: DirectoryRow): AccessUser {
+  const fromDb = row.employee_code ? normalizeEmployeeCode(row.employee_code) : ''
   return {
     id: row.id,
     fullName: row.full_name,
@@ -49,16 +55,23 @@ function mapRow(row: DirectoryRow): AccessUser {
     branchId: row.branch_id,
     branchName: row.branch_name,
     status: row.status === 'inactive' ? 'inactive' : 'active',
+    employeeCode: fromDb || null,
   }
+}
+
+function withAlignedCode(u: AccessUser): AccessUser {
+  if (u.employeeCode) return u
+  const code = employeeCodeForFullName(u.fullName)
+  return code ? { ...u, employeeCode: code } : u
 }
 
 function localUsers(): AccessUser[] {
   const byId = new Map<string, AccessUser>()
-  for (const u of SEED) byId.set(u.id, u)
+  for (const u of SEED) byId.set(u.id, withAlignedCode(u))
   for (const u of kioskStaffAsAccessUsers()) byId.set(u.id, u)
   for (const u of readStored()) {
     if (u.deleted) byId.delete(u.id)
-    else byId.set(u.id, u)
+    else byId.set(u.id, withAlignedCode(u))
   }
   return [...byId.values()].sort((a, b) => a.fullName.localeCompare(b.fullName))
 }
@@ -68,9 +81,17 @@ export async function listAccessUsers(): Promise<AccessUser[]> {
   if (isSupabaseConfigured && supabase) {
     const { data, error } = await supabase
       .from('v_user_access_directory')
-      .select('id, full_name, email, status, role_id, branch_id, branch_name')
+      .select('id, full_name, email, status, role_id, branch_id, branch_name, employee_code')
       .order('full_name')
-    if (error) throw new Error(error.message)
+    if (error) {
+      // Fallback if employee_code column not in view yet
+      const fallback = await supabase
+        .from('v_user_access_directory')
+        .select('id, full_name, email, status, role_id, branch_id, branch_name')
+        .order('full_name')
+      if (fallback.error) throw new Error(fallback.error.message)
+      return (fallback.data as DirectoryRow[] | null)?.map(mapRow) ?? []
+    }
     return (data as DirectoryRow[] | null)?.map(mapRow) ?? []
   }
   return localUsers()
@@ -81,10 +102,9 @@ export async function listBranchAccounts(): Promise<AccessUser[]> {
   if (isSupabaseConfigured && supabase) {
     const { data, error } = await supabase
       .from('v_branch_accounts_directory')
-      .select('id, full_name, email, status, role_id, branch_id, branch_name')
+      .select('id, full_name, email, status, role_id, branch_id, branch_name, employee_code')
       .order('full_name')
     if (error) {
-      // Fallback if migration 30 not applied yet
       const all = await listAccessUsers()
       return all.filter((u) => Boolean(u.branchId))
     }
@@ -255,6 +275,41 @@ export async function saveAccessUser(row: AccessUser): Promise<void> {
       branchId: ORG_ROLES.has(row.role) ? null : row.branchId,
       branchName: ORG_ROLES.has(row.role) ? null : row.branchName,
     },
+  ])
+}
+
+/** Set or clear kiosk employee number on a profile (unique when set). */
+export async function saveEmployeeCode(userId: string, employeeCode: string): Promise<void> {
+  const normalized = employeeCode.trim() ? normalizeEmployeeCode(employeeCode) : ''
+
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase.rpc('set_profile_employee_code', {
+      p_user_id: userId,
+      p_employee_code: normalized || null,
+    })
+    if (error) throw new Error(error.message)
+    const row = data as { ok?: boolean; error?: string } | null
+    if (row && row.ok === false) {
+      throw new Error(row.error || 'Could not save employee number')
+    }
+    emit()
+    return
+  }
+
+  if (normalized) {
+    const taken = localUsers().find(
+      (u) => u.id !== userId && normalizeEmployeeCode(u.employeeCode ?? '') === normalized,
+    )
+    if (taken) {
+      throw new Error(`Employee number ${normalized} is already assigned to ${taken.fullName}`)
+    }
+  }
+
+  const found = localUsers().find((u) => u.id === userId)
+  if (!found) throw new Error('Account not found')
+  writeStored([
+    ...readStored().filter((u) => u.id !== userId),
+    { ...found, employeeCode: normalized || null },
   ])
 }
 

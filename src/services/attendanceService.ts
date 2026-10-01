@@ -834,10 +834,11 @@ export async function kioskLookupEmployee(employeeCode: string): Promise<KioskEm
   }
 }
 
-/** Shared kiosk punch — no login; employee number + GPS only (no selfie). */
+/** Shared kiosk punch — employee number + GPS + required selfie (no login). */
 export async function kioskAttendancePunch(input: {
   employeeCode: string
   punchType: AttendancePunchType
+  photoBlob: Blob
   latitude: number
   longitude: number
   accuracyM: number | null
@@ -845,6 +846,7 @@ export async function kioskAttendancePunch(input: {
 }): Promise<KioskPunchResult> {
   const { findKioskStaffByCode, normalizeEmployeeCode } = await import('@/constants/kioskStaffSeed')
   const code = normalizeEmployeeCode(input.employeeCode)
+  const photoUrl = await uploadKioskSelfie(code, input.photoBlob)
 
   if (isSupabaseConfigured && supabase) {
     const { data, error } = await supabase.rpc('kiosk_attendance_punch', {
@@ -854,6 +856,7 @@ export async function kioskAttendancePunch(input: {
       p_longitude: input.longitude,
       p_accuracy_m: input.accuracyM,
       p_location_label: input.locationLabel,
+      p_photo_url: photoUrl,
     })
     if (error) throw new Error(error.message)
     const row = data as Record<string, unknown> | null
@@ -890,7 +893,7 @@ export async function kioskAttendancePunch(input: {
     branchId: staff.branchId,
     punchType: input.punchType,
     punchedAt,
-    photoUrl: null,
+    photoUrl,
     latitude: input.latitude,
     longitude: input.longitude,
     accuracyM: input.accuracyM,
@@ -908,4 +911,37 @@ export async function kioskAttendancePunch(input: {
     branchName: staff.branchName,
     locationLabel: input.locationLabel,
   }
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error('Failed to read selfie'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+/** Upload kiosk selfie (anon-friendly path). Falls back to data URL if storage fails. */
+async function uploadKioskSelfie(employeeCode: string, blob: Blob): Promise<string> {
+  const day = manilaDateKey()
+  const ext = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg'
+  const path = `kiosk/${employeeCode}/${day}/${crypto.randomUUID()}.${ext}`
+
+  if (isSupabaseConfigured && supabase) {
+    const { error } = await supabase.storage.from('attendance-selfies').upload(path, blob, {
+      contentType: blob.type || 'image/jpeg',
+      upsert: false,
+    })
+    if (!error) {
+      const { data: signed, error: signErr } = await supabase.storage
+        .from('attendance-selfies')
+        .createSignedUrl(path, 60 * 60 * 24 * 365)
+      if (!signErr && signed?.signedUrl) return signed.signedUrl
+      return `storage:attendance-selfies/${path}`
+    }
+    // Fall through to data URL when bucket policy not applied yet
+  }
+
+  return blobToDataUrl(blob)
 }

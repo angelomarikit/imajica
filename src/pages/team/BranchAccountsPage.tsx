@@ -14,6 +14,7 @@ import {
   deleteBranchAccount,
   listBranchAccounts,
   saveAccessUser,
+  saveEmployeeCode,
   setAccessUserActive,
   subscribeAccessUsers,
 } from '@/services/userAccessService'
@@ -77,7 +78,8 @@ export function BranchAccountsPage() {
         u.fullName.toLowerCase().includes(q) ||
         u.email.toLowerCase().includes(q) ||
         (u.branchName ?? '').toLowerCase().includes(q) ||
-        u.role.toLowerCase().includes(q)
+        u.role.toLowerCase().includes(q) ||
+        (u.employeeCode ?? '').includes(q)
       )
     })
   }, [branchAccounts, query, branchFilter])
@@ -88,10 +90,11 @@ export function BranchAccountsPage() {
   function handleExport() {
     void exportXlsx(
       'imajica-branch-accounts.xlsx',
-      ['Full Name', 'Email', 'Role', 'Branch', 'Status'],
+      ['Full Name', 'Email', 'Employee #', 'Role', 'Branch', 'Status'],
       filtered.map((u) => [
         u.fullName,
         u.email,
+        u.employeeCode || '',
         u.role,
         u.branchName || '',
         u.status,
@@ -133,6 +136,19 @@ export function BranchAccountsPage() {
       .then(() => {
         toast.success('Branch account updated')
         setEditing(null)
+        return refresh()
+      })
+      .catch((err) => toast.error(err instanceof Error ? err.message : 'Save failed'))
+  }
+
+  function saveEmployeeNumber(u: AccessUser, code: string) {
+    void saveEmployeeCode(u.id, code)
+      .then(() => {
+        toast.success(
+          code.trim()
+            ? `Employee # saved for ${u.fullName}`
+            : `Employee # cleared for ${u.fullName}`,
+        )
         return refresh()
       })
       .catch((err) => toast.error(err instanceof Error ? err.message : 'Save failed'))
@@ -269,6 +285,7 @@ export function BranchAccountsPage() {
               <tr className="border-b border-border">
                 <th className="px-2 py-3">Full Name</th>
                 <th className="px-2 py-3">Email</th>
+                <th className="px-2 py-3">Employee #</th>
                 <th className="px-2 py-3">Role</th>
                 <th className="px-2 py-3">Branch</th>
                 <th className="px-2 py-3">Status</th>
@@ -278,7 +295,7 @@ export function BranchAccountsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-2 py-10 text-center text-slate-ui">
+                  <td colSpan={7} className="px-2 py-10 text-center text-slate-ui">
                     Loading branch accounts…
                   </td>
                 </tr>
@@ -290,6 +307,9 @@ export function BranchAccountsPage() {
                   <tr key={u.id} className="border-t border-border/70 hover:bg-ivory-100">
                     <td className="px-2 py-3 font-medium text-[#073D2C]">{u.fullName}</td>
                     <td className="px-2 py-3 text-slate-ui">{u.email}</td>
+                    <td className="px-2 py-3">
+                      <EmployeeCodeSaveControl user={u} onSave={saveEmployeeNumber} />
+                    </td>
                     <td className="px-2 py-3">
                       <RoleSaveControl user={u} onSave={saveRoleOnly} />
                     </td>
@@ -340,7 +360,7 @@ export function BranchAccountsPage() {
               })}
               {pageRows.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={6} className="px-2 py-10 text-center text-slate-ui">
+                  <td colSpan={7} className="px-2 py-10 text-center text-slate-ui">
                     No branch accounts yet. Create one and tag it to a branch from the directory.
                   </td>
                 </tr>
@@ -520,6 +540,46 @@ function RoleSaveControl({
         size="sm"
         disabled={!dirty}
         onClick={() => onSave(user, role)}
+        className="h-9 shrink-0 px-2.5 text-xs"
+      >
+        Save
+      </Button>
+    </div>
+  )
+}
+
+function EmployeeCodeSaveControl({
+  user,
+  onSave,
+}: {
+  user: AccessUser
+  onSave: (u: AccessUser, code: string) => void
+}) {
+  const saved = user.employeeCode ?? ''
+  const [code, setCode] = useState(saved)
+  const dirty = code.replace(/\D/g, '') !== saved.replace(/\D/g, '')
+
+  useEffect(() => {
+    setCode(user.employeeCode ?? '')
+  }, [user.id, user.employeeCode])
+
+  return (
+    <div className="flex min-w-[140px] max-w-[180px] items-center gap-1.5">
+      <input
+        type="text"
+        inputMode="numeric"
+        maxLength={3}
+        placeholder="e.g. 023"
+        value={code}
+        onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 3))}
+        aria-label={`Employee number for ${user.fullName}`}
+        className="h-9 w-[4.5rem] rounded-[8px] border border-border bg-white px-2 text-center font-mono text-sm font-semibold text-[#073D2C] tabular-nums"
+      />
+      <Button
+        type="button"
+        size="sm"
+        disabled={!dirty}
+        onClick={() => onSave(user, code)}
         className="h-9 shrink-0 px-2.5 text-xs"
       >
         Save

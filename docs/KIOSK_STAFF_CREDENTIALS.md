@@ -31,7 +31,7 @@ Portal login (optional) uses the emails below.
 1. Open `/timeclock` on a shared clinic device (no login).
 2. Enter the 3-digit employee number.
 3. Wait until location shows (GPS).
-4. Tap **Time In** or **Time Out**.
+4. Tap **Time In** or **Time Out**, take a selfie, then **Confirm**.
 
 Branch admins review punches under **Reports → Branch Attendance**.
 

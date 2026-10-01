@@ -71,6 +71,7 @@ export function kioskStaffAsAccessUsers(): AccessUser[] {
     branchId: a.branchId,
     branchName: a.branchName,
     status: a.status,
+    employeeCode: a.employeeCode,
   }))
 }
 
@@ -103,4 +104,41 @@ export function normalizeEmployeeCode(code: string): string {
   const digits = code.trim().replace(/\D/g, '')
   if (!digits) return ''
   return digits.padStart(3, '0').slice(-3)
+}
+
+/** Match a directory name to a seeded kiosk employee number (best-effort). */
+export function employeeCodeForFullName(fullName: string): string | null {
+  const norm = fullName
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!norm) return null
+
+  for (const s of KIOSK_STAFF_SEED) {
+    const seed = s.fullName
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (norm === seed) return s.employeeCode
+    // e.g. "Janice B. Aguirre" ↔ "Janice Aguirre", "Chloe Francisco" ↔ "Chloe Renee Francisco"
+    const normParts = norm.split(' ')
+    const seedParts = seed.split(' ')
+    const first = seedParts[0]
+    const last = seedParts[seedParts.length - 1]
+    if (
+      first &&
+      last &&
+      normParts[0] === first &&
+      normParts[normParts.length - 1] === last
+    ) {
+      return s.employeeCode
+    }
+  }
+  return null
 }

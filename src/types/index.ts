@@ -186,6 +186,8 @@ export interface AccessUser {
   branchId: string | null
   branchName: string | null
   status: 'active' | 'inactive'
+  /** Shared kiosk Time In / Out number (e.g. 023) */
+  employeeCode?: string | null
 }
 
 export interface Treatment {
