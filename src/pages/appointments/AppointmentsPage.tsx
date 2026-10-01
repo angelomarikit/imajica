@@ -9,10 +9,10 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AddClientScheduleModal } from '@/components/booking/AddClientScheduleModal'
+import { AppointmentDetailModal } from '@/components/appointments/AppointmentDetailModal'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { Drawer } from '@/components/ui/Drawer'
 import {
   listAppointments,
   subscribeAppointments,
@@ -87,6 +87,7 @@ export function AppointmentsPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [selectedAppt, setSelectedAppt] = useState<Appointment | null>(null)
   const [addOpen, setAddOpen] = useState(false)
+  const [statusSaving, setStatusSaving] = useState(false)
   const forcedBranchId = useForcedBranchId()
 
   const cells = useMemo(() => buildMonthCells(monthCursor), [monthCursor])
@@ -137,6 +138,7 @@ export function AppointmentsPage() {
   }, [forcedBranchId])
 
   async function updateStatus(id: string, status: AppointmentStatus) {
+    setStatusSaving(true)
     try {
       const updated = await updateAppointmentStatus(id, status)
       if (updated) {
@@ -146,6 +148,8 @@ export function AppointmentsPage() {
       toast.success(`Marked as ${status.replace('_', ' ')}`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Update failed')
+    } finally {
+      setStatusSaving(false)
     }
   }
 
@@ -484,71 +488,12 @@ export function AppointmentsPage() {
         </Card>
       )}
 
-      <Drawer
-        open={Boolean(selectedAppt)}
+      <AppointmentDetailModal
+        appointment={selectedAppt}
         onClose={() => setSelectedAppt(null)}
-        title={selectedAppt?.clientName}
-        footer={
-          selectedAppt ? (
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => void updateStatus(selectedAppt.id, 'completed')}
-              >
-                Mark Show
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => void updateStatus(selectedAppt.id, 'no_show')}
-              >
-                Mark No Show
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => void updateStatus(selectedAppt.id, 'pending')}
-              >
-                Mark Pending
-              </Button>
-              <Button onClick={() => void updateStatus(selectedAppt.id, 'confirmed')}>
-                Confirm
-              </Button>
-              <Button
-                variant="destructive"
-                className="col-span-2"
-                onClick={() => void updateStatus(selectedAppt.id, 'cancelled')}
-              >
-                Cancel Appointment
-              </Button>
-            </div>
-          ) : null
-        }
-      >
-        {selectedAppt ? (
-          <div className="space-y-3 text-sm">
-            <p>
-              <span className="text-slate-ui">Treatment:</span> {selectedAppt.treatmentName}
-            </p>
-            <p>
-              <span className="text-slate-ui">Branch:</span> {selectedAppt.branchName}
-            </p>
-            <p>
-              <span className="text-slate-ui">Staff:</span> {selectedAppt.staffName ?? 'Unassigned'}
-            </p>
-            <p>
-              <span className="text-slate-ui">When:</span>{' '}
-              {new Date(selectedAppt.startAt).toLocaleString()}
-            </p>
-            <p>
-              <span className="text-slate-ui">Status:</span> {selectedAppt.status.replace('_', ' ')}
-            </p>
-            {selectedAppt.notes ? (
-              <p>
-                <span className="text-slate-ui">Notes:</span> {selectedAppt.notes}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-      </Drawer>
+        onUpdateStatus={updateStatus}
+        saving={statusSaving}
+      />
 
       <AddClientScheduleModal
         open={addOpen}

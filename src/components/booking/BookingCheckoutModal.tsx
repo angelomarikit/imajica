@@ -5,10 +5,10 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { useBranch } from '@/contexts/BranchContext'
-import { createAppointment, toDateKey } from '@/services/appointmentService'
+import { createAppointment, ensureBookingClient, toDateKey } from '@/services/appointmentService'
 import { getBranches } from '@/services/branchService'
 import { getClients, saveClient } from '@/services/clientService'
-import { recordSaleFromBooking } from '@/services/salesService'
+import { recordBookingCheckout } from '@/services/salesService'
 import {
   getActiveDoctorsForBooking,
   getActiveStaffForBooking,
@@ -230,17 +230,26 @@ export function BookingCheckoutModal({
     try {
       const wasFirstVisit = (patient.totalVisits ?? 0) === 0 && !patient.lastSaleId
 
-      for (const line of cart) {
+      // Link / create customer in Supabase first so sales survive logout
+      const remoteClient = await ensureBookingClient({
+        clientId: patient.id,
+        fullName: patient.fullName,
+        email: patient.email,
+        phone: patient.phone,
+        branchId: saleBranchId,
+      })
+
+      const saleLines = cart.map((line) => {
         const lineTotal =
           cart.length === 1
             ? paidAmount
             : Math.round(
                 ((line.unitPrice * line.quantity) / Math.max(1, total || 1)) * paidAmount,
               )
-        recordSaleFromBooking({
+        return {
           invoiceNumber: invoiceId,
-          clientId: patient.id,
-          clientName: patient.fullName,
+          clientId: remoteClient.id,
+          clientName: remoteClient.fullName || patient.fullName,
           branchId: saleBranchId,
           branchName: saleBranchName,
           staffId: primaryStaff.id,
@@ -248,8 +257,11 @@ export function BookingCheckoutModal({
           doctorId: doctor?.id,
           doctorName: doctor?.fullName,
           treatmentOrPackage: line.name,
-          itemType:
-            line.kind === 'product' ? 'product' : line.kind === 'package' ? 'package' : 'service',
+          itemType: (line.kind === 'product'
+            ? 'product'
+            : line.kind === 'package'
+              ? 'package'
+              : 'service') as 'service' | 'package' | 'product',
           paymentType,
           bookingRef,
           quantity: line.quantity,
@@ -258,16 +270,18 @@ export function BookingCheckoutModal({
           isFirstClientSale: wasFirstVisit,
           totalAmount: lineTotal || line.unitPrice * line.quantity,
           paymentMethod: mapPaymentMethod(paymentMethod),
-          status: paymentType === 'Full Payment' ? 'paid' : 'pending',
+          status: (paymentType === 'Full Payment' ? 'paid' : 'pending') as 'paid' | 'pending',
           createdAt,
           referredByClientId: referredById || undefined,
           referredByName: selectedReferrer?.fullName,
-        })
-      }
+        }
+      })
+
+      await recordBookingCheckout(saleLines)
 
       await createAppointment({
-        clientId: patient.id,
-        clientName: patient.fullName,
+        clientId: remoteClient.id,
+        clientName: remoteClient.fullName || patient.fullName,
         clientEmail: patient.email,
         clientPhone: patient.phone,
         branchId: saleBranchId,
@@ -291,6 +305,16 @@ export function BookingCheckoutModal({
           .filter(Boolean)
           .join(' · '),
       })
+
+      // Keep local patient id in sync with remote UUID after first checkout
+      if (patient.id !== remoteClient.id) {
+        saveClient({
+          ...patient,
+          id: remoteClient.id,
+          totalVisits: Math.max(patient.totalVisits ?? 0, 1),
+          lastPurchaseAt: createdAt,
+        })
+      }
 
       if (referredById && selectedReferrer && wasFirstVisit) {
         saveClient({

@@ -1,4 +1,5 @@
-import type { Sale } from '@/types'
+import type { PaymentMethod, Sale } from '@/types'
+import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import {
   buildClientsFromSales,
   recomputeClientSalesProfile,
@@ -10,11 +11,20 @@ const EXTRA_KEY = 'imajica_analytics_sales'
 const CHANGE = 'imajica:analytics-changed'
 
 let importedSales: Sale[] = []
+/** Live booking sales loaded from Supabase (persist across devices / re-login) */
+let remoteLiveSales: Sale[] = []
 let loadPromise: Promise<void> | null = null
 let loaded = false
 
 function emitChange() {
   window.dispatchEvent(new Event(CHANGE))
+}
+
+function isUuid(value: string | undefined | null): boolean {
+  if (!value) return false
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  )
 }
 
 function readExtraSales(): Sale[] {
@@ -30,8 +40,11 @@ function readExtraSales(): Sale[] {
 
 function mergeSales(): Sale[] {
   const importIds = new Set(importedSales.map((s) => s.id))
-  const extra = readExtraSales().filter((s) => !importIds.has(s.id))
-  return [...extra, ...importedSales].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  const remoteIds = new Set(remoteLiveSales.map((s) => s.id))
+  const extra = readExtraSales().filter((s) => !importIds.has(s.id) && !remoteIds.has(s.id))
+  return [...extra, ...remoteLiveSales, ...importedSales].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  )
 }
 
 function applyImported(data: Sale[]) {
@@ -40,9 +53,153 @@ function applyImported(data: Sale[]) {
   syncClientsFromImportedSales(clients)
 }
 
-/** Load XLSX-derived sales JSON once; sync customer list from sales. */
+function touchClientFromSale(sale: Sale, all: Sale[]) {
+  const client = getClientById(sale.clientId)
+  if (client) {
+    const profile = recomputeClientSalesProfile(client.id, all)
+    saveClient({
+      ...client,
+      totalSpent: profile.contractValue,
+      lastPurchaseAt: sale.createdAt,
+      lastSaleId: sale.id,
+      totalVisits: Math.max(client.totalVisits ?? 0, 1),
+    })
+  } else {
+    const built = buildClientsFromSales(all).find((c) => c.id === sale.clientId)
+    if (built) syncClientsFromImportedSales([built])
+  }
+}
+
+type RemoteSaleRow = {
+  id: string
+  client_id: string | null
+  branch_id: string
+  staff_name: string | null
+  doctor_name: string | null
+  total_amount: number
+  status: string
+  created_at: string
+  invoice_number: string | null
+  payment_type: string | null
+  booking_ref: string | null
+  lead_source: string | null
+  referred_by_name: string | null
+  referred_by_client_id: string | null
+  sale_items:
+    | Array<{
+        id: string
+        name: string
+        quantity: number
+        unit_price: number
+        line_total: number
+        item_type: string
+        sku: string | null
+      }>
+    | null
+  payments: Array<{ payment_method: string; payment_status: string }> | null
+  clients: { full_name: string } | { full_name: string }[] | null
+  branches: { name: string } | { name: string }[] | null
+}
+
+function oneName(
+  value: { full_name?: string; name?: string } | { full_name?: string; name?: string }[] | null,
+  key: 'full_name' | 'name',
+): string {
+  if (!value) return ''
+  const row = Array.isArray(value) ? value[0] : value
+  return (row?.[key] as string | undefined) || ''
+}
+
+function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
+  const out: Sale[] = []
+  for (const row of rows) {
+    const clientName = oneName(row.clients, 'full_name') || 'Client'
+    const branchName = oneName(row.branches, 'name') || 'Branch'
+    const paymentMethod = (row.payments?.[0]?.payment_method || 'cash') as PaymentMethod
+    const items = row.sale_items?.length
+      ? row.sale_items
+      : [
+          {
+            id: row.id,
+            name: 'Sale',
+            quantity: 1,
+            unit_price: Number(row.total_amount),
+            line_total: Number(row.total_amount),
+            item_type: 'service',
+            sku: null,
+          },
+        ]
+
+    items.forEach((item, index) => {
+      const itemType =
+        item.item_type === 'package' || item.item_type === 'product' || item.item_type === 'service'
+          ? item.item_type
+          : 'service'
+      out.push({
+        id: `${row.id}:${item.id || index}`,
+        invoiceNumber: row.invoice_number || row.booking_ref || row.id.slice(0, 8),
+        clientId: row.client_id || '',
+        clientName,
+        branchId: row.branch_id,
+        branchName,
+        staffName: row.staff_name || undefined,
+        doctorName: row.doctor_name || undefined,
+        treatmentOrPackage: item.name,
+        itemType,
+        paymentType: row.payment_type || 'Full Payment',
+        bookingRef: row.booking_ref || row.invoice_number || undefined,
+        sku: item.sku || undefined,
+        quantity: item.quantity,
+        unitRetailPrice: Number(item.unit_price),
+        leadSource: row.lead_source || undefined,
+        referredByClientId: row.referred_by_client_id || undefined,
+        referredByName: row.referred_by_name || undefined,
+        totalAmount: Number(item.line_total),
+        paymentMethod,
+        status: (row.status as Sale['status']) || 'pending',
+        createdAt: row.created_at,
+        episodeKey: 'live-booking',
+      })
+    })
+  }
+  return out
+}
+
+async function fetchRemoteLiveSales(): Promise<Sale[]> {
+  if (!isSupabaseConfigured || !supabase) return []
+
+  const { data, error } = await supabase
+    .from('sales')
+    .select(
+      `
+      id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
+      invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
+      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku ),
+      payments ( payment_method, payment_status ),
+      clients ( full_name ),
+      branches ( name )
+    `,
+    )
+    .order('created_at', { ascending: false })
+    .limit(2500)
+
+  if (error) {
+    console.error('[sales] remote fetch failed', error.message)
+    return []
+  }
+  return mapRemoteSales((data as RemoteSaleRow[] | null) ?? [])
+}
+
+/** Load XLSX-derived sales JSON + remote booking sales once. */
 export async function preloadSalesData(): Promise<void> {
-  if (loaded) return
+  if (loaded) {
+    // Refresh remote on each call after first load so re-login picks up DB rows
+    if (isSupabaseConfigured) {
+      remoteLiveSales = await fetchRemoteLiveSales()
+      emitChange()
+    }
+    return
+  }
   if (loadPromise) return loadPromise
 
   loadPromise = (async () => {
@@ -57,6 +214,13 @@ export async function preloadSalesData(): Promise<void> {
     } catch (err) {
       console.error('[sales] preload failed', err)
       importedSales = []
+    }
+
+    try {
+      remoteLiveSales = await fetchRemoteLiveSales()
+    } catch (err) {
+      console.error('[sales] remote preload failed', err)
+      remoteLiveSales = []
     } finally {
       loaded = true
       emitChange()
@@ -74,7 +238,7 @@ export function getImportedSales(): Sale[] {
   return importedSales
 }
 
-/** All sales: imported JSON + future manual/booking extras in localStorage */
+/** All sales: local extras + remote booking sales + imported JSON */
 export function getSales(): Sale[] {
   return mergeSales()
 }
@@ -102,41 +266,153 @@ export function appendExtraSale(sale: Sale): void {
 export function deleteExtraSale(id: string): void {
   const next = readExtraSales().filter((s) => s.id !== id)
   localStorage.setItem(EXTRA_KEY, JSON.stringify(next))
+  remoteLiveSales = remoteLiveSales.filter((s) => s.id !== id)
   emitChange()
 }
 
-/** Remove a whole booking group (same invoice / bookingRef) from live extras. */
+/** Remove a whole booking group (same invoice / bookingRef) from live extras + remote. */
 export function deleteExtraSalesByBooking(bookingKey: string): void {
   const next = readExtraSales().filter((s) => {
     const key = s.bookingRef || s.invoiceNumber || s.id
     return key !== bookingKey
   })
   localStorage.setItem(EXTRA_KEY, JSON.stringify(next))
+  remoteLiveSales = remoteLiveSales.filter((s) => {
+    const key = s.bookingRef || s.invoiceNumber || s.id
+    return key !== bookingKey
+  })
   emitChange()
+
+  if (isSupabaseConfigured && supabase) {
+    void supabase.from('sales').delete().or(`booking_ref.eq.${bookingKey},invoice_number.eq.${bookingKey}`)
+  }
 }
 
-export function recordSaleFromBooking(saleInput: Omit<Sale, 'id'>): Sale {
-  const sale: Sale = {
-    ...saleInput,
-    id: `sale-live-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-  }
-  appendExtraSale(sale)
-  const all = mergeSales()
-  const client = getClientById(sale.clientId)
-  if (client) {
-    const profile = recomputeClientSalesProfile(client.id, all)
-    saveClient({
-      ...client,
-      totalSpent: profile.contractValue,
-      lastPurchaseAt: sale.createdAt,
-      lastSaleId: sale.id,
-      totalVisits: Math.max(client.totalVisits ?? 0, 1),
+/**
+ * Persist one checkout cart as a single sale header + line items in Supabase,
+ * and keep local/UI Sale rows for Today's Booking.
+ */
+export async function recordBookingCheckout(
+  lines: Array<Omit<Sale, 'id'>>,
+): Promise<Sale[]> {
+  if (!lines.length) return []
+
+  const head = lines[0]!
+  const createdAt = head.createdAt || new Date().toISOString()
+  const totalAmount = lines.reduce((sum, l) => sum + (l.totalAmount || 0), 0)
+
+  let persisted: Sale[] = lines.map((line, index) => ({
+    ...line,
+    id: `sale-live-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+    createdAt,
+    episodeKey: 'live-booking',
+  }))
+
+  if (isSupabaseConfigured && supabase) {
+    if (!isUuid(head.branchId)) {
+      throw new Error('Branch is not linked to the database. Pick a clinic branch and try again.')
+    }
+    if (!isUuid(head.clientId)) {
+      throw new Error('Customer is not linked to the database. Re-select the patient and try again.')
+    }
+
+    const saleId = crypto.randomUUID()
+    const { error: saleError } = await supabase.from('sales').insert({
+      id: saleId,
+      client_id: head.clientId,
+      branch_id: head.branchId,
+      // Access-user / kiosk ids are not public.staff rows — store name only
+      staff_id: null,
+      staff_name: head.staffName ?? null,
+      doctor_id: null,
+      doctor_name: head.doctorName ?? null,
+      subtotal: totalAmount,
+      discount: 0,
+      tax: 0,
+      total_amount: totalAmount,
+      status: head.status,
+      invoice_number: head.invoiceNumber,
+      payment_type: head.paymentType ?? 'Full Payment',
+      booking_ref: head.bookingRef ?? head.invoiceNumber,
+      lead_source: head.leadSource ?? null,
+      referred_by_client_id: isUuid(head.referredByClientId) ? head.referredByClientId : null,
+      referred_by_name: head.referredByName ?? null,
+      created_at: createdAt,
     })
+
+    if (saleError) {
+      throw new Error(saleError.message || 'Could not save sale')
+    }
+
+    const itemRows = lines.map((line) => ({
+      sale_id: saleId,
+      item_type: line.itemType || 'service',
+      item_id: null,
+      name: line.treatmentOrPackage,
+      quantity: line.quantity ?? 1,
+      unit_price: line.unitRetailPrice ?? line.totalAmount,
+      discount: 0,
+      line_total: line.totalAmount,
+      sku: line.sku ?? null,
+      unit_cost: line.unitBaseCost ?? null,
+    }))
+
+    const { data: insertedItems, error: itemError } = await supabase
+      .from('sale_items')
+      .insert(itemRows)
+      .select('id, name, quantity, unit_price, line_total, item_type, sku')
+
+    if (itemError) {
+      throw new Error(itemError.message || 'Could not save sale items')
+    }
+
+    const { error: payError } = await supabase.from('payments').insert({
+      sale_id: saleId,
+      provider: 'pos',
+      payment_method: head.paymentMethod,
+      payment_status: head.status === 'paid' ? 'paid' : 'pending',
+      payment_amount: totalAmount,
+      payment_date: createdAt,
+    })
+
+    if (payError) {
+      // Sale + items already saved — warn but don't wipe the order
+      console.error('[sales] payment row failed', payError.message)
+    }
+
+    persisted = (insertedItems ?? itemRows).map((item, index) => {
+      const line = lines[index]!
+      const itemType =
+        (item as { item_type?: string }).item_type === 'package' ||
+        (item as { item_type?: string }).item_type === 'product' ||
+        (item as { item_type?: string }).item_type === 'service'
+          ? ((item as { item_type: string }).item_type as Sale['itemType'])
+          : line.itemType
+      const itemId = (item as { id?: string }).id || String(index)
+      return {
+        ...line,
+        id: `${saleId}:${itemId}`,
+        createdAt,
+        episodeKey: 'live-booking' as const,
+        itemType,
+      }
+    })
+
+    remoteLiveSales = [...persisted, ...remoteLiveSales]
   } else {
-    const built = buildClientsFromSales(all).find((c) => c.id === sale.clientId)
-    if (built) syncClientsFromImportedSales([built])
+    for (const sale of persisted) appendExtraSale(sale)
   }
-  return sale
+
+  const all = mergeSales()
+  touchClientFromSale(persisted[0]!, all)
+  emitChange()
+  return persisted
+}
+
+/** @deprecated prefer recordBookingCheckout for multi-line carts */
+export async function recordSaleFromBooking(saleInput: Omit<Sale, 'id'>): Promise<Sale> {
+  const [sale] = await recordBookingCheckout([saleInput])
+  return sale!
 }
 
 export type TodayBookingRow = {
@@ -205,6 +481,14 @@ function localDateKey(iso: string): string {
   return `${y}-${m}-${day}`
 }
 
+function isLiveSale(sale: Sale): boolean {
+  return (
+    sale.episodeKey === 'live-booking' ||
+    sale.id.startsWith('sale-live-') ||
+    /^[0-9a-f-]{36}:/i.test(sale.id)
+  )
+}
+
 /** Group sales into booking rows (invoice / bookingRef). Optional day filter YYYY-MM-DD. */
 export function getBookingRows(opts?: {
   dateKey?: string
@@ -252,7 +536,7 @@ export function getBookingRows(opts?: {
       branchId: head.branchId,
       branchName: head.branchName,
       saleIds: sorted.map((l) => l.id),
-      isLive: sorted.some((l) => l.id.startsWith('sale-live-')),
+      isLive: sorted.some(isLiveSale),
     })
   }
 

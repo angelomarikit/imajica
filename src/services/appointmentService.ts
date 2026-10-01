@@ -275,6 +275,26 @@ async function ensureRemoteBranch(branch: {
   )
 }
 
+/** Find or create remote client for booking / sales (Supabase). Offline returns local shape. */
+export async function ensureBookingClient(input: {
+  clientId?: string
+  fullName: string
+  email?: string
+  phone?: string
+  branchId: string
+}): Promise<{ id: string; fullName: string; email?: string; phone?: string }> {
+  if (!isSupabaseConfigured || !supabase) {
+    const local = getClients().find((c) => c.id === input.clientId)
+    return {
+      id: input.clientId || local?.id || `cl-${Date.now()}`,
+      fullName: input.fullName.trim() || local?.fullName || 'Client',
+      email: input.email?.trim() || local?.email,
+      phone: input.phone?.trim() || local?.phone,
+    }
+  }
+  return ensureRemoteClient(input)
+}
+
 async function ensureRemoteClient(input: {
   clientId?: string
   fullName: string
