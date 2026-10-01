@@ -94,6 +94,8 @@ export function KioskTimeClockPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const punchTypeRef = useRef<AttendancePunchType | null>(null)
+  /** Auto-open camera once per looked-up employee + punch type (cancel keeps manual button). */
+  const autoStartedRef = useRef<string | null>(null)
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 1000)
@@ -148,6 +150,7 @@ export function KioskTimeClockPage() {
     setEmployee(null)
     setLookupError(null)
     setLastSuccess(null)
+    autoStartedRef.current = null
     const digits = code.replace(/\D/g, '')
     if (digits.length !== 3) return
     const handle = window.setTimeout(() => {
@@ -204,6 +207,16 @@ export function KioskTimeClockPage() {
         : prev,
     )
   }, [geo, pending])
+
+  const nextPunchForEmployee = useCallback(
+    (row: KioskEmployeeLookup | null): AttendancePunchType | null => {
+      if (!row) return null
+      if (row.canTimeIn) return 'time_in'
+      if (row.canTimeOut) return 'time_out'
+      return null
+    },
+    [],
+  )
 
   async function beginSession(nextPunch: AttendancePunchType) {
     if (!employee) {
@@ -267,6 +280,18 @@ export function KioskTimeClockPage() {
       )
     }
   }
+
+  // After a valid employee lookup, open the camera for the next required punch
+  useEffect(() => {
+    if (!employee || lookingUp || livePreview || pending || saving) return
+    const next = nextPunchForEmployee(employee)
+    if (!next) return
+    const key = `${employee.employeeCode}:${next}`
+    if (autoStartedRef.current === key) return
+    autoStartedRef.current = key
+    void beginSession(next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- beginSession closes over latest employee
+  }, [employee, lookingUp, livePreview, pending, saving, nextPunchForEmployee])
 
   /** ONLY from Take selfie — never auto-capture */
   function handleTakeSelfieClick() {
@@ -428,6 +453,8 @@ export function KioskTimeClockPage() {
   const locationReady =
     geo.status === 'ready' && Boolean(pending?.locationLabel || geo.locationLabel)
   const inCapture = livePreview || Boolean(pending)
+  const activePunch = nextPunchForEmployee(employee)
+  const activePunchLabel = activePunch === 'time_in' ? 'Time In' : activePunch === 'time_out' ? 'Time Out' : null
 
   return (
     <div className="min-h-dvh bg-[linear-gradient(160deg,#F7F4EC_0%,#EFE8DA_45%,#E4DDD0_100%)] px-3 py-5 sm:px-6 sm:py-8">
@@ -503,42 +530,50 @@ export function KioskTimeClockPage() {
                   </button>
                 </div>
 
-                <div className="mt-5 grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    disabled={!employee || !employee.canTimeIn}
-                    onClick={() => void beginSession('time_in')}
-                    className={cn(
-                      'h-12 rounded-full text-sm font-bold uppercase tracking-wide text-white transition sm:h-14',
-                      'bg-[#073D2C] hover:bg-[#0a4f3a] disabled:cursor-not-allowed disabled:opacity-40',
-                    )}
-                  >
-                    Time In
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!employee || !employee.canTimeOut}
-                    onClick={() => void beginSession('time_out')}
-                    className={cn(
-                      'h-12 rounded-full text-sm font-bold uppercase tracking-wide text-white transition sm:h-14',
-                      'bg-[#0d5c45] hover:bg-[#0a4f3a] disabled:cursor-not-allowed disabled:opacity-40',
-                    )}
-                  >
-                    Time Out
-                  </button>
-                </div>
+                {employee && activePunch && activePunchLabel ? (
+                  <div className="mt-5">
+                    <button
+                      type="button"
+                      onClick={() => void beginSession(activePunch)}
+                      className={cn(
+                        'h-14 w-full rounded-full text-sm font-bold uppercase tracking-wide text-white transition sm:h-16',
+                        activePunch === 'time_in'
+                          ? 'bg-[#073D2C] hover:bg-[#0a4f3a]'
+                          : 'bg-[#0d5c45] hover:bg-[#0a4f3a]',
+                      )}
+                    >
+                      {activePunchLabel}
+                    </button>
+                    <p className="mt-2 text-center text-xs text-slate-ui">
+                      Camera opens automatically — tap {activePunchLabel} only if you cancelled.
+                    </p>
+                  </div>
+                ) : null}
+
+                {employee && !activePunch ? (
+                  <p className="mt-5 rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-3 text-center text-sm font-medium text-amber-950">
+                    Attendance complete for today. Come back tomorrow for Time In.
+                  </p>
+                ) : null}
               </>
             ) : null}
 
             {livePreview ? (
               <div className="mt-5 space-y-3">
+                <div
+                  className={cn(
+                    'inline-flex rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-wide text-white',
+                    punchType === 'time_in' ? 'bg-[#073D2C]' : 'bg-[#0d5c45]',
+                  )}
+                >
+                  {punchType === 'time_in' ? 'Time In' : 'Time Out'}
+                </div>
                 <p className="rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-950">
                   Live preview only — nothing is saved until you press{' '}
                   <span className="font-bold">Take selfie</span>, then Confirm.
                 </p>
                 <p className="text-sm text-[#073D2C]">
-                  {punchType === 'time_in' ? 'Time In' : 'Time Out'}: allow camera access if asked,
-                  center your face, then tap Take selfie.
+                  Center your face, then tap Take selfie.
                 </p>
                 <div className="relative overflow-hidden rounded-[14px] border border-border bg-black">
                   <video
@@ -577,6 +612,14 @@ export function KioskTimeClockPage() {
 
             {pending ? (
               <div className="mt-5 space-y-4">
+                <div
+                  className={cn(
+                    'inline-flex rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-wide text-white',
+                    pending.punchType === 'time_in' ? 'bg-[#073D2C]' : 'bg-[#0d5c45]',
+                  )}
+                >
+                  {pending.punchType === 'time_in' ? 'Time In' : 'Time Out'}
+                </div>
                 <p className="text-sm font-medium text-[#073D2C]">
                   Confirm your {pending.punchType === 'time_in' ? 'Time In' : 'Time Out'}
                 </p>
@@ -650,12 +693,13 @@ export function KioskTimeClockPage() {
               </p>
               <div className="my-6 h-px w-16 bg-[#C5A059]/70" />
               <p className="max-w-xs text-sm leading-relaxed text-white/85">
-                Enter your number, tap Time In or Time Out, allow the camera, take a selfie, then
-                Confirm.
+                Enter your number — the camera opens for Time In or Time Out automatically. Take a
+                selfie, then Confirm.
               </p>
               {employee ? (
                 <p className="mt-6 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-[#E8D9B8]">
                   {employee.branchName}
+                  {activePunchLabel ? ` · ${activePunchLabel}` : ''}
                 </p>
               ) : (
                 <p className="mt-6 text-xs uppercase tracking-[0.2em] text-white/50">Staff kiosk</p>
