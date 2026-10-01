@@ -285,32 +285,40 @@ export function BookingCheckoutModal({
 
       await recordBookingCheckout(saleLines)
 
-      await createAppointment({
-        clientId: remoteClient.id,
-        clientName: remoteClient.fullName || patient.fullName,
-        clientEmail: patient.email,
-        clientPhone: patient.phone,
-        branchId: saleBranchId,
-        treatmentId: cart[0]?.id,
-        treatmentName: cart.map((c) => c.name).join(', '),
-        staffId: primaryStaff.id,
-        staffName: primaryStaff.fullName,
-        date: toDateKey(start),
-        timeLabel: timeLabelFromDate(start),
-        durationMinutes,
-        status: 'confirmed',
-        clientStatus: 'Paid',
-        leadSource,
-        downPayment: paidAmount,
-        notes: [
-          doctor ? `Doctor: ${doctor.fullName}` : null,
-          selectedReferrer ? `Referred by: ${selectedReferrer.fullName}` : null,
-          `Payment: ${paymentType} / ${PAYMENT_METHODS.find((m) => m.value === paymentMethod)?.label}`,
-          discount > 0 ? `Discount: ${formatPesoExact(discount)}` : null,
-        ]
-          .filter(Boolean)
-          .join(' · '),
-      })
+      try {
+        await createAppointment({
+          clientId: remoteClient.id,
+          clientName: remoteClient.fullName || patient.fullName,
+          clientEmail: patient.email,
+          clientPhone: patient.phone,
+          branchId: saleBranchId,
+          treatmentId: cart[0]?.id,
+          treatmentName: cart.map((c) => c.name).join(', '),
+          staffId: primaryStaff.id,
+          staffName: primaryStaff.fullName,
+          date: toDateKey(start),
+          timeLabel: timeLabelFromDate(start),
+          durationMinutes,
+          status: 'confirmed',
+          clientStatus: 'Paid',
+          leadSource,
+          downPayment: paidAmount,
+          notes: [
+            doctor ? `Doctor: ${doctor.fullName}` : null,
+            selectedReferrer ? `Referred by: ${selectedReferrer.fullName}` : null,
+            `Payment: ${paymentType} / ${PAYMENT_METHODS.find((m) => m.value === paymentMethod)?.label}`,
+            discount > 0 ? `Discount: ${formatPesoExact(discount)}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        })
+      } catch (apptErr) {
+        // Sale already persisted — don't fail the whole checkout over schedule insert
+        console.error('[booking] appointment after sale failed', apptErr)
+        toast.warning('Order saved, but schedule sync failed', {
+          description: apptErr instanceof Error ? apptErr.message : 'Check Appointments later',
+        })
+      }
 
       // Keep local patient id in sync with remote UUID after first checkout
       if (patient.id !== remoteClient.id) {

@@ -454,12 +454,14 @@ function buildAppointmentInsertPayload(
   remoteClientId: string,
   remoteBranchId: string,
   includeScheduleFields: boolean,
+  opts?: { staffFk?: string | null; treatmentFk?: string | null },
 ) {
   const base = {
     client_id: remoteClientId,
     branch_id: remoteBranchId,
-    treatment_id: isUuid(appointment.treatmentId) ? appointment.treatmentId : null,
-    staff_id: isUuid(appointment.staffId) ? appointment.staffId : null,
+    // Catalog / kiosk / access-user ids are not public.treatments / public.staff rows
+    treatment_id: opts?.treatmentFk ?? null,
+    staff_id: opts?.staffFk ?? null,
     start_at: appointment.startAt,
     end_at: appointment.endAt,
     duration_minutes: appointment.durationMinutes,
@@ -483,6 +485,24 @@ function buildAppointmentInsertPayload(
     client_phone: appointment.clientPhone ?? null,
     client_email: appointment.clientEmail ?? null,
   }
+}
+
+/** Only return an id that actually exists in public.staff (booking pickers use access-user UUIDs). */
+async function resolveStaffFk(staffId: string | undefined): Promise<string | null> {
+  if (!supabase || !isUuid(staffId)) return null
+  const { data } = await supabase.from('staff').select('id').eq('id', staffId!).maybeSingle()
+  return data?.id ?? null
+}
+
+/** Only return an id that actually exists in public.treatments (catalog uses svc-seed-* ids). */
+async function resolveTreatmentFk(treatmentId: string | undefined): Promise<string | null> {
+  if (!supabase || !isUuid(treatmentId)) return null
+  const { data } = await supabase
+    .from('treatments')
+    .select('id')
+    .eq('id', treatmentId!)
+    .maybeSingle()
+  return data?.id ?? null
 }
 
 export async function listAppointments(): Promise<Appointment[]> {
@@ -565,12 +585,16 @@ export async function createAppointment(input: CreateAppointmentInput): Promise<
       price: input.downPayment ?? 0,
     }
 
+    const staffFk = await resolveStaffFk(input.staffId)
+    const treatmentFk = await resolveTreatmentFk(input.treatmentId)
+
     const insertOnce = async (includeScheduleFields: boolean) => {
       const payload = buildAppointmentInsertPayload(
         appointment,
         remoteClient.id,
         remoteBranchId,
         includeScheduleFields,
+        { staffFk, treatmentFk },
       )
       return supabase!
         .from('appointments')
@@ -581,7 +605,27 @@ export async function createAppointment(input: CreateAppointmentInput): Promise<
 
     let primary = await insertOnce(true)
     if (primary.error) {
-      primary = await insertOnce(false)
+      // Retry without schedule columns (older DB) or with FKs cleared after constraint errors
+      const isFk =
+        /foreign key|not present in table/i.test(primary.error.message || '') ||
+        primary.error.code === '23503'
+      if (isFk) {
+        const payload = buildAppointmentInsertPayload(
+          appointment,
+          remoteClient.id,
+          remoteBranchId,
+          true,
+          { staffFk: null, treatmentFk: null },
+        )
+        primary = await supabase!
+          .from('appointments')
+          .insert(payload)
+          .select(SELECT_FIELDS as string)
+          .single()
+      }
+      if (primary.error) {
+        primary = await insertOnce(false)
+      }
     }
 
     if (primary.error || !primary.data) {

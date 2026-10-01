@@ -335,7 +335,7 @@ export async function recordBookingCheckout(
       payment_type: head.paymentType ?? 'Full Payment',
       booking_ref: head.bookingRef ?? head.invoiceNumber,
       lead_source: head.leadSource ?? null,
-      referred_by_client_id: isUuid(head.referredByClientId) ? head.referredByClientId : null,
+      referred_by_client_id: null,
       referred_by_name: head.referredByName ?? null,
       created_at: createdAt,
     })
