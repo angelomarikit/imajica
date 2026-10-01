@@ -225,6 +225,11 @@ const hqNavSections: NavSection[] = [
         label: 'Franchise Attendance',
         icon: Clock,
       },
+      {
+        to: '/admin/reports/payroll',
+        label: 'Payroll',
+        icon: Wallet,
+      },
     ],
   },
   {

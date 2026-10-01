@@ -56,9 +56,9 @@ const PAYMENT_METHODS: { value: BookingPaymentMethodChoice; label: string }[] = 
   { value: 'owners_account', label: 'Owners Account' },
 ]
 
-const fieldLabel = 'mb-1.5 block text-[11px] font-bold uppercase tracking-[0.08em] text-slate-ui'
+const fieldLabel = 'mb-1 block text-[10px] font-bold uppercase tracking-[0.08em] text-slate-ui'
 const fieldControl =
-  'h-11 w-full rounded-[10px] border border-border bg-white px-3 text-sm text-charcoal outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/15'
+  'h-10 w-full rounded-[10px] border border-border bg-white px-3 text-sm text-charcoal outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/15'
 
 function toDatetimeLocalValue(d: Date) {
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -328,40 +328,43 @@ export function BookingCheckoutModal({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto p-4 sm:p-6">
+    <div className="fixed inset-0 z-[95] flex items-center justify-center p-3 sm:p-5">
       <button
         type="button"
-        className="fixed inset-0 bg-[#041c18]/50 backdrop-blur-[1px]"
+        className="absolute inset-0 bg-[#041c18]/50 backdrop-blur-[1px]"
         aria-label="Close"
         onClick={onClose}
       />
       <form
         onSubmit={handlePlaceOrder}
-        className="relative z-10 my-4 w-full max-w-2xl overflow-hidden rounded-[16px] bg-[#eef2f7] shadow-2xl"
+        className="relative z-10 flex max-h-[min(92dvh,880px)] w-full max-w-2xl flex-col overflow-hidden rounded-[16px] bg-[#eef2f7] shadow-2xl"
       >
-        <div className="flex items-start justify-between gap-3 border-b border-border/60 bg-white px-5 py-4 sm:px-6">
-          <div>
-            <h2 className="font-display text-xl font-semibold tracking-tight text-[#073D2C] sm:text-2xl">
+        {/* Sticky header — always visible */}
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border/60 bg-white px-4 py-3 sm:px-5">
+          <div className="min-w-0">
+            <h2 className="truncate font-display text-lg font-semibold tracking-tight text-[#073D2C] sm:text-xl">
               {patient.fullName}
             </h2>
-            <p className="mt-0.5 text-sm text-slate-ui">Total Service: {cart.length}</p>
-            <p className="text-sm text-slate-ui">Complete payment and booking details.</p>
+            <p className="mt-0.5 text-xs text-slate-ui sm:text-sm">
+              Total Service: {cart.length} · Due {formatPesoExact(total)}
+            </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-ivory-100"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-ivory-100"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="max-h-[min(78vh,820px)] space-y-4 overflow-y-auto p-4 sm:p-5">
+        {/* Only this middle area scrolls */}
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 sm:p-4">
           {/* Order Summary */}
-          <section className="rounded-[14px] border border-border bg-white p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="font-semibold text-[#073D2C]">Order Summary</h3>
+          <section className="rounded-[12px] border border-border bg-white p-3 sm:p-3.5">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-[#073D2C]">Order Summary</h3>
               <Badge variant="neutral">Ready to Pay</Badge>
             </div>
             <div className="hidden grid-cols-[1.4fr_0.7fr_1fr] gap-2 px-1 text-[10px] font-bold uppercase tracking-wide text-slate-ui sm:grid">
@@ -369,17 +372,17 @@ export function BookingCheckoutModal({
               <span>Price</span>
               <span>Staff</span>
             </div>
-            <ul className="mt-2 space-y-3">
+            <ul className="mt-1.5 space-y-2">
               {cart.map((line) => (
                 <li
                   key={line.id}
-                  className="grid gap-2 rounded-[10px] border border-border/70 bg-ivory-100/40 p-3 sm:grid-cols-[1.4fr_0.7fr_1fr] sm:items-center sm:border-0 sm:bg-transparent sm:p-0"
+                  className="grid gap-2 rounded-[10px] border border-border/70 bg-ivory-100/40 p-2.5 sm:grid-cols-[1.4fr_0.7fr_1fr] sm:items-center sm:border-0 sm:bg-transparent sm:p-0"
                 >
                   <div>
                     <p className="text-[10px] font-bold uppercase text-slate-ui sm:hidden">
                       Service Name
                     </p>
-                    <p className="font-semibold uppercase text-[#073D2C]">{line.name}</p>
+                    <p className="text-sm font-semibold uppercase text-[#073D2C]">{line.name}</p>
                     <p className="text-xs text-slate-ui">
                       Qty {line.quantity} · {line.kind}
                     </p>
@@ -413,12 +416,12 @@ export function BookingCheckoutModal({
           </section>
 
           {/* Payment Details */}
-          <section className="rounded-[14px] border border-border bg-white p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="font-semibold text-[#073D2C]">Payment Details</h3>
+          <section className="rounded-[12px] border border-border bg-white p-3 sm:p-3.5">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-[#073D2C]">Payment Details</h3>
               <Badge variant="success">Secure</Badge>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-2.5 sm:grid-cols-2">
               <label className="block">
                 <span className={fieldLabel}>Lead Source</span>
                 <select
@@ -478,8 +481,8 @@ export function BookingCheckoutModal({
           </section>
 
           {/* Referral & Rewards */}
-          <section className="rounded-[14px] border border-border bg-white p-4">
-            <h3 className="mb-3 font-semibold text-[#073D2C]">Referral &amp; Rewards</h3>
+          <section className="rounded-[12px] border border-border bg-white p-3 sm:p-3.5">
+            <h3 className="mb-2 text-sm font-semibold text-[#073D2C]">Referral &amp; Rewards</h3>
             <label className="block">
               <span className={fieldLabel}>Referred By (Optional)</span>
               <input
@@ -493,7 +496,7 @@ export function BookingCheckoutModal({
               />
             </label>
             {!referredById && referrerQuery.trim() ? (
-              <ul className="mt-2 max-h-36 overflow-y-auto rounded-[10px] border border-border">
+              <ul className="mt-2 max-h-28 overflow-y-auto rounded-[10px] border border-border">
                 {referrerMatches.length === 0 ? (
                   <li className="px-3 py-2 text-sm text-slate-ui">No customers found.</li>
                 ) : (
@@ -529,10 +532,10 @@ export function BookingCheckoutModal({
                 Clear referrer
               </button>
             ) : null}
-            <p className="mt-2 text-xs text-slate-ui">
+            <p className="mt-1.5 text-xs text-slate-ui">
               Referrer will earn {REFERRAL_POINTS} points for first-time patient referral.
             </p>
-            <label className="mt-3 flex items-center gap-2 text-sm text-[#073D2C]">
+            <label className="mt-2 flex items-center gap-2 text-sm text-[#073D2C]">
               <input
                 type="checkbox"
                 checked={usePoints}
@@ -549,9 +552,9 @@ export function BookingCheckoutModal({
           </section>
 
           {/* Booking Details */}
-          <section className="rounded-[14px] border border-border bg-white p-4">
-            <h3 className="mb-3 font-semibold text-[#073D2C]">Booking Details</h3>
-            <div className="grid gap-3 sm:grid-cols-2">
+          <section className="rounded-[12px] border border-border bg-white p-3 sm:p-3.5">
+            <h3 className="mb-2 text-sm font-semibold text-[#073D2C]">Booking Details</h3>
+            <div className="grid gap-2.5 sm:grid-cols-2">
               <label className="block sm:col-span-2">
                 <span className={fieldLabel}>Primary Staff</span>
                 <select
@@ -607,12 +610,16 @@ export function BookingCheckoutModal({
           </section>
         </div>
 
-        <div className="space-y-3 border-t border-border bg-white px-5 py-4 sm:px-6">
-          <div className="rounded-[10px] bg-sky-50 px-3 py-2 text-center text-sm text-sky-900">
-            {promoLabel ? `Promo: ${promoLabel}` : 'No Selected Promo'}
+        {/* Sticky footer — Place Order always on screen */}
+        <div className="shrink-0 space-y-2 border-t border-border bg-white px-4 py-3 sm:px-5">
+          <div className="flex items-center justify-between gap-3 rounded-[10px] bg-sky-50 px-3 py-2 text-sm">
+            <span className="text-sky-900">
+              {promoLabel ? `Promo: ${promoLabel}` : 'No Selected Promo'}
+            </span>
+            <span className="font-semibold text-[#073D2C]">{formatPesoExact(total)}</span>
           </div>
-          <Button type="submit" className="w-full" disabled={saving}>
-            {saving ? 'Placing Order…' : 'Place Order'}
+          <Button type="submit" className="h-12 w-full text-base font-semibold" disabled={saving}>
+            {saving ? 'Placing Order…' : `Place Order · ${formatPesoExact(total)}`}
           </Button>
         </div>
       </form>

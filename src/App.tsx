@@ -65,6 +65,7 @@ import { MyAttendancePage } from '@/pages/attendance/MyAttendancePage'
 import { BranchAttendancePage } from '@/pages/attendance/BranchAttendancePage'
 import { BranchesAttendancePage } from '@/pages/attendance/BranchesAttendancePage'
 import { FranchiseAttendancePage } from '@/pages/attendance/FranchiseAttendancePage'
+import { AttendancePayrollPage } from '@/pages/payroll/AttendancePayrollPage'
 import { InventoryPage } from '@/pages/inventory/InventoryPage'
 import { MarketingPage } from '@/pages/marketing/MarketingPage'
 import { PackagesPage } from '@/pages/packages/PackagesPage'
@@ -136,6 +137,14 @@ export default function App() {
                   element={
                     <RequireHqAdmin>
                       <FranchiseAttendancePage />
+                    </RequireHqAdmin>
+                  }
+                />
+                <Route
+                  path="reports/payroll"
+                  element={
+                    <RequireHqAdmin>
+                      <AttendancePayrollPage />
                     </RequireHqAdmin>
                   }
                 />
