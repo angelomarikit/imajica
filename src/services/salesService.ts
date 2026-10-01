@@ -267,22 +267,76 @@ export function deleteExtraSale(id: string): void {
   emitChange()
 }
 
-/** Remove a whole booking group (same invoice / bookingRef) from live extras + remote. */
-export function deleteExtraSalesByBooking(bookingKey: string): void {
-  const next = readExtraSales().filter((s) => {
-    const key = s.bookingRef || s.invoiceNumber || s.id
-    return key !== bookingKey
-  })
+function bookingMatchKey(sale: Sale): string {
+  return sale.bookingRef || sale.invoiceNumber || sale.id
+}
+
+/** Extract sales.id UUIDs from live line ids (`{saleUuid}:{itemId}`). */
+function saleHeaderIdsForBooking(bookingKey: string): string[] {
+  const ids = new Set<string>()
+  for (const s of getSales()) {
+    if (bookingMatchKey(s) !== bookingKey) continue
+    const head = s.id.includes(':') ? s.id.slice(0, s.id.indexOf(':')) : s.id
+    if (isUuid(head)) ids.add(head)
+  }
+  return [...ids]
+}
+
+function clearLocalBooking(bookingKey: string) {
+  const next = readExtraSales().filter((s) => bookingMatchKey(s) !== bookingKey)
   localStorage.setItem(EXTRA_KEY, JSON.stringify(next))
-  remoteLiveSales = remoteLiveSales.filter((s) => {
-    const key = s.bookingRef || s.invoiceNumber || s.id
-    return key !== bookingKey
-  })
+  remoteLiveSales = remoteLiveSales.filter((s) => bookingMatchKey(s) !== bookingKey)
   emitChange()
+}
+
+/**
+ * Remove a whole booking group (same invoice / bookingRef) from live extras + Supabase.
+ * Deletes payments first so DBs without ON DELETE CASCADE still succeed.
+ */
+export async function deleteExtraSalesByBooking(bookingKey: string): Promise<void> {
+  const headerIds = saleHeaderIdsForBooking(bookingKey)
 
   if (isSupabaseConfigured && supabase) {
-    void supabase.from('sales').delete().or(`booking_ref.eq.${bookingKey},invoice_number.eq.${bookingKey}`)
+    if (headerIds.length > 0) {
+      const { error: payErr } = await supabase.from('payments').delete().in('sale_id', headerIds)
+      if (payErr) {
+        console.error('[sales] delete payments failed', payErr.message)
+      }
+
+      const { error: commissionErr } = await supabase
+        .from('commissions')
+        .delete()
+        .in('source_sale_id', headerIds)
+      if (commissionErr && !/does not exist|schema cache/i.test(commissionErr.message)) {
+        console.error('[sales] delete commissions failed', commissionErr.message)
+      }
+
+      const { error: saleErr } = await supabase.from('sales').delete().in('id', headerIds)
+      if (saleErr) {
+        throw new Error(saleErr.message || 'Could not delete booking from database')
+      }
+    } else {
+      // Fallback when line ids are local-only (`sale-live-…`) but rows exist remotely
+      const safe = bookingKey.replace(/"/g, '')
+      const { data: remoteRows, error: findErr } = await supabase
+        .from('sales')
+        .select('id')
+        .or(`booking_ref.eq."${safe}",invoice_number.eq."${safe}"`)
+      if (findErr) {
+        throw new Error(findErr.message || 'Could not find booking in database')
+      }
+      const foundIds = (remoteRows ?? []).map((r) => r.id as string).filter(Boolean)
+      if (foundIds.length) {
+        await supabase.from('payments').delete().in('sale_id', foundIds)
+        const { error: saleErr } = await supabase.from('sales').delete().in('id', foundIds)
+        if (saleErr) {
+          throw new Error(saleErr.message || 'Could not delete booking from database')
+        }
+      }
+    }
   }
+
+  clearLocalBooking(bookingKey)
 }
 
 /**

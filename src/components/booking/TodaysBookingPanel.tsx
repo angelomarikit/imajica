@@ -79,15 +79,19 @@ export function TodaysBookingPanel({
   const safePage = Math.min(page, pageCount)
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
 
-  function handleDelete(row: TodayBookingRow) {
+  async function handleDelete(row: TodayBookingRow) {
     if (!row.isLive) {
       toast.error('Imported historical sales cannot be deleted here')
       return
     }
     if (!window.confirm(`Delete booking ${row.bookingId} for ${row.patientName}?`)) return
-    deleteExtraSalesByBooking(row.bookingKey)
-    toast.success('Booking removed')
-    if (viewRow?.bookingKey === row.bookingKey) setViewRow(null)
+    try {
+      await deleteExtraSalesByBooking(row.bookingKey)
+      toast.success('Booking removed')
+      if (viewRow?.bookingKey === row.bookingKey) setViewRow(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete booking')
+    }
   }
 
   return (

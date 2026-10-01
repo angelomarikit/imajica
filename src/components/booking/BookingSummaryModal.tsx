@@ -52,16 +52,20 @@ export function BookingSummaryModal({
   const products = lines.filter((l) => l.itemType === 'product')
   const methodBadge = summary.paymentMethod === 'N/A' ? 'N/A' : summary.paymentMethod
 
-  function handleDelete() {
+  async function handleDelete() {
     if (!summary.isLive) {
       toast.error('Imported historical sales cannot be deleted here')
       return
     }
     if (!window.confirm(`Delete booking ${summary.bookingId} for ${summary.patientName}?`)) return
-    deleteExtraSalesByBooking(summary.bookingKey)
-    toast.success('Booking removed')
-    onDeleted?.()
-    onClose()
+    try {
+      await deleteExtraSalesByBooking(summary.bookingKey)
+      toast.success('Booking removed')
+      onDeleted?.()
+      onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete booking')
+    }
   }
 
   return (
