@@ -354,7 +354,7 @@ export async function recordBookingCheckout(
       discount: 0,
       line_total: line.totalAmount,
       sku: line.sku ?? null,
-      unit_cost: line.unitBaseCost ?? null,
+      unit_cost: line.unitBaseCost ?? 0,
     }))
 
     const { data: insertedItems, error: itemError } = await supabase
