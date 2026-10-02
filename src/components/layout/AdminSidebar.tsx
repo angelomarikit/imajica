@@ -294,10 +294,7 @@ function buildTimeclockStaffNavSections(): NavSection[] {
   const hqOnlyCategories = new Set(['Attendance and Payroll'])
   const sections: NavSection[] = [
     {
-      items: [
-        { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { to: '/admin/attendance', label: 'My Attendance', icon: CalendarDays },
-      ],
+      items: [{ to: '/admin/attendance', label: 'My Attendance', icon: CalendarDays }],
     },
   ]
   for (const section of hqNavSections) {
@@ -321,9 +318,6 @@ function buildTimeclockStaffNavSections(): NavSection[] {
 
 /** Franchise branch owner — trimmed to their branch ops only */
 const franchiseOwnerNavSections: NavSection[] = [
-  {
-    items: [{ to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
-  },
   {
     category: 'Scheduling',
     items: [

@@ -20,6 +20,7 @@ import { useAuth, isStaffRole } from '@/contexts/AuthContext'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import type { UserRole } from '@/types'
 import { cn } from '@/utils/cn'
+import { getStaffHomePath } from '@/utils/franchiseAccess'
 
 /** Visual source of truth: reference/ui/01-login.png */
 
@@ -53,7 +54,7 @@ export function LoginPage() {
         ? sessionUser.role
         : (roleHint ?? sessionUser.role)
       toast.success('Welcome back')
-      navigate(isStaffRole(role) ? '/admin/dashboard' : '/client/dashboard')
+      navigate(isStaffRole(role) ? getStaffHomePath({ ...sessionUser, role }) : '/client/dashboard')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Sign in failed')
     } finally {

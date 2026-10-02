@@ -1,6 +1,7 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth, isStaffRole } from '@/contexts/AuthContext'
 import type { UserRole } from '@/types'
+import { getStaffHomePath } from '@/utils/franchiseAccess'
 
 export function RequireAuth({ children }: { children?: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -13,7 +14,12 @@ export function RequireAuth({ children }: { children?: React.ReactNode }) {
 export function PublicOnly({ children }: { children?: React.ReactNode }) {
   const { user } = useAuth()
   if (user) {
-    return <Navigate to={isStaffRole(user.role) ? '/admin/dashboard' : '/client/dashboard'} replace />
+    return (
+      <Navigate
+        to={isStaffRole(user.role) ? getStaffHomePath(user) : '/client/dashboard'}
+        replace
+      />
+    )
   }
   return children ? <>{children}</> : <Outlet />
 }
@@ -28,7 +34,12 @@ export function RequireRole({
   const { user, hasRole } = useAuth()
   if (!user) return <Navigate to="/login" replace />
   if (!hasRole(...roles)) {
-    return <Navigate to={isStaffRole(user.role) ? '/admin/dashboard' : '/client/dashboard'} replace />
+    return (
+      <Navigate
+        to={isStaffRole(user.role) ? getStaffHomePath(user) : '/client/dashboard'}
+        replace
+      />
+    )
   }
   return children ? <>{children}</> : <Outlet />
 }
@@ -52,12 +63,12 @@ export function RequireHqAdmin({ children }: { children?: React.ReactNode }) {
   return <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN']}>{children}</RequireRole>
 }
 
-/** Client portal only — staff are sent to the admin dashboard. */
+/** Client portal only — staff are sent to their staff home. */
 export function RequireClient({ children }: { children?: React.ReactNode }) {
   const { user } = useAuth()
   if (!user) return <Navigate to="/login" replace />
   if (isStaffRole(user.role)) {
-    return <Navigate to="/admin/dashboard" replace />
+    return <Navigate to={getStaffHomePath(user)} replace />
   }
   return children ? <>{children}</> : <Outlet />
 }

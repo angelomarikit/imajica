@@ -8,6 +8,7 @@ import { AuthProvider, isStaffRole, useAuth } from '@/contexts/AuthContext'
 import { BranchProvider } from '@/contexts/BranchContext'
 import { SalesDataBootstrap } from '@/components/SalesDataBootstrap'
 import { queryClient } from '@/lib/queryClient'
+import { getStaffHomePath, isHqRole } from '@/utils/franchiseAccess'
 import { ForgotPasswordPage, ResetPasswordPage } from '@/pages/auth/ForgotPasswordPage'
 import { LoginPage } from '@/pages/auth/LoginPage'
 import { RegisterPage } from '@/pages/auth/RegisterPage'
@@ -82,7 +83,22 @@ import { TreatmentsPage } from '@/pages/treatments/TreatmentsPage'
 function HomeRedirect() {
   const { user } = useAuth()
   if (!user) return <LandingPage />
-  return <Navigate to={isStaffRole(user.role) ? '/admin/dashboard' : '/client/dashboard'} replace />
+  return <Navigate to={isStaffRole(user.role) ? getStaffHomePath(user) : '/client/dashboard'} replace />
+}
+
+function AdminDashboardGate() {
+  const { user } = useAuth()
+  if (user && !isHqRole(user.role)) {
+    return <Navigate to={getStaffHomePath(user)} replace />
+  }
+  return <DashboardPage />
+}
+
+function AdminIndexRedirect() {
+  const { user } = useAuth()
+  const home = getStaffHomePath(user)
+  const relative = home.startsWith('/admin/') ? home.slice('/admin/'.length) : 'dashboard'
+  return <Navigate to={relative} replace />
 }
 
 export default function App() {
@@ -113,8 +129,8 @@ export default function App() {
                   </RequireAuth>
                 }
               >
-                <Route index element={<Navigate to="dashboard" replace />} />
-                <Route path="dashboard" element={<DashboardPage />} />
+                <Route index element={<AdminIndexRedirect />} />
+                <Route path="dashboard" element={<AdminDashboardGate />} />
                 <Route path="attendance" element={<MyAttendancePage />} />
                 <Route
                   path="reports/branch-attendance"
