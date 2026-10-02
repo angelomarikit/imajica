@@ -547,6 +547,23 @@ export interface Commission {
   periodLabel: string
 }
 
+/** Branch manager–entered Plan B incentive for a staff member (or themselves). */
+export interface PlanBIncentive {
+  id: string
+  staffUserId: string
+  staffName: string
+  branchId: string
+  branchName: string
+  /** YYYY-MM period this incentive applies to */
+  periodMonth: string
+  amount: number
+  notes?: string
+  createdByUserId: string
+  createdByName: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface PayrollItem {
   id: string
   staffId: string

@@ -64,6 +64,7 @@ import { DashboardPage } from '@/pages/dashboard/DashboardPage'
 import { KioskTimeClockPage } from '@/pages/attendance/KioskTimeClockPage'
 import { MyAttendancePage } from '@/pages/attendance/MyAttendancePage'
 import { MyCommissionSalesPage } from '@/pages/staff/MyCommissionSalesPage'
+import { PlanBIncentivePage } from '@/pages/staff/PlanBIncentivePage'
 import { BranchAttendancePage } from '@/pages/attendance/BranchAttendancePage'
 import { BranchesAttendancePage } from '@/pages/attendance/BranchesAttendancePage'
 import { FranchiseAttendancePage } from '@/pages/attendance/FranchiseAttendancePage'
@@ -134,6 +135,14 @@ export default function App() {
                 <Route path="dashboard" element={<AdminDashboardGate />} />
                 <Route path="attendance" element={<MyAttendancePage />} />
                 <Route path="commission-sales" element={<MyCommissionSalesPage />} />
+                <Route
+                  path="plan-b-incentive"
+                  element={
+                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'BRANCH_ADMIN']}>
+                      <PlanBIncentivePage />
+                    </RequireRole>
+                  }
+                />
                 <Route
                   path="reports/branch-attendance"
                   element={

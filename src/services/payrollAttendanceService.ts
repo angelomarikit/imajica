@@ -290,3 +290,85 @@ export async function computeAttendancePayroll(
 export function getPayrollRoster(): PayrollRosterEmployee[] {
   return PAYROLL_ROSTER_SEED
 }
+
+export const ATTENDANCE_INCENTIVE_AMOUNT = 1000
+
+export type MonthlyAttendanceIncentive = {
+  monthFrom: string
+  monthTo: string
+  monthLabel: string
+  /** ₱1000 when no lates and no absences in the month (through today) */
+  amount: number
+  eligible: boolean
+  lateDays: number
+  absentDays: number
+  presentDays: number
+  scheduledDaysSoFar: number
+}
+
+/**
+ * Monthly perfect-attendance incentive for one staff account.
+ * Uses the same shift rules as payroll (Tue–Sun, late after 9:45 AM).
+ * Future scheduled days (and today with no punch yet) are not counted as absences.
+ */
+export function computeMonthlyAttendanceIncentive(
+  punches: AttendancePunch[],
+  /** Any YYYY-MM-DD in the month to evaluate */
+  monthAnchorDate: string,
+  asOfDateKey = manilaDateKey(),
+): MonthlyAttendanceIncentive {
+  const [y, m] = monthAnchorDate.split('-').map(Number)
+  const year = y || Number(asOfDateKey.slice(0, 4))
+  const month = m || Number(asOfDateKey.slice(5, 7))
+  const monthFrom = `${year}-${String(month).padStart(2, '0')}-01`
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate()
+  const monthTo = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  const evalTo = asOfDateKey < monthTo ? asOfDateKey : monthTo
+
+  const monthLabel = new Intl.DateTimeFormat('en-PH', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: MANILA_TZ,
+  }).format(new Date(`${monthFrom}T12:00:00+08:00`))
+
+  const sessions = buildAttendanceSessions(punches)
+  const byDate = new Map<string, AttendanceSession>()
+  for (const s of sessions) {
+    const prev = byDate.get(s.dateKey)
+    if (!prev || (!prev.timeOut && s.timeOut)) byDate.set(s.dateKey, s)
+  }
+
+  const scheduleKeys = scheduledDateKeys(monthFrom, evalTo)
+  const scheduleStart =
+    PAYROLL_DEFAULT_SHIFT.startHour * 60 + PAYROLL_DEFAULT_SHIFT.startMinute
+
+  let lateDays = 0
+  let absentDays = 0
+  let presentDays = 0
+
+  for (const key of scheduleKeys) {
+    const session = byDate.get(key)
+    if (!session) {
+      // Don't mark today as absent until the day is over
+      if (key < asOfDateKey) absentDays += 1
+      continue
+    }
+    presentDays += 1
+    const inMin = manilaMinutesOfDay(session.timeIn.punchedAt)
+    if (inMin > scheduleStart) lateDays += 1
+  }
+
+  const eligible = lateDays === 0 && absentDays === 0
+  return {
+    monthFrom,
+    monthTo,
+    monthLabel,
+    amount: eligible ? ATTENDANCE_INCENTIVE_AMOUNT : 0,
+    eligible,
+    lateDays,
+    absentDays,
+    presentDays,
+    scheduledDaysSoFar: scheduleKeys.length,
+  }
+}
+

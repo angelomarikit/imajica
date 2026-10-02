@@ -36,6 +36,7 @@ import {
   Box,
   KeyRound,
   Clock,
+  Award,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import logo from '@/assets/logo-imajica.jpg'
@@ -245,6 +246,7 @@ const hqNavSections: NavSection[] = [
           { to: '/admin/staff/positions', label: 'Positions', icon: List },
         ],
       },
+      { to: '/admin/plan-b-incentive', label: 'Plan B Incentive', icon: Award },
       {
         to: '/admin/team/recruitment-lms',
         label: 'Recruitment & LMS',
@@ -425,6 +427,7 @@ const franchiseOwnerNavSections: NavSection[] = [
           { to: '/admin/staff', label: 'Staff List', icon: Users, end: true },
         ],
       },
+      { to: '/admin/plan-b-incentive', label: 'Plan B Incentive', icon: Award },
     ],
   },
   {

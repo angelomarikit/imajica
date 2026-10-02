@@ -25,10 +25,26 @@ import {
 } from '@/services/salesService'
 import { formatPeso, formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { CalendarDays, Package, Percent, ShoppingBag, Wallet } from 'lucide-react'
+import { CalendarDays, Flag, Package, Percent, ShoppingBag, Sparkles, Trophy, Wallet } from 'lucide-react'
+import { listMyAttendance, subscribeAttendance } from '@/services/attendanceService'
+import {
+  ATTENDANCE_INCENTIVE_AMOUNT,
+  computeMonthlyAttendanceIncentive,
+  type MonthlyAttendanceIncentive,
+} from '@/services/payrollAttendanceService'
+import {
+  currentPeriodMonth,
+  formatPeriodMonthLabel,
+  preloadPlanBIncentives,
+  subscribePlanBIncentives,
+  sumPlanBForStaff,
+} from '@/services/planBIncentiveService'
+import type { AttendancePunch } from '@/types'
 
 /** Staff take-home commission on tagged sales */
 const STAFF_COMMISSION_RATE = 0.005
+/** Branch sales goal shown on The 2M Milestone card */
+const BRANCH_SALES_MILESTONE = 2_000_000
 
 const ALL_PRODUCTS = 'all'
 
@@ -139,12 +155,16 @@ export function MyCommissionSalesPage() {
   const initialRange = defaultMonthRange()
   const rate = STAFF_COMMISSION_RATE
   const ownerName = user?.fullName?.trim() || 'Your account'
+  const [fromDraft, setFromDraft] = useState(initialRange.from)
+  const [toDraft, setToDraft] = useState(initialRange.to)
+  const [productDraft, setProductDraft] = useState(ALL_PRODUCTS)
   const [from, setFrom] = useState(initialRange.from)
   const [to, setTo] = useState(initialRange.to)
   const [product, setProduct] = useState(ALL_PRODUCTS)
   const [tick, setTick] = useState(0)
   const [loading, setLoading] = useState(true)
   const [viewRow, setViewRow] = useState<TodayBookingRow | null>(null)
+  const [attendancePunches, setAttendancePunches] = useState<AttendancePunch[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -155,6 +175,28 @@ export function MyCommissionSalesPage() {
       }
     })
     return subscribeSalesData(() => setTick((n) => n + 1))
+  }, [])
+
+  useEffect(() => {
+    if (!user?.id) return
+    let cancelled = false
+    async function loadAttendance() {
+      try {
+        const rows = await listMyAttendance(user!.id)
+        if (!cancelled) setAttendancePunches(rows)
+      } catch {
+        if (!cancelled) setAttendancePunches([])
+      }
+    }
+    void loadAttendance()
+    return subscribeAttendance(() => {
+      void loadAttendance()
+    })
+  }, [user?.id])
+
+  useEffect(() => {
+    void preloadPlanBIncentives()
+    return subscribePlanBIncentives(() => setTick((n) => n + 1))
   }, [])
 
   /** All checkout bookings tagged to this staff (no date/product yet). */
@@ -268,17 +310,91 @@ export function MyCommissionSalesPage() {
     [productsSold],
   )
 
+  /** Monthly incentive uses the month of the applied calendar filter (To date). */
+  const attendanceIncentive = useMemo((): MonthlyAttendanceIncentive => {
+    return computeMonthlyAttendanceIncentive(attendancePunches, to || from)
+  }, [attendancePunches, from, to])
+
+  const planBPeriodMonth = useMemo(() => {
+    const anchor = to || from || currentPeriodMonth()
+    return anchor.slice(0, 7)
+  }, [from, to])
+
+  const planBAmount = useMemo(() => {
+    void tick
+    if (!user) return 0
+    return sumPlanBForStaff({
+      staffUserId: user.id,
+      staffName: user.fullName,
+      periodMonth: planBPeriodMonth,
+    })
+  }, [tick, user, planBPeriodMonth])
+
+  /** Whole-branch paid sales for the selected month vs ₱2M milestone. */
+  const branchMilestone = useMemo(() => {
+    void tick
+    const branchId = user?.branchId
+    const month = planBPeriodMonth
+    if (!branchId || !month) {
+      return {
+        sales: 0,
+        remaining: BRANCH_SALES_MILESTONE,
+        pct: 0,
+        reached: false,
+        monthLabel: formatPeriodMonthLabel(month || currentPeriodMonth()),
+        branchName: user?.branchName || 'Your branch',
+      }
+    }
+    const [y, m] = month.split('-').map(Number)
+    const lastDay = new Date(Date.UTC(y!, m!, 0)).getUTCDate()
+    const monthFrom = `${month}-01`
+    const monthTo = `${month}-${String(lastDay).padStart(2, '0')}`
+
+    const sales = getBookingRows({ branchId })
+      .filter((row) => {
+        if (row.status !== 'Paid') return false
+        const day = localDateKey(row.dateIso)
+        return day >= monthFrom && day <= monthTo
+      })
+      .reduce((sum, row) => sum + row.payment, 0)
+
+    const remaining = Math.max(0, BRANCH_SALES_MILESTONE - sales)
+    const pct = Math.min(100, Math.round((sales / BRANCH_SALES_MILESTONE) * 1000) / 10)
+    return {
+      sales,
+      remaining,
+      pct,
+      reached: sales >= BRANCH_SALES_MILESTONE,
+      monthLabel: formatPeriodMonthLabel(month),
+      branchName: user?.branchName || 'Your branch',
+    }
+  }, [tick, user?.branchId, user?.branchName, planBPeriodMonth])
+
   const filterLabel = useMemo(() => {
     const dates = formatRangeLabel(from, to)
     const prod = product === ALL_PRODUCTS ? 'All products' : product
     return `${dates} · ${prod}`
   }, [from, to, product])
 
+  function applyFilters() {
+    setFrom(fromDraft)
+    setTo(toDraft)
+    setProduct(productDraft)
+  }
+
   function resetFilters() {
     const next = defaultMonthRange()
+    setFromDraft(next.from)
+    setToDraft(next.to)
+    setProductDraft(ALL_PRODUCTS)
     setFrom(next.from)
     setTo(next.to)
     setProduct(ALL_PRODUCTS)
+  }
+
+  function applyProductShortcut(name: string) {
+    setProductDraft(name)
+    setProduct(name)
   }
 
   return (
@@ -308,9 +424,9 @@ export function MyCommissionSalesPage() {
             From
             <input
               type="date"
-              value={from}
-              max={to || undefined}
-              onChange={(e) => setFrom(e.target.value)}
+              value={fromDraft}
+              max={toDraft || undefined}
+              onChange={(e) => setFromDraft(e.target.value)}
               className="mt-1 block min-w-[160px] rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm"
             />
           </label>
@@ -318,17 +434,17 @@ export function MyCommissionSalesPage() {
             To
             <input
               type="date"
-              value={to}
-              min={from || undefined}
-              onChange={(e) => setTo(e.target.value)}
+              value={toDraft}
+              min={fromDraft || undefined}
+              onChange={(e) => setToDraft(e.target.value)}
               className="mt-1 block min-w-[160px] rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm"
             />
           </label>
           <label className="text-xs font-medium text-slate-ui">
             Product
             <select
-              value={product}
-              onChange={(e) => setProduct(e.target.value)}
+              value={productDraft}
+              onChange={(e) => setProductDraft(e.target.value)}
               className="mt-1 block min-w-[220px] rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm"
             >
               <option value={ALL_PRODUCTS}>All products</option>
@@ -339,12 +455,15 @@ export function MyCommissionSalesPage() {
               ))}
             </select>
           </label>
+          <Button type="button" onClick={applyFilters} className="min-w-[110px]">
+            Filter
+          </Button>
           <Button type="button" variant="secondary" onClick={resetFilters}>
             This month
           </Button>
         </div>
         <p className="mt-3 text-xs text-slate-ui">
-          Cards and graph update immediately to the calendar range and product you choose.
+          Choose dates and product, then click Filter to update the cards, graph, and tables.
         </p>
       </Card>
 
@@ -385,6 +504,38 @@ export function MyCommissionSalesPage() {
           tone="copper"
         />
       </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <StatCard
+          label="Attendance Incentives"
+          value={formatPesoExact(attendanceIncentive.amount)}
+          subtext={
+            attendanceIncentive.eligible
+              ? `₱${ATTENDANCE_INCENTIVE_AMOUNT.toLocaleString('en-PH')} · no lates / no absences · ${attendanceIncentive.monthLabel}`
+              : `${attendanceIncentive.lateDays} late · ${attendanceIncentive.absentDays} absent · ${attendanceIncentive.monthLabel}`
+          }
+          icon={<Sparkles className="h-5 w-5" />}
+          tone={attendanceIncentive.eligible ? 'incentive' : 'incentiveMuted'}
+          className="sm:col-span-2 xl:col-span-2"
+        />
+        <StatCard
+          label="Plan B Incentive"
+          value={formatPesoExact(planBAmount)}
+          subtext="Pass the KPI set by the branch"
+          icon={<Trophy className="h-5 w-5" />}
+          tone={planBAmount > 0 ? 'planb' : 'incentiveMuted'}
+          className="sm:col-span-2 xl:col-span-2"
+        />
+      </div>
+
+      <MilestoneCard
+        branchName={branchMilestone.branchName}
+        monthLabel={branchMilestone.monthLabel}
+        sales={branchMilestone.sales}
+        remaining={branchMilestone.remaining}
+        pct={branchMilestone.pct}
+        reached={branchMilestone.reached}
+      />
 
       <Card className="p-4 sm:p-5">
         <CardHeader
@@ -581,7 +732,7 @@ export function MyCommissionSalesPage() {
                     <tr
                       key={p.name}
                       className="cursor-pointer border-t border-border/60 hover:bg-[#f7f5f0]/80"
-                      onClick={() => setProduct(p.name)}
+                      onClick={() => applyProductShortcut(p.name)}
                     >
                       <td className="px-4 py-3 text-[#0a0a0a]">{p.name}</td>
                       <td className="px-4 py-3 text-right tabular-nums text-slate-ui">{p.units}</td>
@@ -603,18 +754,87 @@ export function MyCommissionSalesPage() {
   )
 }
 
+function MilestoneCard({
+  branchName,
+  monthLabel,
+  sales,
+  remaining,
+  pct,
+  reached,
+}: {
+  branchName: string
+  monthLabel: string
+  sales: number
+  remaining: number
+  pct: number
+  reached: boolean
+}) {
+  return (
+    <div className="rounded-[14px] border border-[#C5A059]/40 bg-gradient-to-br from-[#FFFDF8] via-[#F8F0DE] to-[#E8D5A3] p-4 shadow-[0_12px_28px_rgba(197,160,89,0.2)] sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#6b5420]">
+            The 2M Milestone
+          </p>
+          <p className="mt-2 font-metric text-2xl font-semibold text-[#0A2E26] sm:text-3xl">
+            {formatPesoExact(sales)}
+            <span className="ml-2 text-base font-medium text-[#6b5420] sm:text-lg">
+              / {formatPesoExact(BRANCH_SALES_MILESTONE)}
+            </span>
+          </p>
+          <p className="mt-1 text-xs text-[#6b5420]">
+            {branchName} · {monthLabel} branch paid sales
+          </p>
+        </div>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/70 text-[#8a6a20]">
+          <Flag className="h-5 w-5" />
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-[#6b5420]">
+          <span>{pct}% of ₱2M</span>
+          <span>
+            {reached
+              ? 'Milestone reached — keep the momentum!'
+              : `${formatPesoExact(remaining)} left to hit ₱2M`}
+          </span>
+        </div>
+        <div className="h-3 overflow-hidden rounded-full bg-white/70 shadow-inner">
+          <div
+            className={cn(
+              'h-full rounded-full transition-all duration-500',
+              reached
+                ? 'bg-gradient-to-r from-[#0A2E26] to-[#2F9E6E]'
+                : 'bg-gradient-to-r from-[#C5A059] to-[#0A2E26]',
+            )}
+            style={{ width: `${Math.max(2, pct)}%` }}
+          />
+        </div>
+        <p className="mt-2 text-xs text-[#6b5420]/90">
+          {reached
+            ? 'Your branch cleared the ₱2M goal this month. Great team push!'
+            : 'Every paid booking moves the branch closer — push together for the ₱2M milestone.'}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function StatCard({
   label,
   value,
   subtext,
   icon,
   tone,
+  className,
 }: {
   label: string
   value: string
   subtext?: string
   icon: ReactNode
-  tone: 'emerald' | 'gold' | 'cream' | 'sage' | 'copper'
+  tone: 'emerald' | 'gold' | 'cream' | 'sage' | 'copper' | 'incentive' | 'incentiveMuted' | 'planb'
+  className?: string
 }) {
   const tones = {
     emerald: {
@@ -652,12 +872,39 @@ function StatCard({
       sub: 'text-[#8a4f30]/90',
       iconWrap: 'bg-white/60 text-[#9a5535]',
     },
+    incentive: {
+      card: 'border-[#7ec8a3]/50 bg-gradient-to-br from-[#EFFFF6] via-[#B8EBD0] to-[#2F9E6E] text-[#0A2E26] shadow-[0_12px_30px_rgba(47,158,110,0.25)]',
+      label: 'text-[#1f6b4a]',
+      value: 'text-[#0A2E26]',
+      sub: 'text-[#1f6b4a]/95',
+      iconWrap: 'bg-white/70 text-[#0A2E26]',
+    },
+    incentiveMuted: {
+      card: 'border-border/80 bg-gradient-to-br from-[#f4f4f5] via-[#e7e7ea] to-[#d4d4d8] text-[#3f3f46] shadow-[0_8px_20px_rgba(63,63,70,0.1)]',
+      label: 'text-[#71717a]',
+      value: 'text-[#3f3f46]',
+      sub: 'text-[#71717a]',
+      iconWrap: 'bg-white/70 text-[#71717a]',
+    },
+    planb: {
+      card: 'border-[#8b6bb8]/40 bg-gradient-to-br from-[#F6F0FF] via-[#D9C6F5] to-[#8B6BB8] text-[#2d1b4e] shadow-[0_12px_30px_rgba(139,107,184,0.28)]',
+      label: 'text-[#5b3d8a]',
+      value: 'text-[#2d1b4e]',
+      sub: 'text-[#5b3d8a]/95',
+      iconWrap: 'bg-white/65 text-[#5b3d8a]',
+    },
   } as const
 
   const t = tones[tone]
 
   return (
-    <div className={cn('rounded-[14px] border p-4 transition-transform duration-200 hover:-translate-y-0.5', t.card)}>
+    <div
+      className={cn(
+        'rounded-[14px] border p-4 transition-transform duration-200 hover:-translate-y-0.5',
+        t.card,
+        className,
+      )}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className={cn('text-xs font-semibold uppercase tracking-wide', t.label)}>{label}</p>
