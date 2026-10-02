@@ -63,6 +63,7 @@ import { ServiceListPage } from '@/pages/catalog/ServiceListPage'
 import { DashboardPage } from '@/pages/dashboard/DashboardPage'
 import { KioskTimeClockPage } from '@/pages/attendance/KioskTimeClockPage'
 import { MyAttendancePage } from '@/pages/attendance/MyAttendancePage'
+import { MyCommissionSalesPage } from '@/pages/staff/MyCommissionSalesPage'
 import { BranchAttendancePage } from '@/pages/attendance/BranchAttendancePage'
 import { BranchesAttendancePage } from '@/pages/attendance/BranchesAttendancePage'
 import { FranchiseAttendancePage } from '@/pages/attendance/FranchiseAttendancePage'
@@ -132,6 +133,7 @@ export default function App() {
                 <Route index element={<AdminIndexRedirect />} />
                 <Route path="dashboard" element={<AdminDashboardGate />} />
                 <Route path="attendance" element={<MyAttendancePage />} />
+                <Route path="commission-sales" element={<MyCommissionSalesPage />} />
                 <Route
                   path="reports/branch-attendance"
                   element={

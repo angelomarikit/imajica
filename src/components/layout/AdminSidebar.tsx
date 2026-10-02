@@ -294,7 +294,10 @@ function buildTimeclockStaffNavSections(): NavSection[] {
   const hqOnlyCategories = new Set(['Attendance and Payroll'])
   const sections: NavSection[] = [
     {
-      items: [{ to: '/admin/attendance', label: 'My Attendance', icon: CalendarDays }],
+      items: [
+        { to: '/admin/attendance', label: 'My Attendance', icon: CalendarDays },
+        { to: '/admin/commission-sales', label: 'My Commission & Sales', icon: Wallet },
+      ],
     },
   ]
   for (const section of hqNavSections) {
