@@ -342,6 +342,7 @@ const franchiseOwnerNavSections: NavSection[] = [
         label: 'Services & Packages',
         icon: Package,
         children: [
+          { to: '/admin/catalog/services/new', label: 'New Service', icon: Plus },
           { to: '/admin/catalog/services', label: 'Services List', icon: List, end: true },
           { to: '/admin/catalog/packages', label: 'Packages List', icon: Boxes, end: true },
         ],
@@ -351,6 +352,7 @@ const franchiseOwnerNavSections: NavSection[] = [
         icon: ShoppingCart,
         children: [
           { to: '/admin/catalog/products', label: 'Products', icon: Box, end: true },
+          { to: '/admin/catalog/products/new', label: 'Add Product', icon: Plus },
           { to: '/admin/catalog/consumables', label: 'Consumables', icon: FlaskConical, end: true },
         ],
       },

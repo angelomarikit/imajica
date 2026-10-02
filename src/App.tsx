@@ -153,14 +153,7 @@ export default function App() {
                 <Route path="clients/new" element={<NewClientPage />} />
                 <Route path="clients/:id" element={<AdminClientProfilePage />} />
                 <Route path="catalog/services" element={<ServiceListPage />} />
-                <Route
-                  path="catalog/services/new"
-                  element={
-                    <RequireHqAdmin>
-                      <NewServicePage />
-                    </RequireHqAdmin>
-                  }
-                />
+                <Route path="catalog/services/new" element={<NewServicePage />} />
                 <Route path="catalog/packages" element={<PackageListPage />} />
                 <Route
                   path="catalog/packages/new"
@@ -171,23 +164,9 @@ export default function App() {
                   }
                 />
                 <Route path="catalog/products" element={<ProductInventoryPage />} />
-                <Route
-                  path="catalog/products/new"
-                  element={
-                    <RequireHqAdmin>
-                      <EditProductPage />
-                    </RequireHqAdmin>
-                  }
-                />
+                <Route path="catalog/products/new" element={<EditProductPage />} />
                 <Route path="catalog/products/:id" element={<ViewProductPage />} />
-                <Route
-                  path="catalog/products/:id/edit"
-                  element={
-                    <RequireHqAdmin>
-                      <EditProductPage />
-                    </RequireHqAdmin>
-                  }
-                />
+                <Route path="catalog/products/:id/edit" element={<EditProductPage />} />
                 <Route
                   path="catalog/categories"
                   element={

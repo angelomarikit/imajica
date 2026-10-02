@@ -4,11 +4,13 @@ import { FileText, MapPin, Tag, ToggleLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { useAuth } from '@/contexts/AuthContext'
 import { getBranches, subscribeBranches } from '@/services/branchService'
 import { getServiceById, saveServiceFromForm } from '@/services/catalogService'
 import type { Branch } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 const label = 'mb-1.5 block text-[11px] font-bold uppercase tracking-[0.12em] text-charcoal'
 const control =
@@ -51,9 +53,11 @@ function Switch({
 
 export function NewServicePage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [params] = useSearchParams()
   const editId = params.get('edit')
   const isEdit = Boolean(editId)
+  const franchiseOwner = isFranchiseBranchOwner(user)
 
   const [branches, setBranches] = useState<Branch[]>(() => getBranches())
   const [name, setName] = useState('')
@@ -62,7 +66,9 @@ export function NewServicePage() {
   const [sessions, setSessions] = useState('1')
   const [active, setActive] = useState(true)
   const [availableGlobally, setAvailableGlobally] = useState(false)
-  const [availableBranchIds, setAvailableBranchIds] = useState<string[]>([])
+  const [availableBranchIds, setAvailableBranchIds] = useState<string[]>(() =>
+    franchiseOwner && user?.branchId ? [user.branchId] : [],
+  )
   const [saving, setSaving] = useState(false)
   const [loaded, setLoaded] = useState(!isEdit)
 

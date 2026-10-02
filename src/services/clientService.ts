@@ -1,7 +1,13 @@
 import type { Client } from '@/types'
+import {
+  CLIENT_PROFILE_SEED,
+  findClientProfileSeed,
+  normalizeClientName,
+} from '@/constants/clientProfileSeed'
 
 const STORAGE_KEY = 'imajica_clients'
 const CHANGE_EVENT = 'imajica:clients-changed'
+const PROFILE_ENRICH_FLAG = 'imajica_client_profiles_enriched_v1'
 
 function readExtra(): Client[] {
   try {
@@ -18,6 +24,71 @@ function emitChange() {
   window.dispatchEvent(new Event(CHANGE_EVENT))
 }
 
+function mergeProfileOntoClient(client: Client): Client {
+  const profile = findClientProfileSeed(client)
+  if (!profile) return client
+  return {
+    ...client,
+    email: profile.email || client.email,
+    phone: profile.phone || client.phone,
+    dateOfBirth: profile.dateOfBirth || client.dateOfBirth,
+    gender: profile.gender,
+    sessionsCount: profile.sessionsCount,
+  }
+}
+
+/**
+ * Merge known contact / gender / DOB / sessions onto customers that already
+ * exist with the same name (or email). Never inserts duplicates.
+ */
+export function applyKnownClientProfiles(): number {
+  const existing = readExtra()
+  let changed = 0
+  const nextById = new Map(existing.map((c) => [c.id, c]))
+
+  for (const profile of CLIENT_PROFILE_SEED) {
+    const nameKey = normalizeClientName(profile.fullName)
+    const emailKey = profile.email.toLowerCase()
+
+    const matches = existing.filter((c) => {
+      if (normalizeClientName(c.fullName) === nameKey) return true
+      if (c.email?.trim() && c.email.trim().toLowerCase() === emailKey) return true
+      return false
+    })
+
+    for (const prev of matches) {
+      const merged = {
+        ...prev,
+        email: profile.email || prev.email,
+        phone: profile.phone || prev.phone,
+        dateOfBirth: profile.dateOfBirth || prev.dateOfBirth,
+        gender: profile.gender,
+        sessionsCount: profile.sessionsCount,
+      }
+      const dirty =
+        merged.email !== prev.email ||
+        merged.phone !== prev.phone ||
+        merged.dateOfBirth !== prev.dateOfBirth ||
+        merged.gender !== prev.gender ||
+        merged.sessionsCount !== prev.sessionsCount
+      if (dirty) {
+        nextById.set(prev.id, merged)
+        changed += 1
+      }
+    }
+  }
+
+  if (changed > 0) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...nextById.values()]))
+    localStorage.setItem(PROFILE_ENRICH_FLAG, 'done')
+    emitChange()
+  } else if (!localStorage.getItem(PROFILE_ENRICH_FLAG)) {
+    localStorage.setItem(PROFILE_ENRICH_FLAG, 'done')
+  }
+
+  return changed
+}
+
 /** Newest service avail / purchase first (never alphabetical). */
 export function compareClientsByRecentAvail(a: Client, b: Client): number {
   const ta = a.lastPurchaseAt || a.registeredAt || ''
@@ -31,7 +102,7 @@ export function compareClientsByRecentAvail(a: Client, b: Client): number {
 
 /** Locally registered customers only (no demo merge) */
 export function getClients(): Client[] {
-  return [...readExtra()].sort(compareClientsByRecentAvail)
+  return [...readExtra()].map(mergeProfileOntoClient).sort(compareClientsByRecentAvail)
 }
 
 export function getClientById(id: string): Client | undefined {
@@ -139,9 +210,14 @@ export function upsertClientsFromSalesImport(imported: Client[]): void {
       emergencyContactPhone: prev.emergencyContactPhone ?? row.emergencyContactPhone,
       medicalConcerns: prev.medicalConcerns ?? row.medicalConcerns,
       currentMedications: prev.currentMedications ?? row.currentMedications,
+      sessionsCount:
+        prev.sessionsCount != null && prev.sessionsCount > 0
+          ? prev.sessionsCount
+          : row.sessionsCount,
     })
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify([...byId.values()]))
+  applyKnownClientProfiles()
   emitChange()
 }
 

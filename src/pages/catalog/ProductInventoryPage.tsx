@@ -119,7 +119,7 @@ export function ProductInventoryPage() {
         title={franchiseOwner ? 'Branch Stock' : 'Imajica Product Inventory'}
         description={
           franchiseOwner
-            ? 'View on-hand product stock for your franchise branch. Catalog definitions are managed by HQ.'
+            ? 'Add and manage products for your branch inventory, including stock and pricing.'
             : 'Manage clinic skincare products, cosmetics, raw goods inventory, and branch distribution networks with precise stock targets and safety alert points.'
         }
         stat={{ value: products.length, label: 'Total Products' }}
@@ -134,13 +134,11 @@ export function ProductInventoryPage() {
             <Button variant="secondary" onClick={exportCsv}>
               <FileSpreadsheet className="h-4 w-4" /> Export Excel
             </Button>
-            {!franchiseOwner ? (
-              <Link to="/admin/catalog/products/new">
-                <Button>
-                  <Plus className="h-4 w-4" /> Add Product
-                </Button>
-              </Link>
-            ) : null}
+            <Link to="/admin/catalog/products/new">
+              <Button>
+                <Plus className="h-4 w-4" /> Add Product
+              </Button>
+            </Link>
           </div>
         </div>
 

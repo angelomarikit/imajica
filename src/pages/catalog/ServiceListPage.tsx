@@ -141,7 +141,11 @@ export function ServiceListPage() {
     <div className="space-y-5">
       <AdminPageBanner
         title="Imajica Service Catalog"
-        description="Elevating beauty and confidence. Manage and view clinic service portfolios, price structures, and active branch availabilities dynamically across the brand network."
+        description={
+          franchiseOwner
+            ? 'Manage services for your branch — add new offerings, edit details, and toggle what is live.'
+            : 'Elevating beauty and confidence. Manage and view clinic service portfolios, price structures, and active branch availabilities dynamically across the brand network.'
+        }
         stat={{ value: services.length, label: 'Total Services' }}
       />
 
@@ -149,22 +153,14 @@ export function ServiceListPage() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <h2 className="font-display text-3xl text-[#073D2C]">Service List</h2>
           <div className="flex flex-wrap gap-2">
-            {!franchiseOwner ? (
-              <>
-                <Button variant="secondary" onClick={exportCsv}>
-                  <FileSpreadsheet className="h-4 w-4" /> Export Excel
-                </Button>
-                <Link to="/admin/catalog/services/new">
-                  <Button>
-                    <Plus className="h-4 w-4" /> Add Service
-                  </Button>
-                </Link>
-              </>
-            ) : (
-              <p className="text-sm text-slate-ui">
-                Toggle services live for {user?.branchName ?? 'your branch'} only.
-              </p>
-            )}
+            <Button variant="secondary" onClick={exportCsv}>
+              <FileSpreadsheet className="h-4 w-4" /> Export Excel
+            </Button>
+            <Link to="/admin/catalog/services/new">
+              <Button>
+                <Plus className="h-4 w-4" /> Add Service
+              </Button>
+            </Link>
           </div>
         </div>
 
@@ -257,7 +253,7 @@ export function ServiceListPage() {
                 <th className="px-2 py-3">Branch Name</th>
                 <th className="px-2 py-3">Status</th>
                 <th className="px-2 py-3">Service Cost</th>
-                <th className="px-2 py-3">{franchiseOwner ? 'Live at Branch' : 'Actions'}</th>
+                <th className="px-2 py-3">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -283,50 +279,50 @@ export function ServiceListPage() {
                     </td>
                     <td className="px-2 py-3 font-medium">{formatPeso(s.price)}</td>
                     <td className="px-2 py-3">
-                      {franchiseOwner && forcedBranchId ? (
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={live}
-                          onClick={() => {
-                            toggleServiceLiveForBranch(s.id, forcedBranchId, !live)
-                            toast.success(
-                              !live
-                                ? `${s.name} is now live at your branch`
-                                : `${s.name} turned off for your branch`,
-                            )
-                          }}
-                          className={cn(
-                            'relative h-7 w-12 rounded-full transition',
-                            live ? 'bg-emerald-700' : 'bg-slate-300',
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              'absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition',
-                              live ? 'left-5' : 'left-0.5',
-                            )}
-                          />
-                        </button>
-                      ) : (
-                        <div className="flex gap-1.5">
-                          <Link
-                            to={`/admin/catalog/services/new?edit=${s.id}`}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#E8D9B8] text-[#073D2C]"
-                            aria-label="Edit"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Link>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {franchiseOwner && forcedBranchId ? (
                           <button
                             type="button"
-                            onClick={() => handleDelete(s.id, s.name)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-red-100 text-red-700"
-                            aria-label="Delete"
+                            role="switch"
+                            aria-checked={live}
+                            title={live ? 'Live at your branch' : 'Off at your branch'}
+                            onClick={() => {
+                              toggleServiceLiveForBranch(s.id, forcedBranchId, !live)
+                              toast.success(
+                                !live
+                                  ? `${s.name} is now live at your branch`
+                                  : `${s.name} turned off for your branch`,
+                              )
+                            }}
+                            className={cn(
+                              'relative h-7 w-12 rounded-full transition',
+                              live ? 'bg-emerald-700' : 'bg-slate-300',
+                            )}
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
+                            <span
+                              className={cn(
+                                'absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition',
+                                live ? 'left-5' : 'left-0.5',
+                              )}
+                            />
                           </button>
-                        </div>
-                      )}
+                        ) : null}
+                        <Link
+                          to={`/admin/catalog/services/new?edit=${s.id}`}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#E8D9B8] text-[#073D2C]"
+                          aria-label="Edit"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Link>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(s.id, s.name)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-red-100 text-red-700"
+                          aria-label="Delete"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )

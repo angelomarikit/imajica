@@ -19,6 +19,7 @@ import { Card } from '@/components/ui/Card'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   compareClientsByRecentAvail,
+  applyKnownClientProfiles,
   deleteClient,
   getClients,
   subscribeClients,
@@ -74,7 +75,11 @@ export function ClientsPage() {
       setClients(getClients())
       setLoading(false)
     }
-    void preloadSalesData().then(refresh)
+    applyKnownClientProfiles()
+    void preloadSalesData().then(() => {
+      applyKnownClientProfiles()
+      refresh()
+    })
     const unsubClients = subscribeClients(refresh)
     const unsubSales = subscribeAnalytics(refresh)
     return () => {
