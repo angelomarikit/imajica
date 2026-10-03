@@ -1,7 +1,7 @@
 import { PACKAGE_CATALOG_SEED } from '@/constants/packageCatalogSeed'
 import { PRODUCT_CATALOG_SEED } from '@/constants/productCatalogSeed'
 import { SERVICE_CATALOG_SEED } from '@/constants/serviceCatalogSeed'
-import { upsertClientsFromSalesImport } from '@/services/clientService'
+import { compareClientsByRecentAvail, upsertClientsFromSalesImport } from '@/services/clientService'
 import type { Client, Sale } from '@/types'
 
 const CLIENTS_SYNC_FLAG = 'imajica_sales_import_v2_clients'
@@ -83,9 +83,19 @@ function clientIdFromName(name: string) {
   return `client-import-${slugName(name)}`
 }
 
+function normalizePersonName(value: string | undefined | null) {
+  return (value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function isInstallmentPayment(paymentType?: string) {
   const p = (paymentType || '').toLowerCase()
-  return p.includes('installment') || p.includes('split')
+  return p.includes('installment') || p.includes('split') || p.includes('partial')
 }
 
 export function matchCatalog(name: string, itemType: Sale['itemType'], branchName: string): CatalogMatch | null {
@@ -122,15 +132,25 @@ function entitlementKey(s: Sale) {
 }
 
 function installmentGroupKey(s: Sale) {
-  return `${s.clientId}|${normKey(s.treatmentOrPackage)}|${s.branchName}`
+  return `${s.clientId}|${s.bookingRef || s.invoiceNumber}|${normKey(s.treatmentOrPackage)}`
 }
 
-export function getClientSales(clientId: string, sales: Sale[]): Sale[] {
-  return sales.filter((s) => s.clientId === clientId)
+/** Sales for a client profile — match by id and/or display name (live checkout may remap ids). */
+export function getClientSales(
+  clientId: string,
+  sales: Sale[],
+  clientName?: string,
+): Sale[] {
+  const name = normalizePersonName(clientName)
+  return sales.filter((s) => {
+    if (clientId && s.clientId && s.clientId === clientId) return true
+    if (name && normalizePersonName(s.clientName) === name) return true
+    return false
+  })
 }
 
-export function computeContractValue(clientId: string, sales: Sale[]): number {
-  const rows = getClientSales(clientId, sales)
+export function computeContractValue(clientId: string, sales: Sale[], clientName?: string): number {
+  const rows = getClientSales(clientId, sales, clientName)
   const seen = new Map<string, number>()
   for (const s of rows) {
     const k = entitlementKey(s)
@@ -208,16 +228,8 @@ export function buildClientsFromSales(sales: Sale[]): Client[] {
       membershipLabel: 'Member',
     })
   }
-  // Most recent purchase / avail first (not A–Z)
-  return clients.sort((a, b) => {
-    const da = a.lastPurchaseAt || ''
-    const db = b.lastPurchaseAt || ''
-    if (da !== db) return db.localeCompare(da)
-    const sa = a.lastSaleId || ''
-    const sb = b.lastSaleId || ''
-    if (sa !== sb) return sb.localeCompare(sa)
-    return (b.code || '').localeCompare(a.code || '')
-  })
+  // Most recent purchase / registration first (never A–Z)
+  return clients.sort(compareClientsByRecentAvail)
 }
 
 export function syncClientsFromImportedSales(clients: Client[]): void {
@@ -233,8 +245,12 @@ export function syncClientsFromImportedSales(clients: Client[]): void {
   }
 }
 
-export function getAvailedServices(clientId: string, sales: Sale[]): ClientAvailedLine[] {
-  const rows = getClientSales(clientId, sales).filter(
+export function getAvailedServices(
+  clientId: string,
+  sales: Sale[],
+  clientName?: string,
+): ClientAvailedLine[] {
+  const rows = getClientSales(clientId, sales, clientName).filter(
     (s) => s.itemType === 'service' || s.itemType === 'package',
   )
   const groups = new Map<string, Sale[]>()
@@ -249,7 +265,9 @@ export function getAvailedServices(clientId: string, sales: Sale[]): ClientAvail
     group.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     const first = group[0]!
     const cat = matchCatalog(first.treatmentOrPackage, first.itemType, first.branchName)
-    const totalSessions = cat?.sessions ?? 1
+    // Packages/services: catalog sessions × quantity from checkout line
+    const qty = Math.max(1, first.quantity ?? 1)
+    const totalSessions = Math.max(1, (cat?.sessions ?? 1) * qty)
     const hasPending = group.some((g) => g.status === 'pending' || isInstallmentPayment(g.paymentType))
     out.push({
       id: k,
@@ -268,23 +286,33 @@ export function getAvailedServices(clientId: string, sales: Sale[]): ClientAvail
   return out.sort((a, b) => b.saleDate.localeCompare(a.saleDate))
 }
 
-export function getPurchasedProducts(clientId: string, sales: Sale[]): ClientProductPurchase[] {
-  return getClientSales(clientId, sales)
+export function getPurchasedProducts(
+  clientId: string,
+  sales: Sale[],
+  clientName?: string,
+): ClientProductPurchase[] {
+  return getClientSales(clientId, sales, clientName)
     .filter((s) => s.itemType === 'product')
     .map((s) => ({
       id: s.id,
       saleDate: s.createdAt.slice(0, 10),
       productName: s.treatmentOrPackage,
       quantity: s.quantity ?? 1,
-      unitPrice: s.unitRetailPrice ?? s.totalAmount,
+      unitPrice: s.unitRetailPrice ?? s.totalAmount / Math.max(1, s.quantity ?? 1),
       total: s.totalAmount,
       branchName: s.branchName,
     }))
     .sort((a, b) => b.saleDate.localeCompare(a.saleDate))
 }
 
-export function getInstallmentBalances(clientId: string, sales: Sale[]): ClientInstallmentBalance[] {
-  const rows = getClientSales(clientId, sales).filter((s) => isInstallmentPayment(s.paymentType))
+export function getInstallmentBalances(
+  clientId: string,
+  sales: Sale[],
+  clientName?: string,
+): ClientInstallmentBalance[] {
+  const rows = getClientSales(clientId, sales, clientName).filter((s) =>
+    isInstallmentPayment(s.paymentType),
+  )
   const groups = new Map<string, Sale[]>()
   for (const s of rows) {
     const k = installmentGroupKey(s)
@@ -294,22 +322,27 @@ export function getInstallmentBalances(clientId: string, sales: Sale[]): ClientI
 
   const out: ClientInstallmentBalance[] = []
   for (const [k, group] of groups) {
+    group.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     const first = group[0]!
     const cat = matchCatalog(first.treatmentOrPackage, first.itemType, first.branchName)
     const paidAmount = group
       .filter((g) => g.status === 'paid')
       .reduce((sum, g) => sum + g.totalAmount, 0)
-    const paymentSum = group.reduce((sum, g) => sum + g.totalAmount, 0)
+    // Pending installment lines still count as paid-toward if status is pending but money was collected as downpayment
+    const collectedAmount = group.reduce((sum, g) => sum + g.totalAmount, 0)
+    const paymentSum = collectedAmount
     const totalAmount = cat?.price ?? Math.max(paymentSum, paidAmount)
-    const remainingAmount = Math.max(0, Math.round((totalAmount - paidAmount) * 100) / 100)
+    // For live checkout: first payment is the amount paid now; remaining = contract - collected
+    const remainingAmount = Math.max(0, Math.round((totalAmount - paymentSum) * 100) / 100)
+    const shortId = (first.bookingRef || first.invoiceNumber || first.id).replace(/\D/g, '')
     out.push({
       id: k,
-      bookingId: first.bookingRef || first.invoiceNumber.slice(-4),
+      bookingId: shortId.length >= 4 ? shortId.slice(-4) : (first.bookingRef || first.invoiceNumber).slice(-6),
       itemName: first.treatmentOrPackage,
       totalAmount,
-      paidAmount,
+      paidAmount: paymentSum,
       remainingAmount,
-      nextPayment: remainingAmount > 0 ? 'N/A' : '—',
+      nextPayment: remainingAmount > 0 ? 'Pending' : '—',
       status: remainingAmount > 0 ? 'pending' : 'paid',
       branchName: first.branchName,
     })
@@ -317,17 +350,33 @@ export function getInstallmentBalances(clientId: string, sales: Sale[]): ClientI
   return out.sort((a, b) => b.totalAmount - a.totalAmount)
 }
 
-export function getSessionHistory(clientId: string, sales: Sale[]): ClientSessionHistoryRow[] {
-  const availed = getAvailedServices(clientId, sales)
+export function getSessionHistory(
+  clientId: string,
+  sales: Sale[],
+  clientName?: string,
+): ClientSessionHistoryRow[] {
+  const clientSales = getClientSales(clientId, sales, clientName)
+  const availed = getAvailedServices(clientId, sales, clientName)
   const rows: ClientSessionHistoryRow[] = []
+
   for (const a of availed) {
+    const related = clientSales
+      .filter(
+        (s) =>
+          (s.itemType === 'service' || s.itemType === 'package') &&
+          normKey(s.treatmentOrPackage) === normKey(a.name) &&
+          s.branchName === a.branchName,
+      )
+      .sort((x, y) => x.createdAt.localeCompare(y.createdAt))
+    const purchase = related[0]
+
     for (let n = 1; n <= a.totalSessions; n++) {
       rows.push({
         id: `${a.id}-sess-${n}`,
         dateLabel: 'Not Used',
         servicePackage: a.name,
         sessionNumber: n,
-        staff: '—',
+        staff: purchase?.staffName || purchase?.doctorName || '—',
         statusLabel: 'USE',
         photos: '—',
       })
@@ -336,14 +385,20 @@ export function getSessionHistory(clientId: string, sales: Sale[]): ClientSessio
   return rows
 }
 
-export function recomputeClientSalesProfile(clientId: string, sales: Sale[]) {
-  const contractValue = computeContractValue(clientId, sales)
+export function recomputeClientSalesProfile(
+  clientId: string,
+  sales: Sale[],
+  clientName?: string,
+) {
+  const contractValue = computeContractValue(clientId, sales, clientName)
+  const availed = getAvailedServices(clientId, sales, clientName)
   return {
     contractValue,
-    availed: getAvailedServices(clientId, sales),
-    products: getPurchasedProducts(clientId, sales),
-    installments: getInstallmentBalances(clientId, sales),
-    sessions: getSessionHistory(clientId, sales),
+    availed,
+    products: getPurchasedProducts(clientId, sales, clientName),
+    installments: getInstallmentBalances(clientId, sales, clientName),
+    sessions: getSessionHistory(clientId, sales, clientName),
+    sessionsCount: availed.reduce((sum, a) => sum + a.totalSessions, 0),
   }
 }
 

@@ -22,9 +22,10 @@ import {
   applyKnownClientProfiles,
   deleteClient,
   getClients,
+  preloadClientsFromSupabase,
   subscribeClients,
 } from '@/services/clientService'
-import { preloadSalesData } from '@/services/salesService'
+import { preloadSalesData, syncClientsFromSalesRegistry } from '@/services/salesService'
 import { subscribeAnalytics } from '@/services/analyticsService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
@@ -76,7 +77,8 @@ export function ClientsPage() {
       setLoading(false)
     }
     applyKnownClientProfiles()
-    void preloadSalesData().then(() => {
+    void Promise.all([preloadSalesData(), preloadClientsFromSupabase()]).then(() => {
+      syncClientsFromSalesRegistry()
       applyKnownClientProfiles()
       refresh()
     })
@@ -97,9 +99,10 @@ export function ClientsPage() {
       const branchName = user?.branchName?.toLowerCase()
       list = list.filter((c) => {
         if (branchId && c.preferredBranchId === branchId) return true
+        if (branchName && c.preferredBranchName?.toLowerCase() === branchName) return true
         if (
           branchName &&
-          c.preferredBranchName?.toLowerCase() === branchName
+          c.preferredBranchName?.toLowerCase().includes(branchName.split(',')[0] || '')
         ) {
           return true
         }
@@ -115,6 +118,7 @@ export function ClientsPage() {
           c.code.toLowerCase().includes(q),
       )
     }
+    // Always newest → oldest (latest booking/registration first)
     return [...list].sort(compareClientsByRecentAvail)
   }, [clients, query, forcedBranchId, hqView, branchScoped, user?.branchId, user?.branchName])
 

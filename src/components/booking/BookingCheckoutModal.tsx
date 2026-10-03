@@ -7,7 +7,7 @@ import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { useBranch } from '@/contexts/BranchContext'
 import { createAppointment, ensureBookingClient, toDateKey } from '@/services/appointmentService'
 import { getBranches, resolveClinicBranchId } from '@/services/branchService'
-import { getClients, saveClient } from '@/services/clientService'
+import { deleteClient, getClients, saveClient } from '@/services/clientService'
 import { recordBookingCheckout } from '@/services/salesService'
 import {
   getActiveDoctorsForBooking,
@@ -322,9 +322,23 @@ export function BookingCheckoutModal({
 
       // Keep local patient id in sync with remote UUID after first checkout
       if (patient.id !== remoteClient.id) {
+        deleteClient(patient.id)
         saveClient({
           ...patient,
           id: remoteClient.id,
+          fullName: remoteClient.fullName || patient.fullName,
+          email: remoteClient.email || patient.email,
+          phone: remoteClient.phone || patient.phone,
+          preferredBranchId: saleBranchId,
+          preferredBranchName: saleBranchName,
+          totalVisits: Math.max(patient.totalVisits ?? 0, 1),
+          lastPurchaseAt: createdAt,
+        })
+      } else {
+        saveClient({
+          ...patient,
+          preferredBranchId: saleBranchId || patient.preferredBranchId,
+          preferredBranchName: saleBranchName || patient.preferredBranchName,
           totalVisits: Math.max(patient.totalVisits ?? 0, 1),
           lastPurchaseAt: createdAt,
         })

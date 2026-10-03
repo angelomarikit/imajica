@@ -5,7 +5,7 @@ import {
   recomputeClientSalesProfile,
   syncClientsFromImportedSales,
 } from '@/services/clientSalesProfileService'
-import { getClientById, saveClient } from '@/services/clientService'
+import { getClientById, getClients, saveClient } from '@/services/clientService'
 import { isUuid } from '@/utils/uuid'
 
 const EXTRA_KEY = 'imajica_analytics_sales'
@@ -43,23 +43,54 @@ function mergeSales(): Sale[] {
 
 function applyImported(data: Sale[]) {
   importedSales = data
-  const clients = buildClientsFromSales(importedSales)
+  syncClientsFromSalesRegistry()
+}
+
+/** Push every sale patient into Customer Registry (latest bookings first). */
+export function syncClientsFromSalesRegistry(): void {
+  const clients = buildClientsFromSales(mergeSales())
   syncClientsFromImportedSales(clients)
 }
 
 function touchClientFromSale(sale: Sale, all: Sale[]) {
   const client = getClientById(sale.clientId)
   if (client) {
-    const profile = recomputeClientSalesProfile(client.id, all)
+    const profile = recomputeClientSalesProfile(client.id, all, client.fullName || sale.clientName)
     saveClient({
       ...client,
+      preferredBranchId: sale.branchId || client.preferredBranchId,
+      preferredBranchName: sale.branchName || client.preferredBranchName,
       totalSpent: profile.contractValue,
       lastPurchaseAt: sale.createdAt,
       lastSaleId: sale.id,
       totalVisits: Math.max(client.totalVisits ?? 0, 1),
+      sessionsCount: profile.sessionsCount,
     })
   } else {
-    const built = buildClientsFromSales(all).find((c) => c.id === sale.clientId)
+    // Also try match by name in case local id differs from sale client_id
+    const byName = getClients().find(
+      (c) =>
+        c.fullName.trim().toLowerCase() === (sale.clientName || '').trim().toLowerCase(),
+    )
+    if (byName) {
+      const profile = recomputeClientSalesProfile(byName.id, all, byName.fullName || sale.clientName)
+      saveClient({
+        ...byName,
+        preferredBranchId: sale.branchId || byName.preferredBranchId,
+        preferredBranchName: sale.branchName || byName.preferredBranchName,
+        totalSpent: profile.contractValue,
+        lastPurchaseAt: sale.createdAt,
+        lastSaleId: sale.id,
+        totalVisits: Math.max(byName.totalVisits ?? 0, 1),
+        sessionsCount: profile.sessionsCount,
+      })
+      return
+    }
+    const built = buildClientsFromSales(all).find(
+      (c) =>
+        c.id === sale.clientId ||
+        c.fullName.trim().toLowerCase() === (sale.clientName || '').trim().toLowerCase(),
+    )
     if (built) syncClientsFromImportedSales([built])
   }
 }
@@ -192,8 +223,11 @@ export async function preloadSalesData(): Promise<void> {
       const remote = await fetchRemoteLiveSales()
       if (remote) {
         remoteLiveSales = remote
+        syncClientsFromSalesRegistry()
         emitChange()
       }
+    } else {
+      syncClientsFromSalesRegistry()
     }
     return
   }
@@ -220,6 +254,7 @@ export async function preloadSalesData(): Promise<void> {
       console.error('[sales] remote preload failed', err)
     } finally {
       loaded = true
+      syncClientsFromSalesRegistry()
       emitChange()
     }
   })()
@@ -461,6 +496,7 @@ export async function recordBookingCheckout(
 
   const all = mergeSales()
   touchClientFromSale(persisted[0]!, all)
+  syncClientsFromSalesRegistry()
   emitChange()
   return persisted
 }

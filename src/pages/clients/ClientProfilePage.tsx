@@ -27,8 +27,9 @@ import {
   getPurchasedProducts,
   getSessionHistory,
 } from '@/services/clientSalesProfileService'
-import { getClientById, getClients, saveClient, subscribeClients } from '@/services/clientService'
+import { getClientById, getClients, hydrateClientFromSupabase, persistClientToSupabase, preloadClientsFromSupabase, saveClient, subscribeClients } from '@/services/clientService'
 import { getAnalyticsSales, subscribeAnalytics } from '@/services/analyticsService'
+import { preloadSalesData } from '@/services/salesService'
 import { getBranches } from '@/services/branchService'
 import type { Client } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
@@ -114,6 +115,16 @@ export function ClientProfilePage() {
   useEffect(() => {
     const refreshClient = () => setClient(id ? getClientById(id) : getClients()[0])
     refreshClient()
+    void Promise.all([preloadSalesData(), preloadClientsFromSupabase()]).then(async () => {
+      setSalesTick((n) => n + 1)
+      if (id) {
+        const hydrated = await hydrateClientFromSupabase(id)
+        if (hydrated) setClient(hydrated)
+        else refreshClient()
+      } else {
+        refreshClient()
+      }
+    })
     const unsubClients = subscribeClients(refreshClient)
     const unsubSales = subscribeAnalytics(() => setSalesTick((n) => n + 1))
     return () => {
@@ -135,13 +146,13 @@ export function ClientProfilePage() {
 
   const profile = useMemo(() => {
     if (!client) return null
-    const contractValue = computeContractValue(client.id, sales)
+    const contractValue = computeContractValue(client.id, sales, client.fullName)
     return {
       contractValue,
-      availed: getAvailedServices(client.id, sales),
-      products: getPurchasedProducts(client.id, sales),
-      installments: getInstallmentBalances(client.id, sales),
-      sessions: getSessionHistory(client.id, sales),
+      availed: getAvailedServices(client.id, sales, client.fullName),
+      products: getPurchasedProducts(client.id, sales, client.fullName),
+      installments: getInstallmentBalances(client.id, sales, client.fullName),
+      sessions: getSessionHistory(client.id, sales, client.fullName),
     }
   }, [client, sales])
 
@@ -156,7 +167,7 @@ export function ClientProfilePage() {
     setForm(null)
   }
 
-  function savePersonal(e: FormEvent) {
+  async function savePersonal(e: FormEvent) {
     e.preventDefault()
     if (!client || !form) return
     if (!form.fullName.trim()) {
@@ -183,10 +194,13 @@ export function ClientProfilePage() {
         preferredBranchId: branch.id,
         preferredBranchName: branch.name.replace(/ Branch$/i, ''),
       })
+      await persistClientToSupabase(updated)
       setClient(updated)
       setEditing(false)
       setForm(null)
       toast.success('Personal information saved')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save profile')
     } finally {
       setSaving(false)
     }

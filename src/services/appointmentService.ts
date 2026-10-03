@@ -1,5 +1,5 @@
 import { getBranches } from '@/services/branchService'
-import { getClients, registerClient, saveClient } from '@/services/clientService'
+import { deleteClient, getClientById, getClients, registerClient, saveClient } from '@/services/clientService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import type { Appointment, AppointmentStatus } from '@/types'
 import { isUuid } from '@/utils/uuid'
@@ -111,6 +111,8 @@ export function resolveScheduleClient(input: {
         ...existing,
         email: input.email?.trim() || existing.email,
         phone: input.phone?.trim() || existing.phone,
+        preferredBranchId: input.branchId || existing.preferredBranchId,
+        preferredBranchName: input.branchName || existing.preferredBranchName,
       })
       return {
         id: patched.id,
@@ -134,6 +136,8 @@ export function resolveScheduleClient(input: {
       ...match,
       email: email || match.email,
       phone: phone || match.phone,
+      preferredBranchId: input.branchId || match.preferredBranchId,
+      preferredBranchName: input.branchName || match.preferredBranchName,
     })
     return {
       id: patched.id,
@@ -279,14 +283,70 @@ export async function ensureBookingClient(input: {
 }): Promise<{ id: string; fullName: string; email?: string; phone?: string }> {
   if (!isSupabaseConfigured || !supabase) {
     const local = getClients().find((c) => c.id === input.clientId)
-    return {
-      id: input.clientId || local?.id || `cl-${Date.now()}`,
-      fullName: input.fullName.trim() || local?.fullName || 'Client',
-      email: input.email?.trim() || local?.email,
-      phone: input.phone?.trim() || local?.phone,
-    }
+    const id = input.clientId || local?.id || `cl-${Date.now()}`
+    const fullName = input.fullName.trim() || local?.fullName || 'Client'
+    const email = input.email?.trim() || local?.email || ''
+    const phone = input.phone?.trim() || local?.phone || ''
+    persistLocalBookingClient({
+      id,
+      fullName,
+      email,
+      phone,
+      branchId: input.branchId,
+      existing: local,
+    })
+    return { id, fullName, email: email || undefined, phone: phone || undefined }
   }
   return ensureRemoteClient(input)
+}
+
+function persistLocalBookingClient(input: {
+  id: string
+  fullName: string
+  email?: string
+  phone?: string
+  branchId: string
+  existing?: ReturnType<typeof getClientById>
+}) {
+  const branch = getBranches().find((b) => b.id === input.branchId)
+  const byName = getClients().find(
+    (c) =>
+      c.id !== input.id &&
+      c.fullName.trim().toLowerCase() === input.fullName.trim().toLowerCase(),
+  )
+  const base = input.existing || getClientById(input.id) || byName
+  if (byName && byName.id !== input.id) {
+    deleteClient(byName.id)
+  }
+  saveClient({
+    id: input.id,
+    code: base?.code || `MJ-${input.id.slice(0, 8).toUpperCase()}`,
+    fullName: input.fullName || base?.fullName || 'Client',
+    email: input.email || base?.email || '',
+    phone: input.phone || base?.phone || '',
+    dateOfBirth: base?.dateOfBirth || '',
+    gender: base?.gender || 'prefer_not_to_say',
+    address: base?.address || '',
+    preferredBranchId: input.branchId || base?.preferredBranchId || '',
+    preferredBranchName: branch?.name || base?.preferredBranchName || '',
+    status: 'active',
+    isVip: base?.isVip ?? false,
+    avatarUrl: base?.avatarUrl,
+    registeredAt: base?.registeredAt || new Date().toISOString(),
+    lastPurchaseAt: base?.lastPurchaseAt,
+    lastSaleId: base?.lastSaleId,
+    sessionsCount: base?.sessionsCount,
+    totalVisits: base?.totalVisits ?? 0,
+    totalSpent: base?.totalSpent ?? 0,
+    rewardPoints: base?.rewardPoints,
+    occupation: base?.occupation,
+    middleName: base?.middleName,
+    emergencyContactName: base?.emergencyContactName,
+    emergencyContactPhone: base?.emergencyContactPhone,
+    medicalConcerns: base?.medicalConcerns,
+    currentMedications: base?.currentMedications,
+    adminNotes: base?.adminNotes,
+  })
 }
 
 async function ensureRemoteClient(input: {
@@ -304,6 +364,23 @@ async function ensureRemoteClient(input: {
   const branchId = isUuid(input.branchId) ? input.branchId : null
   const clientId = isUuid(input.clientId) ? input.clientId! : null
 
+  const mirror = (id: string, name: string, mail?: string, tel?: string) => {
+    persistLocalBookingClient({
+      id,
+      fullName: name,
+      email: mail || email,
+      phone: tel || phone,
+      branchId: input.branchId,
+      existing: getClientById(id) || getClientById(input.clientId || ''),
+    })
+    return {
+      id,
+      fullName: name,
+      email: mail || email || undefined,
+      phone: tel || phone || undefined,
+    }
+  }
+
   // Prefer security-definer RPC (avoids RLS SELECT blind spots on existing clients)
   const { data: rpcData, error: rpcError } = await supabase.rpc('ensure_booking_client', {
     p_full_name: fullName,
@@ -316,35 +393,14 @@ async function ensureRemoteClient(input: {
   if (!rpcError && rpcData) {
     const row = rpcData as Record<string, unknown>
     if (row.ok === true && row.id) {
-      const id = String(row.id)
-      const remoteName = String(row.fullName ?? fullName)
-      const remoteEmail = row.email ? String(row.email) : email
-      const remotePhone = row.phone ? String(row.phone) : phone
-      saveClient({
-        id,
-        code: `MJ-${id.slice(0, 8).toUpperCase()}`,
-        fullName: remoteName,
-        email: remoteEmail || '',
-        phone: remotePhone || '',
-        dateOfBirth: '',
-        gender: 'prefer_not_to_say',
-        preferredBranchId: input.branchId,
-        preferredBranchName: '',
-        status: 'active',
-        isVip: false,
-        registeredAt: new Date().toISOString().slice(0, 10),
-        totalVisits: 0,
-        totalSpent: 0,
-      })
-      return {
-        id,
-        fullName: remoteName,
-        email: remoteEmail || undefined,
-        phone: remotePhone || undefined,
-      }
+      return mirror(
+        String(row.id),
+        String(row.fullName ?? fullName),
+        row.email ? String(row.email) : email,
+        row.phone ? String(row.phone) : phone,
+      )
     }
     if (row.ok === false && row.error) {
-      // Fall through to direct insert path if RPC missing older schema message
       const msg = String(row.error)
       if (!/function|schema cache|not found/i.test(msg)) {
         throw new Error(msg)
@@ -362,12 +418,7 @@ async function ensureRemoteClient(input: {
       .eq('id', clientId)
       .maybeSingle()
     if (data?.id) {
-      return {
-        id: data.id,
-        fullName: data.full_name,
-        email: data.email ?? undefined,
-        phone: data.phone ?? undefined,
-      }
+      return mirror(data.id, data.full_name, data.email ?? undefined, data.phone ?? undefined)
     }
   }
 
@@ -378,12 +429,7 @@ async function ensureRemoteClient(input: {
       .eq('email', email)
       .maybeSingle()
     if (data?.id) {
-      return {
-        id: data.id,
-        fullName: data.full_name,
-        email: data.email ?? undefined,
-        phone: data.phone ?? undefined,
-      }
+      return mirror(data.id, data.full_name, data.email ?? undefined, data.phone ?? undefined)
     }
   }
 
@@ -394,12 +440,7 @@ async function ensureRemoteClient(input: {
       .eq('phone', phone)
       .maybeSingle()
     if (data?.id) {
-      return {
-        id: data.id,
-        fullName: data.full_name,
-        email: data.email ?? undefined,
-        phone: data.phone ?? undefined,
-      }
+      return mirror(data.id, data.full_name, data.email ?? undefined, data.phone ?? undefined)
     }
   }
 
@@ -424,29 +465,7 @@ async function ensureRemoteClient(input: {
     throw new Error(supabaseErrorMessage(error || { message: 'Could not create client' }))
   }
 
-  saveClient({
-    id: data.id,
-    code,
-    fullName: data.full_name,
-    email: data.email || email || '',
-    phone: data.phone || phone || '',
-    dateOfBirth: '',
-    gender: 'prefer_not_to_say',
-    preferredBranchId: input.branchId,
-    preferredBranchName: '',
-    status: 'active',
-    isVip: false,
-    registeredAt: new Date().toISOString().slice(0, 10),
-    totalVisits: 0,
-    totalSpent: 0,
-  })
-
-  return {
-    id: data.id,
-    fullName: data.full_name,
-    email: data.email ?? undefined,
-    phone: data.phone ?? undefined,
-  }
+  return mirror(data.id, data.full_name, data.email ?? undefined, data.phone ?? undefined)
 }
 
 function buildAppointmentInsertPayload(
