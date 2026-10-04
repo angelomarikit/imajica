@@ -139,9 +139,13 @@ async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthS
 
   const roleIds = (roleRows ?? []).map((r) => String(r.role_id))
   const role = roleIds.length > 0 ? pickHighestRole(roleIds) : meta.role ?? 'CLIENT'
-  const staffBranch = (roleRows ?? []).find(
-    (r) => r.branch_id && r.branch_id !== '00000000-0000-0000-0000-000000000001',
-  )
+  // HQ is org-wide — never attach a clinic branch (e.g. San Mateo) from user_roles.
+  const staffBranch =
+    role === 'SUPER_ADMIN' || role === 'HQ_ADMIN'
+      ? undefined
+      : (roleRows ?? []).find(
+          (r) => r.branch_id && r.branch_id !== '00000000-0000-0000-0000-000000000001',
+        )
   const branchId = staffBranch?.branch_id ? String(staffBranch.branch_id) : undefined
 
   let branchType: AuthSessionUser['branchType']

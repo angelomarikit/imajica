@@ -17,13 +17,17 @@ export function AdminHeader({
   onToggleMenu?: () => void
 }) {
   const { user, logout } = useAuth()
-  const { branches, selectedBranchId, setSelectedBranchId } = useBranch()
+  const { branches, selectedBranchId, setSelectedBranchId, branchLocked } = useBranch()
   const [query, setQuery] = useState('')
   const [accountOpen, setAccountOpen] = useState(false)
   const navigate = useNavigate()
 
+  const branchOptions = branchLocked
+    ? branches.map((b) => ({ value: b.id, label: b.name }))
+    : [{ value: 'all', label: 'All Branches' }, ...branches.map((b) => ({ value: b.id, label: b.name }))]
+
   return (
-    <header className="sticky top-0 z-30 border-b border-border/80 bg-ivory/90 backdrop-blur">
+    <header className="sticky top-0 z-50 border-b border-border/80 bg-ivory/90 backdrop-blur">
       <div className="flex flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center lg:gap-4 lg:px-6">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
           {onToggleMenu ? (
@@ -66,10 +70,7 @@ export function AdminHeader({
           <Select
             value={selectedBranchId}
             onChange={setSelectedBranchId}
-            options={[
-              { value: 'all', label: 'All Branches' },
-              ...branches.map((b) => ({ value: b.id, label: b.name })),
-            ]}
+            options={branchOptions}
             className="min-w-0 flex-1 basis-[10rem] sm:w-44 sm:flex-none"
           />
           <button
@@ -96,7 +97,7 @@ export function AdminHeader({
               <ChevronDown className="h-4 w-4 text-slate-ui" />
             </button>
             {accountOpen ? (
-              <div className="absolute right-0 mt-2 w-44 rounded-[10px] border border-border bg-white p-1 shadow-lg">
+              <div className="absolute right-0 z-[60] mt-2 w-44 rounded-[10px] border border-border bg-white p-1 shadow-lg">
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-ivory-100"

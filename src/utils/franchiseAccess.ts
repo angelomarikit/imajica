@@ -63,11 +63,11 @@ export function canAccessHqAdmin(user: AuthSessionUser | null | undefined): bool
   return isHqRole(user?.role)
 }
 
-/** Post-login / default admin home. HQ keeps Dashboard; branch staff do not. */
+/** Post-login / default admin home. HQ + branch managers → Dashboard; clinical staff → attendance. */
 export function getStaffHomePath(user: AuthSessionUser | null | undefined): string {
   if (!user) return '/login'
   if (isTimeclockStaff(user)) return '/admin/attendance'
-  if (isBranchOwner(user)) return '/admin/booking'
+  if (isBranchOwner(user)) return '/admin/dashboard'
   if (isStaffRoleLike(user.role)) return '/admin/dashboard'
   return '/client/dashboard'
 }

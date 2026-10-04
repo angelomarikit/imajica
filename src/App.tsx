@@ -8,7 +8,7 @@ import { AuthProvider, isStaffRole, useAuth } from '@/contexts/AuthContext'
 import { BranchProvider } from '@/contexts/BranchContext'
 import { SalesDataBootstrap } from '@/components/SalesDataBootstrap'
 import { queryClient } from '@/lib/queryClient'
-import { getStaffHomePath, isHqRole } from '@/utils/franchiseAccess'
+import { getStaffHomePath, isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 import { ForgotPasswordPage, ResetPasswordPage } from '@/pages/auth/ForgotPasswordPage'
 import { LoginPage } from '@/pages/auth/LoginPage'
 import { RegisterPage } from '@/pages/auth/RegisterPage'
@@ -90,7 +90,8 @@ function HomeRedirect() {
 
 function AdminDashboardGate() {
   const { user } = useAuth()
-  if (user && !isHqRole(user.role)) {
+  // HQ sees org-wide dashboard; branch admin/manager sees their store only.
+  if (user && !isHqRole(user.role) && !isBranchOwner(user)) {
     return <Navigate to={getStaffHomePath(user)} replace />
   }
   return <DashboardPage />

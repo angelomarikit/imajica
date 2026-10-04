@@ -324,6 +324,12 @@ function buildTimeclockStaffNavSections(): NavSection[] {
 /** Franchise branch owner — trimmed to their branch ops only */
 const franchiseOwnerNavSections: NavSection[] = [
   {
+    items: [
+      { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { to: '/admin/attendance', label: 'My Attendance', icon: Clock },
+    ],
+  },
+  {
     category: 'Scheduling',
     items: [
       { to: '/admin/appointments', label: 'Client Scheduling', icon: CalendarDays },
