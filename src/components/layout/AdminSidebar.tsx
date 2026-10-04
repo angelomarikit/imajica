@@ -321,7 +321,7 @@ function buildTimeclockStaffNavSections(): NavSection[] {
   return sections
 }
 
-/** Franchise branch owner — trimmed to their branch ops only */
+/** Clinic manager (BRANCH_ADMIN) — trimmed to their clinic ops only */
 const franchiseOwnerNavSections: NavSection[] = [
   {
     items: [

@@ -90,7 +90,7 @@ function HomeRedirect() {
 
 function AdminDashboardGate() {
   const { user } = useAuth()
-  // HQ sees org-wide dashboard; branch admin/manager sees their store only.
+  // HQ sees org-wide dashboard; clinic manager sees their store only.
   if (user && !isHqRole(user.role) && !isBranchOwner(user)) {
     return <Navigate to={getStaffHomePath(user)} replace />
   }

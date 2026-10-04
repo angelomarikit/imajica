@@ -33,6 +33,7 @@ import {
 import { listAccessUsers } from '@/services/userAccessService'
 import { TIMECLOCK_ROLES, canAccessHqAdmin, isBranchOwner } from '@/utils/franchiseAccess'
 import { cn } from '@/utils/cn'
+import { formatRoleLabel } from '@/utils/roleLabels'
 import type { AccessUser, UserRole } from '@/types'
 
 function defaultRange() {
@@ -44,7 +45,7 @@ function defaultRange() {
 }
 
 function roleLabel(role: string) {
-  return role.replaceAll('_', ' ')
+  return formatRoleLabel(role)
 }
 
 export function BranchAttendancePage() {
@@ -167,6 +168,7 @@ export function BranchAttendancePage() {
       (s) =>
         s.fullName.toLowerCase().includes(q) ||
         s.role.toLowerCase().includes(q) ||
+        formatRoleLabel(s.role).toLowerCase().includes(q) ||
         s.email.toLowerCase().includes(q),
     )
   }, [summaries, query])

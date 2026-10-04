@@ -18,7 +18,7 @@ function resolveBranchType(
 }
 
 /**
- * Branch owner / branch admin: BRANCH_ADMIN assigned to a clinic branch
+ * Clinic manager (product name): BRANCH_ADMIN assigned to a clinic branch
  * (franchise or company-owned). Same trimmed UI + branch-scoped data.
  */
 export function isFranchiseBranchOwner(user: AuthSessionUser | null | undefined): boolean {
@@ -63,7 +63,7 @@ export function canAccessHqAdmin(user: AuthSessionUser | null | undefined): bool
   return isHqRole(user?.role)
 }
 
-/** Post-login / default admin home. HQ + branch managers → Dashboard; clinical staff → attendance. */
+/** Post-login / default admin home. HQ + clinic managers → Dashboard; clinical staff → attendance. */
 export function getStaffHomePath(user: AuthSessionUser | null | undefined): string {
   if (!user) return '/login'
   if (isTimeclockStaff(user)) return '/admin/attendance'

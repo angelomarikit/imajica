@@ -20,6 +20,7 @@ import {
 } from '@/services/userAccessService'
 import type { AccessUser } from '@/types'
 import { cn } from '@/utils/cn'
+import { formatRoleLabel } from '@/utils/roleLabels'
 
 /** All system roles (HQ may reassign any account role from this page) */
 const ROLE_OPTIONS = [
@@ -79,6 +80,7 @@ export function BranchAccountsPage() {
         u.email.toLowerCase().includes(q) ||
         (u.branchName ?? '').toLowerCase().includes(q) ||
         u.role.toLowerCase().includes(q) ||
+        formatRoleLabel(u.role).toLowerCase().includes(q) ||
         (u.employeeCode ?? '').includes(q)
       )
     })
@@ -95,7 +97,7 @@ export function BranchAccountsPage() {
         u.fullName,
         u.email,
         u.employeeCode || '',
-        u.role,
+        formatRoleLabel(u.role),
         u.branchName || '',
         u.status,
       ]),
@@ -431,7 +433,7 @@ export function BranchAccountsPage() {
               >
                 {ROLE_OPTIONS.map((r) => (
                   <option key={r} value={r}>
-                    {r}
+                    {formatRoleLabel(r)}
                   </option>
                 ))}
               </select>
@@ -531,7 +533,7 @@ function RoleSaveControl({
       >
         {ROLE_OPTIONS.map((r) => (
           <option key={r} value={r}>
-            {r}
+            {formatRoleLabel(r)}
           </option>
         ))}
       </select>

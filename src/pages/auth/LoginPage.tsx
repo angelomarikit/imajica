@@ -259,7 +259,7 @@ export function LoginPage() {
               [
                 { label: 'Admin', role: 'HQ_ADMIN' as const, icon: Settings2 },
                 { label: 'Staff', role: 'RECEPTIONIST' as const, icon: Heart },
-                { label: 'Franchise', role: 'BRANCH_ADMIN' as const, icon: Building2 },
+                { label: 'Clinic Manager', role: 'BRANCH_ADMIN' as const, icon: Building2 },
               ]
             ).map(({ label, role, icon: Icon }) => (
               <button

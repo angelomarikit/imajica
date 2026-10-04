@@ -6,6 +6,7 @@ import { useBranch } from '@/contexts/BranchContext'
 import { SearchInput, Select } from '@/components/ui/SearchInput'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/utils/cn'
+import { formatRoleLabel } from '@/utils/roleLabels'
 
 export function AdminHeader({
   searchPlaceholder = 'Search clients, appointments, or treatments...',
@@ -92,7 +93,7 @@ export function AdminHeader({
               </div>
               <div className="hidden text-left sm:block">
                 <p className="text-sm font-medium leading-tight">{user?.fullName}</p>
-                <p className="text-[11px] text-slate-ui">{user?.role.replaceAll('_', ' ')}</p>
+                <p className="text-[11px] text-slate-ui">{formatRoleLabel(user?.role)}</p>
               </div>
               <ChevronDown className="h-4 w-4 text-slate-ui" />
             </button>

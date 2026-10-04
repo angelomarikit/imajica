@@ -4,6 +4,7 @@ import { getBranches } from '@/services/branchService'
 import { getAccessUsers } from '@/services/userAccessService'
 import type { AccessUser, Staff, UserRole } from '@/types'
 import { TIMECLOCK_ROLES } from '@/utils/franchiseAccess'
+import { formatRoleLabel } from '@/utils/roleLabels'
 
 /** Map old demo branch ids → current clinic UUIDs */
 const LEGACY_BRANCH_IDS: Record<string, string> = {
@@ -50,7 +51,7 @@ function accessUserToStaff(u: AccessUser): Staff {
     email: u.email,
     phone: '',
     role: (u.role as Staff['role']) || 'STAFF',
-    title: u.role.replaceAll('_', ' '),
+    title: formatRoleLabel(u.role),
     department: 'Operation Departments',
     branchId: u.branchId ?? '',
     branchName: u.branchName ?? '',

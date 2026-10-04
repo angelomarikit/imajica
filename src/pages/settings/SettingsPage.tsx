@@ -11,6 +11,7 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import type { Branch } from '@/types'
 import { cn } from '@/utils/cn'
 import { isFranchiseBranchOwner, isTimeclockStaff } from '@/utils/franchiseAccess'
+import { formatRoleLabel } from '@/utils/roleLabels'
 
 const hqTabs = [
   { to: '/admin/settings', end: true, label: 'General' },
@@ -106,7 +107,7 @@ function ProfileSettings() {
         title="Profile"
         description={
           user?.branchName
-            ? `Franchise branch: ${user.branchName}`
+            ? `Clinic: ${user.branchName}`
             : 'Your account details'
         }
       />
@@ -114,7 +115,7 @@ function ProfileSettings() {
         <Input label="Full name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
         <Input label="Email" value={email} disabled />
         <p className="text-xs text-slate-ui">
-          Role: <strong>Branch Admin</strong>
+          Role: <strong>{formatRoleLabel(user?.role)}</strong>
           {user?.branchName ? ` · ${user.branchName}` : ''}
         </p>
         <div>
@@ -227,7 +228,8 @@ function UsersSettings() {
     <Card className="p-5">
       <CardHeader title="Staff & Roles" description="Role assignments are enforced via Supabase RLS." />
       <p className="text-sm text-slate-ui">
-        Manage user roles: SUPER_ADMIN, HQ_ADMIN, BRANCH_ADMIN, clinical staff, and CLIENT.
+        Manage user roles: Super Admin, HQ Admin, Clinic Manager (BRANCH_ADMIN), clinical staff, and
+        Client.
       </p>
     </Card>
   )

@@ -1,5 +1,6 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import type { AttendancePunch, AttendancePunchType } from '@/types'
+import { formatRoleLabel } from '@/utils/roleLabels'
 
 const KEY = 'imajica_attendance_punches'
 const CHANGE = 'imajica:attendance-changed'
@@ -748,7 +749,7 @@ export async function exportBranchAttendanceXlsx(input: {
     ...input.summaries.map((s) => [
       s.fullName,
       s.branchName ?? input.branchName,
-      s.role.replaceAll('_', ' '),
+      formatRoleLabel(s.role),
       s.email,
       s.daysPresent,
       s.sessionCount,
@@ -784,7 +785,7 @@ export async function exportBranchAttendanceXlsx(input: {
       detailRows.push([
         s.fullName,
         s.branchName ?? input.branchName,
-        s.role.replaceAll('_', ' '),
+        formatRoleLabel(s.role),
         session.dateKey,
         formatManilaDateTime(session.timeIn.punchedAt),
         session.timeOut ? formatManilaDateTime(session.timeOut.punchedAt) : '',

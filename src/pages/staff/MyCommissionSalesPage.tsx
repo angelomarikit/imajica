@@ -60,7 +60,7 @@ const BRANCH_SALES_MILESTONE = 2_000_000
 /** After ₱2M is hit, 1% of branch paid sales is split across the whole branch team */
 const MILESTONE_SPLIT_RATE = 0.01
 
-/** Active branch teammates (staff + branch manager) who share the 2M split. */
+/** Active branch teammates (staff + clinic manager) who share the 2M split. */
 function countBranchTeamShare(branchId: string | undefined): number {
   if (!branchId) return 1
   const ids = new Set<string>()
@@ -72,7 +72,7 @@ function countBranchTeamShare(branchId: string | undefined): number {
   for (const u of getAccessUsers()) {
     if (u.status !== 'active') continue
     if (!u.branchId || !matchesStaffBranch(u, branchId)) continue
-    // Clinical / ops staff + branch managers share the pool
+    // Clinical / ops staff + clinic managers share the pool
     if (
       u.role === 'BRANCH_ADMIN' ||
       u.role === 'DOCTOR' ||
@@ -581,7 +581,7 @@ export function MyCommissionSalesPage() {
           subtext={
             branchMilestone.reached
               ? `1% of branch sales ÷ ${branchMilestone.teamSize} teammates · pool ${formatPesoExact(branchMilestone.splitPool)}`
-              : `Unlocks at ₱2M · 1% split for the whole team (incl. manager)`
+              : `Unlocks at ₱2M · 1% split for the whole team (incl. clinic manager)`
           }
           icon={<Users className="h-5 w-5" />}
           tone={branchMilestone.reached ? 'milestone' : 'incentiveMuted'}
@@ -883,8 +883,8 @@ function MilestoneCard({
         </div>
         <p className="mt-2 text-xs text-[#6b5420]/90">
           {reached
-            ? `1% pool ${formatPesoExact(splitPool)} split across ${teamSize} teammates (incl. branch manager) — your share ${formatPesoExact(splitShare)}.`
-            : 'Hit ₱2M and the branch unlocks a 1% commission pool split equally across the whole team, including the branch manager.'}
+            ? `1% pool ${formatPesoExact(splitPool)} split across ${teamSize} teammates (incl. clinic manager) — your share ${formatPesoExact(splitShare)}.`
+            : 'Hit ₱2M and the branch unlocks a 1% commission pool split equally across the whole team, including the clinic manager.'}
         </p>
       </div>
     </div>

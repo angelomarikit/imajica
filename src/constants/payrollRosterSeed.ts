@@ -124,7 +124,7 @@ export const PAYROLL_ROSTER_SEED: PayrollRosterEmployee[] = [
     emergencyPhone: '09457068642',
     dateHired: '2026-08-25',
     employmentStatus: 'Probationary',
-    jobTitle: 'Branch Manager',
+    jobTitle: 'Clinic Manager',
     branchLabel: 'San Mateo',
     branchId: BRANCH_IDS.sanMateo,
     shiftLabel: 'TUE - SUN 9:45 AM - 7:00 PM',

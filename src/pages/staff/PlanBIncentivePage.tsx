@@ -23,6 +23,7 @@ import { getAccessUsers } from '@/services/userAccessService'
 import type { PlanBIncentive } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { isFranchiseBranchOwner, isHqRole } from '@/utils/franchiseAccess'
+import { formatRoleLabel } from '@/utils/roleLabels'
 
 type Recipient = {
   id: string
@@ -82,7 +83,7 @@ export function PlanBIncentivePage() {
           branchId: u.branchId || branchId,
           branchName: u.branchName || branchName,
         }))
-      // Ensure the branch manager can award themselves even if directory is thin
+      // Ensure the clinic manager can award themselves even if directory is thin
       if (user && !list.some((r) => r.id === user.id)) {
         list.unshift({
           id: user.id,
@@ -324,7 +325,7 @@ export function PlanBIncentivePage() {
 
       {!branchOwner && !isHq ? (
         <p className="text-sm text-slate-ui">
-          Only branch managers and HQ can add Plan B incentives.
+          Only clinic managers and HQ can add Plan B incentives.
         </p>
       ) : null}
 
@@ -351,7 +352,7 @@ export function PlanBIncentivePage() {
               {recipients.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.fullName}
-                  {user?.id === r.id ? ' (You)' : ''} · {r.role.replaceAll('_', ' ')}
+                  {user?.id === r.id ? ' (You)' : ''} · {formatRoleLabel(r.role)}
                 </option>
               ))}
             </select>

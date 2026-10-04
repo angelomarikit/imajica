@@ -8,6 +8,7 @@ import { getBranches } from '@/services/branchService'
 import { createAccessUser } from '@/services/userAccessService'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { cn } from '@/utils/cn'
+import { formatRoleLabel } from '@/utils/roleLabels'
 
 const ROLE_OPTIONS = [
   'SUPER_ADMIN',
@@ -149,7 +150,7 @@ export function NewUserPage() {
                 </option>
                 {ROLE_OPTIONS.map((r) => (
                   <option key={r} value={r} className="text-[#073D2C]">
-                    {r}
+                    {formatRoleLabel(r)}
                   </option>
                 ))}
               </select>

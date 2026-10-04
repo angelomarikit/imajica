@@ -17,6 +17,7 @@ import {
 import { getBranches } from '@/services/branchService'
 import type { AccessUser } from '@/types'
 import { cn } from '@/utils/cn'
+import { formatRoleLabel } from '@/utils/roleLabels'
 
 const ROLE_OPTIONS = [
   'SUPER_ADMIN',
@@ -62,7 +63,8 @@ export function UserAccessPage() {
         u.fullName.toLowerCase().includes(q) ||
         u.email.toLowerCase().includes(q) ||
         (u.branchName ?? '').toLowerCase().includes(q) ||
-        u.role.toLowerCase().includes(q),
+        u.role.toLowerCase().includes(q) ||
+        formatRoleLabel(u.role).toLowerCase().includes(q),
     )
   }, [users, query])
 
@@ -76,7 +78,7 @@ export function UserAccessPage() {
       filtered.map((u) => [
         u.fullName,
         u.email,
-        u.role,
+        formatRoleLabel(u.role),
         u.branchName || 'No Branch',
         u.status,
       ]),
@@ -326,7 +328,7 @@ export function UserAccessPage() {
               >
                 {ROLE_OPTIONS.map((r) => (
                   <option key={r} value={r}>
-                    {r}
+                    {formatRoleLabel(r)}
                   </option>
                 ))}
               </select>

@@ -47,7 +47,7 @@ const DEMO_USERS: Record<string, AuthSessionUser & { password: string }> = {
   'franchise@imajica.ph': {
     id: 'user-franchise',
     email: 'franchise@imajica.ph',
-    fullName: 'Franchise Owner',
+    fullName: 'Clinic Manager',
     role: 'BRANCH_ADMIN',
     password: 'password123',
     branchId: DEMO_FRANCHISE_BRANCH_ID,
@@ -331,7 +331,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const next: AuthSessionUser = {
           id: `demo-${roleHint.toLowerCase()}`,
           email: normalized,
-          fullName: roleHint === 'BRANCH_ADMIN' ? 'Franchise Owner' : 'Maria Santos',
+          fullName: roleHint === 'BRANCH_ADMIN' ? 'Clinic Manager' : 'Maria Santos',
           role: roleHint,
           ...franchiseMeta,
         }

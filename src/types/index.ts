@@ -1,3 +1,4 @@
+/** DB/Auth role ids. Product UI: BRANCH_ADMIN = Clinic Manager (`formatRoleLabel`). */
 export type UserRole =
   | 'SUPER_ADMIN'
   | 'HQ_ADMIN'

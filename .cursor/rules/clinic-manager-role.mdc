@@ -1,0 +1,29 @@
+---
+description: Product name Clinic Manager = BRANCH_ADMIN role; use Clinic Manager in UI and instructions
+alwaysApply: true
+---
+
+# Clinic Manager naming
+
+When the user says **Clinic Manager**, they mean the role formerly called Branch Admin / Branch Manager / Franchise Owner.
+
+## Canonical mapping
+
+| Product / UI name | Internal / DB role id |
+|---|---|
+| **Clinic Manager** | `BRANCH_ADMIN` |
+
+Do **not** rename the database role id `BRANCH_ADMIN` unless explicitly asked (RLS, seeds, and Auth rely on it).
+
+DB `roles.description` for that id is **Clinic Manager** (migration `20261005000051_clinic_manager_role_label.sql`).
+
+## When implementing
+
+- User-facing labels, copy, cards, and dropdowns: **Clinic Manager**
+- Use `formatRoleLabel()` from `src/utils/roleLabels.ts` for role display
+- Code identifiers may still say `branchOwner`, `isBranchOwner`, `BRANCH_ADMIN`, etc.
+- Dashboard / commission features for this role are **clinic-manager-only**, not HQ
+
+## Language in replies
+
+Prefer “clinic manager” over “branch admin” or “branch manager” when talking with the user.
