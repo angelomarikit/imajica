@@ -25,7 +25,17 @@ import {
 } from '@/services/salesService'
 import { formatPeso, formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { CalendarDays, Flag, Package, Percent, ShoppingBag, Sparkles, Trophy, Wallet } from 'lucide-react'
+import {
+  CalendarDays,
+  Flag,
+  Package,
+  Percent,
+  ShoppingBag,
+  Sparkles,
+  Trophy,
+  Users,
+  Wallet,
+} from 'lucide-react'
 import { listMyAttendance, subscribeAttendance } from '@/services/attendanceService'
 import {
   ATTENDANCE_INCENTIVE_AMOUNT,
@@ -39,12 +49,43 @@ import {
   subscribePlanBIncentives,
   sumPlanBForStaff,
 } from '@/services/planBIncentiveService'
+import { getDirectoryStaff, matchesStaffBranch } from '@/services/staffDirectoryService'
+import { getAccessUsers } from '@/services/userAccessService'
 import type { AttendancePunch } from '@/types'
 
 /** Staff take-home commission on tagged sales */
 const STAFF_COMMISSION_RATE = 0.005
 /** Branch sales goal shown on The 2M Milestone card */
 const BRANCH_SALES_MILESTONE = 2_000_000
+/** After ₱2M is hit, 1% of branch paid sales is split across the whole branch team */
+const MILESTONE_SPLIT_RATE = 0.01
+
+/** Active branch teammates (staff + branch manager) who share the 2M split. */
+function countBranchTeamShare(branchId: string | undefined): number {
+  if (!branchId) return 1
+  const ids = new Set<string>()
+  for (const s of getDirectoryStaff()) {
+    if (s.status !== 'active') continue
+    if (!matchesStaffBranch(s, branchId)) continue
+    ids.add(s.email?.trim().toLowerCase() || s.id)
+  }
+  for (const u of getAccessUsers()) {
+    if (u.status !== 'active') continue
+    if (!u.branchId || !matchesStaffBranch(u, branchId)) continue
+    // Clinical / ops staff + branch managers share the pool
+    if (
+      u.role === 'BRANCH_ADMIN' ||
+      u.role === 'DOCTOR' ||
+      u.role === 'NURSE' ||
+      u.role === 'AESTHETICIAN' ||
+      u.role === 'RECEPTIONIST' ||
+      u.role === 'STAFF'
+    ) {
+      ids.add(u.email?.trim().toLowerCase() || u.id)
+    }
+  }
+  return Math.max(1, ids.size)
+}
 
 const ALL_PRODUCTS = 'all'
 
@@ -330,11 +371,12 @@ export function MyCommissionSalesPage() {
     })
   }, [tick, user, planBPeriodMonth])
 
-  /** Whole-branch paid sales for the selected month vs ₱2M milestone. */
+  /** Whole-branch paid sales for the selected month vs ₱2M milestone + 1% team split. */
   const branchMilestone = useMemo(() => {
     void tick
     const branchId = user?.branchId
     const month = planBPeriodMonth
+    const teamSize = countBranchTeamShare(branchId)
     if (!branchId || !month) {
       return {
         sales: 0,
@@ -343,6 +385,9 @@ export function MyCommissionSalesPage() {
         reached: false,
         monthLabel: formatPeriodMonthLabel(month || currentPeriodMonth()),
         branchName: user?.branchName || 'Your branch',
+        teamSize,
+        splitPool: 0,
+        splitShare: 0,
       }
     }
     const [y, m] = month.split('-').map(Number)
@@ -360,13 +405,19 @@ export function MyCommissionSalesPage() {
 
     const remaining = Math.max(0, BRANCH_SALES_MILESTONE - sales)
     const pct = Math.min(100, Math.round((sales / BRANCH_SALES_MILESTONE) * 1000) / 10)
+    const reached = sales >= BRANCH_SALES_MILESTONE
+    const splitPool = reached ? Math.round(sales * MILESTONE_SPLIT_RATE * 100) / 100 : 0
+    const splitShare = reached ? Math.round((splitPool / teamSize) * 100) / 100 : 0
     return {
       sales,
       remaining,
       pct,
-      reached: sales >= BRANCH_SALES_MILESTONE,
+      reached,
       monthLabel: formatPeriodMonthLabel(month),
       branchName: user?.branchName || 'Your branch',
+      teamSize,
+      splitPool,
+      splitShare,
     }
   }, [tick, user?.branchId, user?.branchName, planBPeriodMonth])
 
@@ -505,7 +556,7 @@ export function MyCommissionSalesPage() {
         />
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard
           label="Attendance Incentives"
           value={formatPesoExact(attendanceIncentive.amount)}
@@ -516,7 +567,6 @@ export function MyCommissionSalesPage() {
           }
           icon={<Sparkles className="h-5 w-5" />}
           tone={attendanceIncentive.eligible ? 'incentive' : 'incentiveMuted'}
-          className="sm:col-span-2 xl:col-span-2"
         />
         <StatCard
           label="Plan B Incentive"
@@ -524,7 +574,18 @@ export function MyCommissionSalesPage() {
           subtext="Pass the KPI set by the branch"
           icon={<Trophy className="h-5 w-5" />}
           tone={planBAmount > 0 ? 'planb' : 'incentiveMuted'}
-          className="sm:col-span-2 xl:col-span-2"
+        />
+        <StatCard
+          label="2M Split Commission"
+          value={formatPesoExact(branchMilestone.splitShare)}
+          subtext={
+            branchMilestone.reached
+              ? `1% of branch sales ÷ ${branchMilestone.teamSize} teammates · pool ${formatPesoExact(branchMilestone.splitPool)}`
+              : `Unlocks at ₱2M · 1% split for the whole team (incl. manager)`
+          }
+          icon={<Users className="h-5 w-5" />}
+          tone={branchMilestone.reached ? 'milestone' : 'incentiveMuted'}
+          className="sm:col-span-2 xl:col-span-1"
         />
       </div>
 
@@ -535,6 +596,9 @@ export function MyCommissionSalesPage() {
         remaining={branchMilestone.remaining}
         pct={branchMilestone.pct}
         reached={branchMilestone.reached}
+        teamSize={branchMilestone.teamSize}
+        splitPool={branchMilestone.splitPool}
+        splitShare={branchMilestone.splitShare}
       />
 
       <Card className="p-4 sm:p-5">
@@ -761,6 +825,9 @@ function MilestoneCard({
   remaining,
   pct,
   reached,
+  teamSize,
+  splitPool,
+  splitShare,
 }: {
   branchName: string
   monthLabel: string
@@ -768,6 +835,9 @@ function MilestoneCard({
   remaining: number
   pct: number
   reached: boolean
+  teamSize: number
+  splitPool: number
+  splitShare: number
 }) {
   return (
     <div className="rounded-[14px] border border-[#C5A059]/40 bg-gradient-to-br from-[#FFFDF8] via-[#F8F0DE] to-[#E8D5A3] p-4 shadow-[0_12px_28px_rgba(197,160,89,0.2)] sm:p-5">
@@ -796,7 +866,7 @@ function MilestoneCard({
           <span>{pct}% of ₱2M</span>
           <span>
             {reached
-              ? 'Milestone reached — keep the momentum!'
+              ? 'Milestone reached — 1% team split unlocked!'
               : `${formatPesoExact(remaining)} left to hit ₱2M`}
           </span>
         </div>
@@ -813,8 +883,8 @@ function MilestoneCard({
         </div>
         <p className="mt-2 text-xs text-[#6b5420]/90">
           {reached
-            ? 'Your branch cleared the ₱2M goal this month. Great team push!'
-            : 'Every paid booking moves the branch closer — push together for the ₱2M milestone.'}
+            ? `1% pool ${formatPesoExact(splitPool)} split across ${teamSize} teammates (incl. branch manager) — your share ${formatPesoExact(splitShare)}.`
+            : 'Hit ₱2M and the branch unlocks a 1% commission pool split equally across the whole team, including the branch manager.'}
         </p>
       </div>
     </div>
@@ -833,7 +903,16 @@ function StatCard({
   value: string
   subtext?: string
   icon: ReactNode
-  tone: 'emerald' | 'gold' | 'cream' | 'sage' | 'copper' | 'incentive' | 'incentiveMuted' | 'planb'
+  tone:
+    | 'emerald'
+    | 'gold'
+    | 'cream'
+    | 'sage'
+    | 'copper'
+    | 'incentive'
+    | 'incentiveMuted'
+    | 'planb'
+    | 'milestone'
   className?: string
 }) {
   const tones = {
@@ -893,6 +972,13 @@ function StatCard({
       sub: 'text-[#5b3d8a]/95',
       iconWrap: 'bg-white/65 text-[#5b3d8a]',
     },
+    milestone: {
+      card: 'border-[#C5A059]/45 bg-gradient-to-br from-[#FFFDF8] via-[#F3E6C8] to-[#C5A059] text-[#2f230a] shadow-[0_12px_30px_rgba(197,160,89,0.3)]',
+      label: 'text-[#6b5420]',
+      value: 'text-[#0A2E26]',
+      sub: 'text-[#6b5420]/95',
+      iconWrap: 'bg-white/65 text-[#8a6a20]',
+    },
   } as const
 
   const t = tones[tone]
@@ -911,7 +997,7 @@ function StatCard({
           <p className={cn('mt-2 truncate font-metric text-2xl font-semibold sm:text-3xl', t.value)}>
             {value}
           </p>
-          {subtext ? <p className={cn('mt-1 truncate text-xs', t.sub)}>{subtext}</p> : null}
+          {subtext ? <p className={cn('mt-1 line-clamp-2 text-xs', t.sub)}>{subtext}</p> : null}
         </div>
         <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-full', t.iconWrap)}>
           {icon}
