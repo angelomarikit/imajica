@@ -17,9 +17,9 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
-import { getPackagesCatalog, getServices } from '@/services/catalogService'
+import { getPackagesCatalog, getServices, subscribeCatalog } from '@/services/catalogService'
 import { getCoupons } from '@/services/couponService'
-import { getCatalogProducts } from '@/services/productCatalogService'
+import { getCatalogProducts, subscribeProducts } from '@/services/productCatalogService'
 import { preloadSalesData } from '@/services/salesService'
 import type { Client } from '@/types'
 import { formatPeso } from '@/utils/currency'
@@ -72,7 +72,20 @@ export function BookingPage() {
     return () => window.clearInterval(t)
   }, [])
 
+  const [catalogTick, setCatalogTick] = useState(0)
+
+  useEffect(() => {
+    const refresh = () => setCatalogTick((n) => n + 1)
+    const unsubServices = subscribeCatalog(refresh)
+    const unsubProducts = subscribeProducts(refresh)
+    return () => {
+      unsubServices()
+      unsubProducts()
+    }
+  }, [])
+
   const offerings = useMemo(() => {
+    void catalogTick
     const services = getServices()
       .filter((s) => s.status === 'active')
       .map((s) => ({
@@ -92,19 +105,18 @@ export function BookingPage() {
         kind: 'package' as const,
       }))
     return [...services, ...packages]
-  }, [])
+  }, [catalogTick])
 
-  const products = useMemo(
-    () =>
-      getCatalogProducts().map((p) => ({
-        id: p.id,
-        name: p.name,
-        price: p.retailPrice,
-        sessions: 1,
-        kind: 'product' as const,
-      })),
-    [],
-  )
+  const products = useMemo(() => {
+    void catalogTick
+    return getCatalogProducts().map((p) => ({
+      id: p.id,
+      name: p.name,
+      price: p.retailPrice,
+      sessions: 1,
+      kind: 'product' as const,
+    }))
+  }, [catalogTick])
 
   const catalog = tab === 'products' ? products : offerings
 

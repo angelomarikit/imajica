@@ -1,6 +1,11 @@
 import type { CatalogProduct, ConsumableItem, ProductCategory } from '@/types'
 import { PRODUCT_CATALOG_SEED, type ProductSeedRow } from '@/constants/productCatalogSeed'
 import { CONSUMABLE_CATALOG_SEED, type ConsumableSeedRow } from '@/constants/consumableCatalogSeed'
+import {
+  applyPriceOverride,
+  setPriceOverride,
+  subscribeCatalogPriceOverrides,
+} from '@/services/catalogPriceOverrideService'
 
 const CAT_KEY = 'imajica_product_categories'
 const PROD_KEY = 'imajica_catalog_products'
@@ -141,7 +146,9 @@ export function getCatalogProducts(): CatalogProduct[] {
     if (deleted.has(p.id)) continue
     byId.set(p.id, p)
   }
-  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name))
+  return [...byId.values()]
+    .map((p) => applyPriceOverride('product', p))
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export function createCatalogProduct(input: {
@@ -179,7 +186,8 @@ export function createCatalogProduct(input: {
     createdAt: new Date().toISOString().slice(0, 10),
   }
   write(PROD_KEY, [product, ...read<CatalogProduct>(PROD_KEY)])
-  return product
+  void setPriceOverride('product', product.id, product.retailPrice)
+  return applyPriceOverride('product', product)
 }
 
 export function getCatalogProductById(id: string): CatalogProduct | undefined {
@@ -196,7 +204,8 @@ export function updateCatalogProduct(product: CatalogProduct) {
     deleted.delete(product.id)
     writeDeletedProductIds(deleted)
   }
-  return product
+  void setPriceOverride('product', product.id, product.retailPrice)
+  return applyPriceOverride('product', product)
 }
 
 export function deleteCatalogProduct(id: string) {
@@ -294,8 +303,10 @@ export function subscribeProducts(listener: () => void) {
   }
   window.addEventListener(CHANGE, listener)
   window.addEventListener('storage', onStorage)
+  const unsubPrices = subscribeCatalogPriceOverrides(listener)
   return () => {
     window.removeEventListener(CHANGE, listener)
     window.removeEventListener('storage', onStorage)
+    unsubPrices()
   }
 }

@@ -1,5 +1,10 @@
 import type { EntityStatus, Package, Treatment, TreatmentCategorySlug } from '@/types'
 import { getBranches } from '@/services/branchService'
+import {
+  applyPriceOverride,
+  setPriceOverride,
+  subscribeCatalogPriceOverrides,
+} from '@/services/catalogPriceOverrideService'
 import { SERVICE_CATALOG_SEED, type ServiceSeedRow } from '@/constants/serviceCatalogSeed'
 import { PACKAGE_CATALOG_SEED, type PackageSeedRow } from '@/constants/packageCatalogSeed'
 
@@ -85,7 +90,8 @@ export function getServices(): Treatment[] {
     if (readDeletedIds().has(s.id)) continue
     byId.set(s.id, s)
   }
-  return [...byId.values()]
+  // Price overrides always win so edits never snap back to seed defaults.
+  return [...byId.values()].map((s) => applyPriceOverride('service', s))
 }
 
 export function getServiceById(id: string): Treatment | undefined {
@@ -143,7 +149,7 @@ export function getPackagesCatalog(): Package[] {
     if (readDeletedPackageIds().has(p.id)) continue
     byId.set(p.id, p)
   }
-  return [...byId.values()]
+  return [...byId.values()].map((p) => applyPriceOverride('package', p))
 }
 
 export function getPackageById(id: string): Package | undefined {
@@ -161,8 +167,9 @@ function upsertService(service: Treatment) {
     deleted.delete(service.id)
     writeDeletedIds(deleted)
   }
+  void setPriceOverride('service', service.id, service.price)
   emit()
-  return service
+  return applyPriceOverride('service', service)
 }
 
 function upsertPackage(pkg: Package) {
@@ -175,8 +182,9 @@ function upsertPackage(pkg: Package) {
     deleted.delete(pkg.id)
     writeDeletedPackageIds(deleted)
   }
+  void setPriceOverride('package', pkg.id, pkg.promoPrice ?? pkg.regularPrice)
   emit()
-  return pkg
+  return applyPriceOverride('package', pkg)
 }
 
 export type ServiceInput = {
@@ -411,8 +419,10 @@ export function subscribeCatalog(listener: () => void): () => void {
   }
   window.addEventListener(CHANGE_EVENT, listener)
   window.addEventListener('storage', onStorage)
+  const unsubPrices = subscribeCatalogPriceOverrides(listener)
   return () => {
     window.removeEventListener(CHANGE_EVENT, listener)
     window.removeEventListener('storage', onStorage)
+    unsubPrices()
   }
 }
