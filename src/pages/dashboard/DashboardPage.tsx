@@ -7,6 +7,7 @@ import {
   Gift,
   Minus,
   Package,
+  Percent,
   Plus,
   Receipt,
   Sparkles,
@@ -43,6 +44,8 @@ import { cn } from '@/utils/cn'
 import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
 const COMMISSION_RATE = 0.05
+/** Branch manager take on their clinic’s total sales (branch-manager dashboard only). */
+const BRANCH_MANAGER_COMMISSION_RATE = 0.01
 
 type BirthdayCard = {
   id: string
@@ -681,6 +684,8 @@ function BranchOpsDashboard() {
     }
     const patientsInRange = patientIds.size || rangeAppts.length
     const commissions = periodSalesTotal * COMMISSION_RATE
+    /** Branch manager 1% follows the same calendar range as staff / range sales. */
+    const managerCommission = periodSalesTotal * BRANCH_MANAGER_COMMISSION_RATE
     const isSingleDay = rangeFrom === rangeTo
     const includesToday = inDateRange(todayKey, rangeFrom, rangeTo)
 
@@ -699,6 +704,7 @@ function BranchOpsDashboard() {
       rangeSalesLines: rangeSales,
       todaySalesLines: todaySales,
       monthSalesLines,
+      managerCommission,
       commissions,
       todayExpenses: includesToday && isSingleDay ? todayExpenseTotal : rangeExpenseTotal,
       rangeExpenseTotal,
@@ -1141,6 +1147,23 @@ function BranchOpsDashboard() {
             )
           }
         />
+        {branchOwner ? (
+          <StatCard
+            title="Manager Commission"
+            value={formatPesoExact(metrics.managerCommission)}
+            hint={`Your 1% on branch sales in ${rangeLabel} (${formatPesoExact(metrics.periodSales)}).`}
+            tag="1%"
+            tagTone="emerald"
+            icon={<Percent className="h-4 w-4" />}
+            onClick={() =>
+              openSalesBreakdown(
+                'Manager Commission (1%)',
+                `1% of branch sales · ${rangeLabel}`,
+                metrics.rangeSalesLines,
+              )
+            }
+          />
+        ) : null}
         {branchOwner ? (
           <StatCard
             title={metrics.isSingleDay ? "Today's Expenses" : 'Period Expenses'}
