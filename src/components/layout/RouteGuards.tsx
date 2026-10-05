@@ -48,6 +48,7 @@ export function RequireStaff({ children }: { children?: React.ReactNode }) {
   const staffRoles: UserRole[] = [
     'SUPER_ADMIN',
     'HQ_ADMIN',
+    'HR',
     'BRANCH_ADMIN',
     'DOCTOR',
     'NURSE',
@@ -61,6 +62,11 @@ export function RequireStaff({ children }: { children?: React.ReactNode }) {
 /** HQ-only admin surfaces (User Access, Branches, Marketing, org warehouse, etc.) */
 export function RequireHqAdmin({ children }: { children?: React.ReactNode }) {
   return <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN']}>{children}</RequireRole>
+}
+
+/** HQ or HR — people ops across all clinics (attendance, payroll, staff, LMS). */
+export function RequirePeopleOps({ children }: { children?: React.ReactNode }) {
+  return <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR']}>{children}</RequireRole>
 }
 
 /** Client portal only — staff are sent to their staff home. */

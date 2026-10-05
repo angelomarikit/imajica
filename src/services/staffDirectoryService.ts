@@ -1,7 +1,7 @@
-import { demoStaff } from '@/constants/demoData'
 import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
+import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { getBranches } from '@/services/branchService'
-import { getAccessUsers } from '@/services/userAccessService'
+import { getAccessUsers, listAccessUsers } from '@/services/userAccessService'
 import type { AccessUser, Staff, UserRole } from '@/types'
 import { TIMECLOCK_ROLES } from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
@@ -14,6 +14,55 @@ const LEGACY_BRANCH_IDS: Record<string, string> = {
   'br-dasma': BRANCH_IDS.dasma,
   'br-bacoor': BRANCH_IDS.bacoor,
   'br-makati': BRANCH_IDS.pasig,
+}
+
+const HR_DETAILS_KEY = 'imajica_employee_hr_details'
+const HR_CHANGE = 'imajica:employee-hr-changed'
+
+export type EmployeeHrDetails = {
+  profileId: string
+  staffRowId?: string
+  firstName?: string
+  middleName?: string
+  lastName?: string
+  phone?: string
+  birthDate?: string
+  address?: string
+  emergencyContactName?: string
+  emergencyContactRelation?: string
+  emergencyContactPhone?: string
+  department?: string
+  title?: string
+  hireDate?: string
+  employmentType?: string
+  baseSalary?: number
+  avatarUrl?: string
+  code?: string
+}
+
+type StaffDbRow = {
+  id: string
+  profile_id: string | null
+  code: string
+  full_name: string
+  first_name: string | null
+  middle_name: string | null
+  last_name: string | null
+  email: string | null
+  phone: string | null
+  role_id: string
+  title: string | null
+  department: string | null
+  status: string
+  hire_date: string | null
+  employment_type: string | null
+  base_salary: number | null
+  birth_date: string | null
+  address: string | null
+  avatar_url: string | null
+  emergency_contact_name: string | null
+  emergency_contact_relation: string | null
+  emergency_contact_phone: string | null
 }
 
 function normalizeBranchLabel(value: string | null | undefined): string {
@@ -43,21 +92,141 @@ export function matchesStaffBranch(
   return a === b || a.includes(b) || b.includes(a)
 }
 
-function accessUserToStaff(u: AccessUser): Staff {
+function splitFullName(fullName: string): { firstName: string; middleName: string; lastName: string } {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return { firstName: '', middleName: '', lastName: '' }
+  if (parts.length === 1) return { firstName: parts[0], middleName: '', lastName: '' }
+  if (parts.length === 2) return { firstName: parts[0], middleName: '', lastName: parts[1] }
+  return {
+    firstName: parts[0],
+    middleName: parts.slice(1, -1).join(' '),
+    lastName: parts[parts.length - 1],
+  }
+}
+
+function isDirectoryEmployee(u: AccessUser): boolean {
+  const name = u.fullName.trim().toUpperCase()
+  if (!name || name === 'INACTIVE') return false
+  return true
+}
+
+function readLocalHr(): Record<string, EmployeeHrDetails> {
+  try {
+    const raw = localStorage.getItem(HR_DETAILS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, EmployeeHrDetails>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeLocalHr(map: Record<string, EmployeeHrDetails>) {
+  localStorage.setItem(HR_DETAILS_KEY, JSON.stringify(map))
+  window.dispatchEvent(new Event(HR_CHANGE))
+}
+
+export function subscribeEmployeeHr(listener: () => void) {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === HR_DETAILS_KEY) listener()
+  }
+  window.addEventListener(HR_CHANGE, listener)
+  window.addEventListener('storage', onStorage)
+  return () => {
+    window.removeEventListener(HR_CHANGE, listener)
+    window.removeEventListener('storage', onStorage)
+  }
+}
+
+function hrFromDbRow(row: StaffDbRow): EmployeeHrDetails {
+  return {
+    profileId: row.profile_id ?? row.id,
+    staffRowId: row.id,
+    firstName: row.first_name ?? undefined,
+    middleName: row.middle_name ?? undefined,
+    lastName: row.last_name ?? undefined,
+    phone: row.phone ?? undefined,
+    birthDate: row.birth_date ?? undefined,
+    address: row.address ?? undefined,
+    emergencyContactName: row.emergency_contact_name ?? undefined,
+    emergencyContactRelation: row.emergency_contact_relation ?? undefined,
+    emergencyContactPhone: row.emergency_contact_phone ?? undefined,
+    department: row.department ?? undefined,
+    title: row.title ?? undefined,
+    hireDate: row.hire_date ?? undefined,
+    employmentType: row.employment_type ?? undefined,
+    baseSalary: row.base_salary ?? undefined,
+    avatarUrl: row.avatar_url ?? undefined,
+    code: row.code,
+  }
+}
+
+async function loadRemoteHrByProfile(): Promise<Map<string, EmployeeHrDetails>> {
+  const map = new Map<string, EmployeeHrDetails>()
+  if (!isSupabaseConfigured || !supabase) return map
+  const { data, error } = await supabase
+    .from('staff')
+    .select(
+      'id, profile_id, code, full_name, first_name, middle_name, last_name, email, phone, role_id, title, department, status, hire_date, employment_type, base_salary, birth_date, address, avatar_url, emergency_contact_name, emergency_contact_relation, emergency_contact_phone',
+    )
+  if (error || !data) return map
+  for (const row of data as StaffDbRow[]) {
+    const key = row.profile_id || row.id
+    map.set(key, hrFromDbRow(row))
+    if (row.email) map.set(`email:${row.email.trim().toLowerCase()}`, hrFromDbRow(row))
+  }
+  return map
+}
+
+function applyHr(staff: Staff, hr?: EmployeeHrDetails | null): Staff {
+  if (!hr) return staff
+  const firstName = hr.firstName ?? staff.firstName
+  const middleName = hr.middleName ?? staff.middleName
+  const lastName = hr.lastName ?? staff.lastName
+  const composed = [firstName, middleName, lastName].filter(Boolean).join(' ')
+  return {
+    ...staff,
+    firstName,
+    middleName,
+    lastName,
+    fullName: composed || staff.fullName,
+    phone: hr.phone ?? staff.phone,
+    birthDate: hr.birthDate ?? staff.birthDate,
+    address: hr.address ?? staff.address,
+    emergencyContactName: hr.emergencyContactName ?? staff.emergencyContactName,
+    emergencyContactRelation: hr.emergencyContactRelation ?? staff.emergencyContactRelation,
+    emergencyContactPhone: hr.emergencyContactPhone ?? staff.emergencyContactPhone,
+    department: hr.department ?? staff.department,
+    title: hr.title ?? staff.title,
+    hireDate: hr.hireDate ?? staff.hireDate,
+    employmentType: hr.employmentType ?? staff.employmentType,
+    baseSalary: hr.baseSalary ?? staff.baseSalary,
+    avatarUrl: hr.avatarUrl ?? staff.avatarUrl,
+    code: hr.code ?? staff.code,
+  }
+}
+
+export function accessUserToStaff(u: AccessUser): Staff {
+  const names = splitFullName(u.fullName)
   return {
     id: u.id,
-    code: u.employeeCode ? `EMP-${u.employeeCode}` : u.id.slice(0, 8).toUpperCase(),
+    profileId: u.id,
+    code: u.employeeCode ? `EMP-${u.employeeCode}` : `EMP-${u.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`,
+    employeeCode: u.employeeCode ?? null,
     fullName: u.fullName,
+    firstName: names.firstName,
+    middleName: names.middleName,
+    lastName: names.lastName,
     email: u.email,
     phone: '',
     role: (u.role as Staff['role']) || 'STAFF',
     title: formatRoleLabel(u.role),
     department: 'Operation Departments',
     branchId: u.branchId ?? '',
-    branchName: u.branchName ?? '',
-    status: u.status,
+    branchName: u.branchName ?? 'All Branches (organization)',
+    status: u.status === 'inactive' ? 'inactive' : 'active',
     specializations: [],
-    hireDate: new Date().toISOString().slice(0, 10),
+    hireDate: '',
     employmentType: 'Full-time',
     rating: 0,
     reviewCount: 0,
@@ -66,185 +235,154 @@ function accessUserToStaff(u: AccessUser): Staff {
 }
 
 function mergeStaffById(rows: Staff[]): Staff[] {
-  const byEmail = new Map<string, Staff>()
+  const byKey = new Map<string, Staff>()
   for (const row of rows) {
     const key = row.email.trim().toLowerCase() || row.id
-    if (!byEmail.has(key)) byEmail.set(key, row)
+    const existing = byKey.get(key)
+    if (!existing) {
+      byKey.set(key, row)
+      continue
+    }
+    // Prefer the row that has richer HR / employee code data
+    const prefer =
+      (row.employeeCode ? 2 : 0) +
+      (row.phone ? 1 : 0) +
+      (row.address ? 1 : 0) +
+      (row.emergencyContactName ? 1 : 0)
+    const current =
+      (existing.employeeCode ? 2 : 0) +
+      (existing.phone ? 1 : 0) +
+      (existing.address ? 1 : 0) +
+      (existing.emergencyContactName ? 1 : 0)
+    byKey.set(key, prefer >= current ? { ...existing, ...row, id: prefer >= current ? row.id : existing.id } : existing)
   }
-  return [...byEmail.values()].sort((a, b) => a.fullName.localeCompare(b.fullName))
+  return [...byKey.values()].sort((a, b) => a.fullName.localeCompare(b.fullName))
 }
 
-/** Shared staff directory rows (Staff page + booking checkout pickers). */
-const DIRECTORY_EXTRA: Staff[] = [
-  {
-    id: 'st-franchise-ae-01',
-    code: 'MJ-AE-FR01',
-    fullName: 'Angela Reyes',
-    email: 'angela.reyes@imajica.ph',
-    phone: '09171234001',
-    role: 'AESTHETICIAN',
-    title: 'Aesthetician',
-    department: 'Operation Departments',
-    branchId: BRANCH_IDS.dasma,
-    branchName: 'Dasmariñas, Cavite',
-    status: 'active',
-    specializations: ['Facials'],
-    hireDate: '2024-03-01',
-    employmentType: 'Full-time',
-    rating: 4.9,
-    reviewCount: 22,
-    baseSalary: 35000,
-    birthDate: '1995-10-02',
-  },
-  {
-    id: 'st-franchise-rec-01',
-    code: 'MJ-RC-FR01',
-    fullName: 'Carla Mendoza',
-    email: 'carla.mendoza@imajica.ph',
-    phone: '09181234002',
-    role: 'RECEPTIONIST',
-    title: 'Receptionist',
-    department: 'Operation Departments',
-    branchId: BRANCH_IDS.dasma,
-    branchName: 'Dasmariñas, Cavite',
-    status: 'active',
-    specializations: ['Front Desk'],
-    hireDate: '2024-05-15',
-    employmentType: 'Full-time',
-    rating: 4.7,
-    reviewCount: 12,
-    baseSalary: 28000,
-    birthDate: '1998-10-05',
-  },
-  {
-    id: 'st-rosalie',
-    code: 'MJ-AE-010',
-    fullName: 'Rosalie Manalo',
-    email: 'jangmi2575@gmail.com',
-    phone: '09064770983',
-    role: 'AESTHETICIAN',
-    title: 'Aesthetician',
-    department: 'Operation Departments',
-    branchId: BRANCH_IDS.pasig,
-    branchName: 'Pasig City',
-    status: 'active',
-    specializations: ['Facials'],
-    hireDate: '2024-02-01',
-    employmentType: 'Full-time',
-    rating: 4.9,
-    reviewCount: 50,
-    baseSalary: 35000,
-    birthDate: '1992-09-30',
-  },
-  {
-    id: 'st-veronica',
-    code: 'MJ-AE-011',
-    fullName: 'Veronica Mayo',
-    email: 'veronica.mayo@imajica.com',
-    phone: '09171234567',
-    role: 'AESTHETICIAN',
-    title: 'Aesthetician',
-    department: 'Operation Departments',
-    branchId: BRANCH_IDS.cainta,
-    branchName: 'Cainta, Rizal',
-    status: 'active',
-    specializations: ['Facials'],
-    hireDate: '2024-04-12',
-    employmentType: 'Full-time',
-    rating: 4.8,
-    reviewCount: 40,
-    baseSalary: 34000,
-  },
-  {
-    id: 'st-sonayah',
-    code: 'MJ-BM-012',
-    fullName: 'Sonayah Arsila',
-    email: 'sonayah.arsila@imajica.com',
-    phone: '09181234567',
-    role: 'STAFF',
-    title: 'Staff',
-    department: 'Operation Departments',
-    branchId: BRANCH_IDS.sanMateo,
-    branchName: 'San Mateo, Rizal',
-    status: 'active',
-    specializations: ['Operations'],
-    hireDate: '2023-08-01',
-    employmentType: 'Full-time',
-    rating: 5,
-    reviewCount: 20,
-    baseSalary: 55000,
-  },
-  {
-    id: 'st-rasmiya',
-    code: 'MJ-AE-013',
-    fullName: 'Rasmiya Monteclaro',
-    email: 'rasmiya.m@imajica.ph',
-    phone: '09191234567',
-    role: 'AESTHETICIAN',
-    title: 'Aesthetician',
-    department: 'Operation Departments',
-    branchId: BRANCH_IDS.bacoor,
-    branchName: 'Bacoor, Cavite',
-    status: 'inactive',
-    specializations: ['Facials'],
-    hireDate: '2023-01-10',
-    employmentType: 'Full-time',
-    rating: 4.5,
-    reviewCount: 18,
-    baseSalary: 32000,
-  },
-  {
-    id: 'st-dr-lim',
-    code: 'MJ-DR-001',
-    fullName: 'Dr. Patricia Lim',
-    email: 'patricia.lim@imajica.ph',
-    phone: '09171112233',
-    role: 'DOCTOR',
-    title: 'Aesthetic Physician',
-    department: 'Medical Departments',
-    branchId: BRANCH_IDS.pasig,
-    branchName: 'Pasig City',
-    status: 'active',
-    specializations: ['Injectables', 'Dermatology'],
-    hireDate: '2022-06-01',
-    employmentType: 'Full-time',
-    rating: 5,
-    reviewCount: 80,
-    baseSalary: 90000,
-  },
-  {
-    id: 'st-dr-santos',
-    code: 'MJ-DR-002',
-    fullName: 'Dr. Miguel Santos',
-    email: 'miguel.santos@imajica.ph',
-    phone: '09182223344',
-    role: 'DOCTOR',
-    title: 'Aesthetic Physician',
-    department: 'Medical Departments',
-    branchId: BRANCH_IDS.cainta,
-    branchName: 'Cainta, Rizal',
-    status: 'active',
-    specializations: ['Laser', 'Skin'],
-    hireDate: '2023-02-15',
-    employmentType: 'Full-time',
-    rating: 4.9,
-    reviewCount: 55,
-    baseSalary: 88000,
-  },
-]
+function resolveHr(
+  u: AccessUser,
+  remote: Map<string, EmployeeHrDetails>,
+  local: Record<string, EmployeeHrDetails>,
+): EmployeeHrDetails | undefined {
+  return (
+    local[u.id] ??
+    remote.get(u.id) ??
+    (u.email ? remote.get(`email:${u.email.trim().toLowerCase()}`) : undefined) ??
+    undefined
+  )
+}
 
+/** Sync directory (booking / payroll helpers). Uses local access users + local HR overlays. */
 export function getDirectoryStaff(): Staff[] {
-  const extras = DIRECTORY_EXTRA
-  const demo = demoStaff.map((s) => ({
-    ...s,
-    department: s.department ?? 'Operation Departments',
-    title: s.title || s.role,
-    branchName: s.branchName.includes('City')
-      ? s.branchName
-      : `${s.branchName} City`.replace(' City City', ' City'),
-  }))
-  const ids = new Set(extras.map((e) => e.id))
-  return [...extras, ...demo.filter((d) => !ids.has(d.id))]
+  const local = readLocalHr()
+  return mergeStaffById(
+    getAccessUsers()
+      .filter(isDirectoryEmployee)
+      .map((u) => applyHr(accessUserToStaff(u), local[u.id])),
+  )
+}
+
+/** Async Employee Database — live User Access + HR staff profiles. */
+export async function listDirectoryStaff(): Promise<Staff[]> {
+  const [users, remote] = await Promise.all([listAccessUsers(), loadRemoteHrByProfile()])
+  const local = readLocalHr()
+  return mergeStaffById(
+    users.filter(isDirectoryEmployee).map((u) => applyHr(accessUserToStaff(u), resolveHr(u, remote, local))),
+  )
+}
+
+export async function getEmployeeById(id: string): Promise<Staff | null> {
+  const rows = await listDirectoryStaff()
+  return rows.find((s) => s.id === id || s.profileId === id) ?? null
+}
+
+export async function saveEmployeeHrDetails(
+  staff: Staff,
+  patch: Omit<EmployeeHrDetails, 'profileId'>,
+): Promise<Staff> {
+  const profileId = staff.profileId || staff.id
+  const names = splitFullName(staff.fullName)
+  const next: EmployeeHrDetails = {
+    profileId,
+    staffRowId: patch.staffRowId,
+    firstName: patch.firstName ?? staff.firstName ?? names.firstName,
+    middleName: patch.middleName ?? staff.middleName ?? names.middleName,
+    lastName: patch.lastName ?? staff.lastName ?? names.lastName,
+    phone: patch.phone ?? staff.phone,
+    birthDate: patch.birthDate ?? staff.birthDate,
+    address: patch.address ?? staff.address,
+    emergencyContactName: patch.emergencyContactName ?? staff.emergencyContactName,
+    emergencyContactRelation: patch.emergencyContactRelation ?? staff.emergencyContactRelation,
+    emergencyContactPhone: patch.emergencyContactPhone ?? staff.emergencyContactPhone,
+    department: patch.department ?? staff.department,
+    title: patch.title ?? staff.title,
+    hireDate: patch.hireDate ?? staff.hireDate,
+    employmentType: patch.employmentType ?? staff.employmentType,
+    baseSalary: patch.baseSalary ?? staff.baseSalary,
+    avatarUrl: patch.avatarUrl ?? staff.avatarUrl,
+    code: patch.code ?? staff.code,
+  }
+
+  const fullName = [next.firstName, next.middleName, next.lastName].filter(Boolean).join(' ') || staff.fullName
+
+  if (isSupabaseConfigured && supabase) {
+    const payload = {
+      profile_id: profileId,
+      code: next.code || staff.code,
+      full_name: fullName,
+      first_name: next.firstName || null,
+      middle_name: next.middleName || null,
+      last_name: next.lastName || null,
+      email: staff.email || null,
+      phone: next.phone || null,
+      role_id: staff.role,
+      title: next.title || null,
+      department: next.department || null,
+      status: staff.status === 'inactive' ? 'inactive' : 'active',
+      hire_date: next.hireDate || null,
+      employment_type: next.employmentType || null,
+      base_salary: next.baseSalary ?? 0,
+      birth_date: next.birthDate || null,
+      address: next.address || null,
+      avatar_url: next.avatarUrl || null,
+      emergency_contact_name: next.emergencyContactName || null,
+      emergency_contact_relation: next.emergencyContactRelation || null,
+      emergency_contact_phone: next.emergencyContactPhone || null,
+      updated_at: new Date().toISOString(),
+    }
+
+    const { data: existing } = await supabase
+      .from('staff')
+      .select('id')
+      .eq('profile_id', profileId)
+      .maybeSingle()
+
+    let staffRowId = (existing as { id?: string } | null)?.id
+    if (staffRowId) {
+      const { error } = await supabase.from('staff').update(payload).eq('id', staffRowId)
+      if (error) throw new Error(error.message)
+    } else {
+      const { data, error } = await supabase.from('staff').insert(payload).select('id').single()
+      if (error) throw new Error(error.message)
+      staffRowId = (data as { id: string }).id
+    }
+    next.staffRowId = staffRowId
+
+    if (staff.branchId) {
+      await supabase.from('staff_branches').upsert(
+        { staff_id: staffRowId, branch_id: staff.branchId, is_primary: true },
+        { onConflict: 'staff_id,branch_id' },
+      )
+    }
+
+    await supabase.from('profiles').update({ phone: next.phone || null, full_name: fullName }).eq('id', profileId)
+  }
+
+  const local = readLocalHr()
+  local[profileId] = next
+  writeLocalHr(local)
+
+  return applyHr({ ...staff, fullName }, next)
 }
 
 /**
@@ -263,6 +401,7 @@ export function getActiveStaffForBooking(branchId?: string): Staff[] {
     'BRANCH_ADMIN',
   ])
 
+  const local = readLocalHr()
   return mergeStaffById(
     getAccessUsers()
       .filter(
@@ -272,7 +411,7 @@ export function getActiveStaffForBooking(branchId?: string): Staff[] {
           matchesStaffBranch(u, branchId) &&
           bookingRoles.has(u.role as UserRole),
       )
-      .map(accessUserToStaff),
+      .map((u) => applyHr(accessUserToStaff(u), local[u.id])),
   )
 }
 
@@ -284,6 +423,7 @@ export function getActiveDoctorsForBooking(branchId?: string): Staff[] {
     )
   }
 
+  const local = readLocalHr()
   return mergeStaffById(
     getAccessUsers()
       .filter(
@@ -293,6 +433,6 @@ export function getActiveDoctorsForBooking(branchId?: string): Staff[] {
           Boolean(u.branchId) &&
           matchesStaffBranch(u, branchId),
       )
-      .map(accessUserToStaff),
+      .map((u) => applyHr(accessUserToStaff(u), local[u.id])),
   )
 }

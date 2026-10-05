@@ -67,15 +67,15 @@ export function ClientSidebar({
   const close = () => onOpenChange(false)
 
   const content = (
-    <div className="flex h-full flex-col bg-emerald-950 text-white">
-      <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
+    <div className="flex h-full min-h-0 flex-col bg-emerald-950 text-white">
+      <div className="flex shrink-0 items-center gap-3 border-b border-white/10 px-5 py-5">
         <img src={logo} alt={BRAND.name} className="h-11 w-11 rounded-full object-cover" />
         <div>
           <p className="font-brand text-lg leading-tight tracking-wide">IMAJICA</p>
           <p className="text-[10px] uppercase tracking-[0.18em] text-gold">Client Portal</p>
         </div>
       </div>
-      <nav className="flex-1 overflow-y-auto px-3 py-4 scrollbar-thin">
+      <nav className="scrollbar-sidebar min-h-0 flex-1 overflow-y-auto px-3 py-4">
         {navSections.map((section, sectionIdx) => (
           <div
             key={section.category ?? `section-${sectionIdx}`}
@@ -121,7 +121,7 @@ export function ClientSidebar({
           </div>
         ))}
       </nav>
-      <div className="m-3 overflow-hidden rounded-[12px] border border-white/10">
+      <div className="mt-auto shrink-0 m-3 overflow-hidden rounded-[12px] border border-white/10">
         <div className="bg-emerald-900 px-3 py-3">
           <p className="text-[10px] uppercase tracking-[0.16em] text-white/50">Your journey</p>
           <p className="font-brand text-sm text-gold">{BRAND.tagline}</p>
@@ -132,7 +132,7 @@ export function ClientSidebar({
 
   return (
     <>
-      <aside className="hidden w-64 shrink-0 lg:block">{content}</aside>
+      <aside className="hidden h-full w-64 shrink-0 lg:block">{content}</aside>
       <MobileDrawer open={open} onClose={close} side="left" panelClassName="bg-emerald-950">
         <div className="relative h-full">
           <Button

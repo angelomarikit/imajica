@@ -8,9 +8,14 @@ import { getBranches } from '@/services/branchService'
 import { createAccessUser } from '@/services/userAccessService'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { cn } from '@/utils/cn'
+import {
+  HQ_SENTINEL_BRANCH_ID,
+  isOrgWideRole,
+} from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
 
 const BRANCH_ROLE_OPTIONS = [
+  'HR',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -48,7 +53,8 @@ export function NewBranchAccountPage() {
       toast.error('Select a role')
       return
     }
-    if (!branchId) {
+    const orgWide = isOrgWideRole(role)
+    if (!orgWide && !branchId) {
       toast.error('Select a branch from the directory')
       return
     }
@@ -57,7 +63,7 @@ export function NewBranchAccountPage() {
       return
     }
     const branch = branches.find((b) => b.id === branchId)
-    if (!branch) {
+    if (!orgWide && !branch) {
       toast.error('Selected branch was not found')
       return
     }
@@ -69,8 +75,8 @@ export function NewBranchAccountPage() {
         email: email.trim().toLowerCase(),
         password,
         role,
-        branchId: branch.id,
-        branchName: branch.name,
+        branchId: orgWide ? HQ_SENTINEL_BRANCH_ID : branch!.id,
+        branchName: orgWide ? 'All Branches (organization)' : branch!.name,
         status: 'active',
       })
       toast.success(
@@ -165,7 +171,16 @@ export function NewBranchAccountPage() {
               <select
                 className={cn(fieldClass, !role && 'text-slate-400')}
                 value={role}
-                onChange={(e) => setRole(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setRole(next)
+                  // HR is org-wide — lock branch to All Branches
+                  if (isOrgWideRole(next)) {
+                    setBranchId(HQ_SENTINEL_BRANCH_ID)
+                  } else if (branchId === HQ_SENTINEL_BRANCH_ID) {
+                    setBranchId('')
+                  }
+                }}
                 required
               >
                 {BRANCH_ROLE_OPTIONS.map((r) => (
@@ -174,19 +189,35 @@ export function NewBranchAccountPage() {
                   </option>
                 ))}
               </select>
+              <p className="mt-1.5 text-xs text-slate-ui">
+                For system-wide access, choose <strong>HR</strong> — Branch becomes All Branches.
+              </p>
             </label>
             <label className="block sm:col-span-2">
               <span className={labelClass}>
                 Branch <span className="text-red-500">*</span>
               </span>
               <select
-                className={cn(fieldClass, !branchId && 'text-slate-400')}
-                value={branchId}
-                onChange={(e) => setBranchId(e.target.value)}
+                className={cn(
+                  fieldClass,
+                  !branchId && !isOrgWideRole(role) && 'text-slate-400',
+                )}
+                value={isOrgWideRole(role) ? HQ_SENTINEL_BRANCH_ID : branchId}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setBranchId(next)
+                  // Picking All Branches implies HR org-wide access
+                  if (next === HQ_SENTINEL_BRANCH_ID) {
+                    setRole('HR')
+                  }
+                }}
                 required
               >
                 <option value="" disabled>
                   Select branch from directory
+                </option>
+                <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
+                  All Branches (organization) — HR system-wide
                 </option>
                 {branches.map((b) => (
                   <option key={b.id} value={b.id} className="text-[#073D2C]">
@@ -195,6 +226,11 @@ export function NewBranchAccountPage() {
                   </option>
                 ))}
               </select>
+              {role === 'HR' || branchId === HQ_SENTINEL_BRANCH_ID ? (
+                <p className="mt-1.5 text-xs text-emerald-800">
+                  This account can see data across every clinic (not tied to one branch).
+                </p>
+              ) : null}
             </label>
           </div>
 

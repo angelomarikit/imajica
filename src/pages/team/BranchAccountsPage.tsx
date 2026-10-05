@@ -26,6 +26,7 @@ import { formatRoleLabel } from '@/utils/roleLabels'
 const ROLE_OPTIONS = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
+  'HR',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -35,7 +36,8 @@ const ROLE_OPTIONS = [
   'CLIENT',
 ] as const
 
-const ORG_ROLES = new Set<string>(['SUPER_ADMIN', 'HQ_ADMIN', 'CLIENT'])
+/** Org-wide roles use HQ sentinel — HR = All Branches across clinics */
+const ORG_ROLES = new Set<string>(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'CLIENT'])
 
 export function BranchAccountsPage() {
   const navigate = useNavigate()
@@ -456,7 +458,11 @@ export function BranchAccountsPage() {
                 }}
               >
                 <option value="">
-                  {ORG_ROLES.has(editing.role) ? 'No Branch (HQ / org role)' : 'Select branch'}
+                  {ORG_ROLES.has(editing.role)
+                    ? editing.role === 'HR'
+                      ? 'All Branches (organization)'
+                      : 'No Branch (HQ / org role)'
+                    : 'Select branch'}
                 </option>
                 {branches.map((b) => (
                   <option key={b.id} value={b.id}>

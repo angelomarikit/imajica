@@ -17,7 +17,6 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { useAuth } from '@/contexts/AuthContext'
 import {
-  getBookingRows,
   getSalesForBooking,
   preloadSalesData,
   subscribeSalesData,
@@ -38,6 +37,16 @@ import {
 } from 'lucide-react'
 import { listMyAttendance, subscribeAttendance } from '@/services/attendanceService'
 import {
+  BRANCH_SALES_MILESTONE,
+  STAFF_SALES_COMMISSION_RATE,
+} from '@/constants/payrollIncentives'
+import {
+  computeBranchMilestoneSplit,
+  listEmployeeTaggedBookings,
+  resolveEmployeeMatchNames,
+  saleDateKey,
+} from '@/services/staffCommissionService'
+import {
   ATTENDANCE_INCENTIVE_AMOUNT,
   computeMonthlyAttendanceIncentive,
   type MonthlyAttendanceIncentive,
@@ -49,80 +58,12 @@ import {
   subscribePlanBIncentives,
   sumPlanBForStaff,
 } from '@/services/planBIncentiveService'
-import { getDirectoryStaff, matchesStaffBranch } from '@/services/staffDirectoryService'
-import { getAccessUsers } from '@/services/userAccessService'
 import type { AttendancePunch } from '@/types'
 
-/** Staff take-home commission on tagged sales */
-const STAFF_COMMISSION_RATE = 0.005
-/** Branch sales goal shown on The 2M Milestone card */
-const BRANCH_SALES_MILESTONE = 2_000_000
-/** After ₱2M is hit, 1% of branch paid sales is split across the whole branch team */
-const MILESTONE_SPLIT_RATE = 0.01
-
-/** Active branch teammates (staff + clinic manager) who share the 2M split. */
-function countBranchTeamShare(branchId: string | undefined): number {
-  if (!branchId) return 1
-  const ids = new Set<string>()
-  for (const s of getDirectoryStaff()) {
-    if (s.status !== 'active') continue
-    if (!matchesStaffBranch(s, branchId)) continue
-    ids.add(s.email?.trim().toLowerCase() || s.id)
-  }
-  for (const u of getAccessUsers()) {
-    if (u.status !== 'active') continue
-    if (!u.branchId || !matchesStaffBranch(u, branchId)) continue
-    // Clinical / ops staff + clinic managers share the pool
-    if (
-      u.role === 'BRANCH_ADMIN' ||
-      u.role === 'DOCTOR' ||
-      u.role === 'NURSE' ||
-      u.role === 'AESTHETICIAN' ||
-      u.role === 'RECEPTIONIST' ||
-      u.role === 'STAFF'
-    ) {
-      ids.add(u.email?.trim().toLowerCase() || u.id)
-    }
-  }
-  return Math.max(1, ids.size)
-}
+/** Staff take-home commission on tagged sales — shared with HR payslips */
+const STAFF_COMMISSION_RATE = STAFF_SALES_COMMISSION_RATE
 
 const ALL_PRODUCTS = 'all'
-
-function normalizePersonName(value: string | undefined | null) {
-  return (value || '')
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/^(dr\.?|dra\.?)\s+/i, '')
-    .replace(/[^a-z\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-/** Match checkout STAFF tag to the logged-in account (handles middle names / initials). */
-function staffNamesMatch(accountName: string, saleStaffName: string) {
-  const a = normalizePersonName(accountName)
-  const b = normalizePersonName(saleStaffName)
-  if (!a || !b || b === '-') return false
-  if (a === b) return true
-  const aParts = a.split(' ')
-  const bParts = b.split(' ')
-  const aFirst = aParts[0]
-  const aLast = aParts[aParts.length - 1]
-  const bFirst = bParts[0]
-  const bLast = bParts[bParts.length - 1]
-  return Boolean(aFirst && aLast && bFirst && bLast && aFirst === bFirst && aLast === bLast)
-}
-
-function localDateKey(iso: string) {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
 
 function manilaTodayKey() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -244,7 +185,12 @@ export function MyCommissionSalesPage() {
   const staffBookings = useMemo(() => {
     void tick
     if (!user?.fullName) return []
-    return getBookingRows().filter((row) => staffNamesMatch(user.fullName, row.staffName))
+    const matchNames = resolveEmployeeMatchNames({
+      matchedUserId: user.id,
+      rosterFullName: user.fullName,
+      rosterEmails: user.email ? [user.email] : [],
+    })
+    return listEmployeeTaggedBookings({ matchNames })
   }, [tick, user])
 
   /** Product options from this staff's sales (any date). */
@@ -264,7 +210,7 @@ export function MyCommissionSalesPage() {
   /** Cards, graph, and tables — calendar range + product selection. */
   const filteredBookings = useMemo(() => {
     return staffBookings.filter((row) => {
-      const day = localDateKey(row.dateIso)
+      const day = saleDateKey(row.dateIso)
       if (from && day < from) return false
       if (to && day > to) return false
       if (!bookingHasProduct(row.bookingKey, product)) return false
@@ -290,7 +236,7 @@ export function MyCommissionSalesPage() {
     const map = new Map<string, { date: string; mySales: number; myCommission: number }>()
     for (const row of filteredBookings) {
       if (row.status !== 'Paid') continue
-      const key = localDateKey(row.dateIso)
+      const key = saleDateKey(row.dateIso)
       if (!key) continue
       if (from && key < from) continue
       if (to && key > to) continue
@@ -376,48 +322,23 @@ export function MyCommissionSalesPage() {
     void tick
     const branchId = user?.branchId
     const month = planBPeriodMonth
-    const teamSize = countBranchTeamShare(branchId)
-    if (!branchId || !month) {
-      return {
-        sales: 0,
-        remaining: BRANCH_SALES_MILESTONE,
-        pct: 0,
-        reached: false,
-        monthLabel: formatPeriodMonthLabel(month || currentPeriodMonth()),
-        branchName: user?.branchName || 'Your branch',
-        teamSize,
-        splitPool: 0,
-        splitShare: 0,
-      }
-    }
-    const [y, m] = month.split('-').map(Number)
-    const lastDay = new Date(Date.UTC(y!, m!, 0)).getUTCDate()
-    const monthFrom = `${month}-01`
-    const monthTo = `${month}-${String(lastDay).padStart(2, '0')}`
-
-    const sales = getBookingRows({ branchId })
-      .filter((row) => {
-        if (row.status !== 'Paid') return false
-        const day = localDateKey(row.dateIso)
-        return day >= monthFrom && day <= monthTo
-      })
-      .reduce((sum, row) => sum + row.payment, 0)
-
-    const remaining = Math.max(0, BRANCH_SALES_MILESTONE - sales)
-    const pct = Math.min(100, Math.round((sales / BRANCH_SALES_MILESTONE) * 1000) / 10)
-    const reached = sales >= BRANCH_SALES_MILESTONE
-    const splitPool = reached ? Math.round(sales * MILESTONE_SPLIT_RATE * 100) / 100 : 0
-    const splitShare = reached ? Math.round((splitPool / teamSize) * 100) / 100 : 0
+    const split = computeBranchMilestoneSplit({
+      branchId,
+      periodMonth: month || currentPeriodMonth(),
+    })
     return {
-      sales,
-      remaining,
-      pct,
-      reached,
-      monthLabel: formatPeriodMonthLabel(month),
+      sales: split.milestoneSales,
+      remaining: Math.max(0, BRANCH_SALES_MILESTONE - split.milestoneSales),
+      pct: Math.min(
+        100,
+        Math.round((split.milestoneSales / BRANCH_SALES_MILESTONE) * 1000) / 10,
+      ),
+      reached: split.milestoneReached,
+      monthLabel: formatPeriodMonthLabel(month || currentPeriodMonth()),
       branchName: user?.branchName || 'Your branch',
-      teamSize,
-      splitPool,
-      splitShare,
+      teamSize: split.milestoneTeamSize,
+      splitPool: split.milestonePool,
+      splitShare: split.milestoneShare,
     }
   }, [tick, user?.branchId, user?.branchName, planBPeriodMonth])
 

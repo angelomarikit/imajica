@@ -6,6 +6,7 @@
 const ROLE_DISPLAY_LABELS: Record<string, string> = {
   SUPER_ADMIN: 'Super Admin',
   HQ_ADMIN: 'HQ Admin',
+  HR: 'HR',
   BRANCH_ADMIN: 'Clinic Manager',
   DOCTOR: 'Doctor',
   NURSE: 'Nurse',

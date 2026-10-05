@@ -6,7 +6,6 @@ import {
   MapPin,
   Search,
   Users,
-  X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Navigate } from 'react-router-dom'
@@ -14,6 +13,7 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { AttendanceSessionModal } from '@/components/attendance/AttendanceSessionModal'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
 import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
@@ -24,14 +24,13 @@ import {
   formatManilaTime,
   listBranchAttendance,
   manilaDateKey,
-  resolveAttendancePhotoUrl,
   subscribeAttendance,
   summarizeStaffAttendance,
   type AttendanceSession,
   type StaffAttendanceSummary,
 } from '@/services/attendanceService'
 import { listAccessUsers } from '@/services/userAccessService'
-import { TIMECLOCK_ROLES, canAccessHqAdmin, isBranchOwner } from '@/utils/franchiseAccess'
+import { TIMECLOCK_ROLES, canAccessPeopleOps, isBranchOwner } from '@/utils/franchiseAccess'
 import { cn } from '@/utils/cn'
 import { formatRoleLabel } from '@/utils/roleLabels'
 import type { AccessUser, UserRole } from '@/types'
@@ -53,7 +52,7 @@ export function BranchAttendancePage() {
   const { branches } = useBranch()
   const forcedBranchId = useForcedBranchId()
   const effectiveBranchId = useEffectiveBranchId()
-  const allowed = isBranchOwner(user) || canAccessHqAdmin(user)
+  const allowed = isBranchOwner(user) || canAccessPeopleOps(user)
 
   // Branch admins are always locked to their clinic; HQ must pick a branch (not "all")
   const branchId =
@@ -489,7 +488,9 @@ export function BranchAttendancePage() {
           staffEmail={sessionModal.staff.email}
           branchName={branchName}
           session={sessionModal.session}
+          canEditTimes={canAccessPeopleOps(user)}
           onClose={() => setSessionModal(null)}
+          onSaved={() => void load()}
         />
       ) : null}
     </div>
@@ -534,176 +535,6 @@ function MiniStat({ label, value }: { label: string; value: string }) {
     <div className="rounded-[10px] border border-border bg-ivory-50 px-3 py-2 text-center">
       <p className="text-[10px] uppercase tracking-wide text-slate-ui">{label}</p>
       <p className="text-sm font-semibold text-[#073D2C]">{value}</p>
-    </div>
-  )
-}
-
-function AttendanceSessionModal({
-  staffName,
-  staffRole,
-  staffEmail,
-  branchName,
-  session,
-  onClose,
-}: {
-  staffName: string
-  staffRole: string
-  staffEmail: string
-  branchName: string
-  session: AttendanceSession
-  onClose: () => void
-}) {
-  const [timeInPhoto, setTimeInPhoto] = useState<string | null>(null)
-  const [timeOutPhoto, setTimeOutPhoto] = useState<string | null>(null)
-  const [loadingPhotos, setLoadingPhotos] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-    setLoadingPhotos(true)
-    void (async () => {
-      try {
-        const [inUrl, outUrl] = await Promise.all([
-          resolveAttendancePhotoUrl(session.timeIn.photoUrl),
-          session.timeOut
-            ? resolveAttendancePhotoUrl(session.timeOut.photoUrl)
-            : Promise.resolve(null),
-        ])
-        if (!cancelled) {
-          setTimeInPhoto(inUrl)
-          setTimeOutPhoto(outUrl)
-        }
-      } finally {
-        if (!cancelled) setLoadingPhotos(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [session])
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
-      <button
-        type="button"
-        className="absolute inset-0 bg-emerald-950/45 backdrop-blur-[1px]"
-        aria-label="Close"
-        onClick={onClose}
-      />
-      <div className="relative z-10 flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-[18px] bg-white shadow-2xl sm:rounded-[18px]">
-        <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-ui">
-              Attendance detail
-            </p>
-            <h3 className="truncate font-display text-lg font-semibold text-charcoal">
-              {staffName}
-            </h3>
-            <p className="truncate text-xs capitalize text-slate-ui">
-              {roleLabel(staffRole)}
-              {staffEmail ? ` · ${staffEmail}` : ''}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border text-charcoal hover:bg-ivory-50"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="space-y-4 overflow-y-auto px-4 py-4 sm:px-5">
-          <div className="flex flex-wrap gap-2">
-            <Badge variant={session.timeOut ? 'success' : 'warning'}>
-              {session.timeOut ? 'Complete' : 'Open'}
-            </Badge>
-            <span className="rounded-full bg-ivory-100 px-2.5 py-0.5 text-xs font-medium text-slate-ui">
-              {session.dateKey}
-            </span>
-            <span className="rounded-full bg-ivory-100 px-2.5 py-0.5 text-xs font-medium text-slate-ui">
-              {branchName}
-            </span>
-            <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900">
-              {formatAttendanceHours(session.hours)}
-            </span>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <PunchPhotoCard
-              title="Time In"
-              when={formatManilaDateTime(session.timeIn.punchedAt)}
-              location={session.timeIn.locationLabel}
-              photoUrl={timeInPhoto}
-              loading={loadingPhotos}
-            />
-            <PunchPhotoCard
-              title="Time Out"
-              when={
-                session.timeOut
-                  ? formatManilaDateTime(session.timeOut.punchedAt)
-                  : null
-              }
-              location={session.timeOut?.locationLabel ?? null}
-              photoUrl={timeOutPhoto}
-              loading={loadingPhotos}
-              emptyLabel="No Time Out yet"
-            />
-          </div>
-        </div>
-
-        <div className="border-t border-border px-4 py-3 sm:px-5">
-          <Button type="button" className="w-full" onClick={onClose}>
-            Close
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function PunchPhotoCard({
-  title,
-  when,
-  location,
-  photoUrl,
-  loading,
-  emptyLabel,
-}: {
-  title: string
-  when: string | null
-  location: string | null | undefined
-  photoUrl: string | null
-  loading: boolean
-  emptyLabel?: string
-}) {
-  return (
-    <div className="overflow-hidden rounded-[14px] border border-border bg-ivory-50/50">
-      <div className="border-b border-border/70 px-3 py-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-ui">{title}</p>
-        {when ? (
-          <p className="mt-0.5 text-sm font-medium text-[#073D2C]">{when}</p>
-        ) : (
-          <p className="mt-0.5 text-sm text-slate-ui">{emptyLabel ?? '—'}</p>
-        )}
-      </div>
-      <div className="aspect-[4/3] bg-[#0A2E26]/90">
-        {loading ? (
-          <div className="grid h-full place-items-center text-xs text-white/70">Loading…</div>
-        ) : photoUrl ? (
-          <img src={photoUrl} alt={`${title} selfie`} className="h-full w-full object-cover" />
-        ) : (
-          <div className="grid h-full place-items-center px-3 text-center text-xs text-white/65">
-            {when ? 'No selfie on file' : emptyLabel ?? '—'}
-          </div>
-        )}
-      </div>
-      {location ? (
-        <p className="flex items-start gap-1.5 px-3 py-2 text-[11px] leading-snug text-slate-ui">
-          <MapPin className="mt-0.5 h-3 w-3 shrink-0 text-[#C5A059]" />
-          <span>{location}</span>
-        </p>
-      ) : null}
     </div>
   )
 }

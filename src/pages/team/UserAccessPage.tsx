@@ -17,11 +17,13 @@ import {
 import { getBranches } from '@/services/branchService'
 import type { AccessUser } from '@/types'
 import { cn } from '@/utils/cn'
+import { HQ_SENTINEL_BRANCH_ID, isOrgWideRole } from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
 
 const ROLE_OPTIONS = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
+  'HR',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -323,7 +325,23 @@ export function UserAccessPage() {
               <span className="mb-1.5 block text-slate-ui">Role</span>
               <select
                 value={editing.role}
-                onChange={(e) => setEditing({ ...editing, role: e.target.value })}
+                onChange={(e) => {
+                  const role = e.target.value
+                  const orgWide = isOrgWideRole(role)
+                  setEditing({
+                    ...editing,
+                    role,
+                    ...(orgWide
+                      ? {
+                          branchId: HQ_SENTINEL_BRANCH_ID,
+                          branchName:
+                            role === 'HR'
+                              ? 'All Branches (organization)'
+                              : 'No Branch (HQ / org role)',
+                        }
+                      : {}),
+                  })
+                }}
                 className="w-full rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm"
               >
                 {ROLE_OPTIONS.map((r) => (
@@ -336,7 +354,12 @@ export function UserAccessPage() {
             <label className="block text-sm">
               <span className="mb-1.5 block text-slate-ui">Branch</span>
               <select
-                value={editing.branchId ?? ''}
+                value={
+                  isOrgWideRole(editing.role)
+                    ? HQ_SENTINEL_BRANCH_ID
+                    : (editing.branchId ?? '')
+                }
+                disabled={isOrgWideRole(editing.role)}
                 onChange={(e) =>
                   setEditing({
                     ...editing,
@@ -346,14 +369,24 @@ export function UserAccessPage() {
                       : null,
                   })
                 }
-                className="w-full rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm"
+                className="w-full rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm disabled:bg-slate-50"
               >
-                <option value="">No Branch</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
+                {isOrgWideRole(editing.role) ? (
+                  <option value={HQ_SENTINEL_BRANCH_ID}>
+                    {editing.role === 'HR'
+                      ? 'All Branches (organization)'
+                      : 'No Branch (HQ / org role)'}
                   </option>
-                ))}
+                ) : (
+                  <>
+                    <option value="">Select clinic branch</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </>
+                )}
               </select>
             </label>
             <div className="flex gap-2 pt-2">

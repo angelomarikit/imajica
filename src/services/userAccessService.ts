@@ -118,6 +118,17 @@ export function getAccessUsers(): AccessUser[] {
   return localUsers()
 }
 
+/** Pull directory from Supabase (or seed) into local cache so sync helpers see real names/emails. */
+export async function preloadAccessUsers(): Promise<AccessUser[]> {
+  const rows = await listAccessUsers()
+  if (rows.length) {
+    const byId = new Map(readStored().map((u) => [u.id, u]))
+    for (const u of rows) byId.set(u.id, { ...u })
+    writeStored([...byId.values()])
+  }
+  return getAccessUsers()
+}
+
 export function subscribeAccessUsers(listener: () => void) {
   const onStorage = (e: StorageEvent) => {
     if (e.key === KEY) listener()
@@ -130,11 +141,18 @@ export function subscribeAccessUsers(listener: () => void) {
   }
 }
 
+const HQ_SENTINEL_ID = '00000000-0000-0000-0000-000000000001'
+const ORG_ROLES = new Set(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'CLIENT'])
+
 export async function createAccessUser(
   input: Omit<AccessUser, 'id'> & { id?: string; password?: string },
 ): Promise<AccessUser> {
   if (isSupabaseConfigured && supabase) {
-    if (!input.branchId) {
+    const orgWide = ORG_ROLES.has(input.role)
+    const resolvedBranchId = orgWide
+      ? HQ_SENTINEL_ID
+      : input.branchId
+    if (!resolvedBranchId) {
       throw new Error('Branch is required')
     }
     if (!input.password || input.password.length < 6) {
@@ -154,7 +172,7 @@ export async function createAccessUser(
         email: input.email.trim().toLowerCase(),
         password: input.password,
         role: input.role,
-        branchId: input.branchId,
+        branchId: resolvedBranchId,
       },
     })
 
@@ -178,6 +196,11 @@ export async function createAccessUser(
           'Edge Function "create-branch-account" is missing. In the Imajica Supabase project (browser): Edge Functions → Create function → name create-branch-account → paste supabase/functions/create-branch-account/index.ts → turn Verify JWT OFF → Deploy. CLI is optional.',
         )
       }
+      if (/invalid role:\s*HR/i.test(detail)) {
+        throw new Error(
+          'HR role rejected by Edge Function — redeploy create-branch-account (latest code allows HR + All Branches).',
+        )
+      }
       if (/non-2xx|FunctionsHttpError/i.test(detail)) {
         throw new Error(
           `${detail}. Open Edge Functions → create-branch-account → Logs for the exact reason (often: not HQ role, migration 30 missing, or email already registered).`,
@@ -193,7 +216,7 @@ export async function createAccessUser(
       fullName: input.fullName.trim(),
       email: input.email.trim().toLowerCase(),
       role: input.role,
-      branchId: input.branchId,
+      branchId: orgWide ? null : resolvedBranchId,
       branchName: payload.branchName ?? input.branchName,
       status: 'active',
     }
@@ -202,13 +225,18 @@ export async function createAccessUser(
   }
 
   // Offline / no Supabase env — local list only (not a real login)
+  const offlineOrg = ORG_ROLES.has(input.role)
   const row: AccessUser = {
     id: input.id ?? `usr-${crypto.randomUUID().slice(0, 8)}`,
     fullName: input.fullName,
     email: input.email,
     role: input.role,
-    branchId: input.branchId,
-    branchName: input.branchName,
+    branchId: offlineOrg ? null : input.branchId,
+    branchName: offlineOrg
+      ? input.role === 'HR'
+        ? 'All Branches (organization)'
+        : 'No Branch (HQ)'
+      : input.branchName,
     status: input.status,
   }
   writeStored([...readStored().filter((u) => u.id !== row.id), row])
@@ -242,9 +270,6 @@ select public.upsert_branch_account_assignment(
 );
 `
 }
-
-const HQ_SENTINEL_ID = '00000000-0000-0000-0000-000000000001'
-const ORG_ROLES = new Set(['SUPER_ADMIN', 'HQ_ADMIN', 'CLIENT'])
 
 export async function saveAccessUser(row: AccessUser): Promise<void> {
   if (isSupabaseConfigured && supabase) {

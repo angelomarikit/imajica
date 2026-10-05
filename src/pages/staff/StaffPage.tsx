@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
+  ArrowLeft,
+  Eye,
   FileSpreadsheet,
-  KeyRound,
   Pencil,
   Plus,
+  Save,
   Search,
   UserMinus,
 } from 'lucide-react'
@@ -17,15 +19,22 @@ import { demoCommissions } from '@/constants/demoData'
 import { useAuth } from '@/contexts/AuthContext'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { exportCsv } from '@/services/analyticsService'
-import { getDirectoryStaff } from '@/services/staffDirectoryService'
+import {
+  getEmployeeById,
+  listDirectoryStaff,
+  saveEmployeeHrDetails,
+  subscribeEmployeeHr,
+} from '@/services/staffDirectoryService'
 import type { Staff } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
+import { canAccessPeopleOps, isFranchiseBranchOwner } from '@/utils/franchiseAccess'
+import { formatRoleLabel } from '@/utils/roleLabels'
 
-function allDirectoryStaff(): Staff[] {
-  return getDirectoryStaff()
-}
+const fieldClass =
+  'mt-1.5 w-full rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm text-[#073D2C] outline-none focus:border-emerald-800/40 focus:ring-2 focus:ring-emerald-900/10'
+
+const labelClass = 'text-[11px] font-semibold uppercase tracking-wide text-slate-ui'
 
 function initials(name: string) {
   return name
@@ -40,11 +49,35 @@ function initials(name: string) {
 export function StaffPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const peopleOps = canAccessPeopleOps(user)
   const franchiseOwner = isFranchiseBranchOwner(user)
   const forcedBranchId = useForcedBranchId()
-  const [staffRows] = useState(() => allDirectoryStaff())
+  const [staffRows, setStaffRows] = useState<Staff[]>([])
+  const [loading, setLoading] = useState(true)
   const [queryDraft, setQueryDraft] = useState('')
   const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        const rows = await listDirectoryStaff()
+        if (!cancelled) setStaffRows(rows)
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : 'Failed to load employees')
+          setStaffRows([])
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void load()
+    return subscribeEmployeeHr(() => {
+      void load()
+    })
+  }, [])
 
   const filtered = useMemo(() => {
     let list = staffRows
@@ -58,15 +91,28 @@ export function StaffPage() {
     const q = query.toLowerCase()
     if (!q) return list
     return list.filter((s) => {
-      const hay = `${s.fullName} ${s.email} ${s.title} ${s.branchName} ${s.department ?? ''}`.toLowerCase()
+      const hay =
+        `${s.fullName} ${s.email} ${s.title} ${s.phone} ${s.branchName} ${s.department ?? ''} ${s.employeeCode ?? ''} ${s.address ?? ''} ${s.emergencyContactName ?? ''}`.toLowerCase()
       return hay.includes(q)
     })
   }, [staffRows, query, franchiseOwner, forcedBranchId, user?.branchName])
 
   function handleExport() {
     exportCsv(
-      'imajica-staff-directory.csv',
-      ['Name', 'Email', 'Position', 'Phone', 'Branch', 'Department', 'Status'],
+      'imajica-employee-database.csv',
+      [
+        'Name',
+        'Email',
+        'Position',
+        'Phone',
+        'Branch',
+        'Department',
+        'Employee No',
+        'Address',
+        'Emergency Contact',
+        'Emergency Phone',
+        'Status',
+      ],
       filtered.map((s) => [
         s.fullName,
         s.email,
@@ -74,18 +120,22 @@ export function StaffPage() {
         s.phone,
         s.branchName,
         s.department ?? '',
+        s.employeeCode ?? '',
+        s.address ?? '',
+        s.emergencyContactName ?? '',
+        s.emergencyContactPhone ?? '',
         s.status,
       ]),
     )
-    toast.success('Exported staff directory')
+    toast.success('Exported employee database')
   }
 
   return (
     <div className="space-y-5">
       <AdminPageBanner
-        title="Staff Directory"
-        description="Manage salon clinicians, admin personnel, commission profiles, and department branch assignments."
-        stat={{ value: filtered.length, label: 'Total Staff' }}
+        title="Employee Database"
+        description="Company employees from User Access / clinic accounts. Open a profile for contact, home address, emergency person, and employment details."
+        stat={{ value: filtered.length, label: 'Total Employees' }}
       />
 
       <Card className="p-4 sm:p-5">
@@ -96,10 +146,12 @@ export function StaffPage() {
               <FileSpreadsheet className="h-3.5 w-3.5" />
               Export Excel
             </Button>
-            <Button type="button" onClick={() => navigate('/admin/staff/new')} className="gap-1.5">
-              <Plus className="h-3.5 w-3.5" />
-              Add New Staff
-            </Button>
+            {peopleOps ? (
+              <Button type="button" onClick={() => navigate('/admin/staff/new')} className="gap-1.5">
+                <Plus className="h-3.5 w-3.5" />
+                Add New Staff
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -110,7 +162,7 @@ export function StaffPage() {
               value={queryDraft}
               onChange={(e) => setQueryDraft(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && setQuery(queryDraft.trim())}
-              placeholder="Search staff members by name, email, position, branch, or department..."
+              placeholder="Search by name, email, phone, position, branch, address, or emergency contact…"
               className="w-full rounded-[10px] border border-border bg-white py-2.5 pl-9 pr-3 text-sm"
             />
           </div>
@@ -134,76 +186,93 @@ export function StaffPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((s) => (
-                <tr key={s.id} className="border-t border-border/70 hover:bg-ivory-100">
-                  <td className="px-2 py-3">
-                    <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[#073D2C] text-[11px] font-semibold text-[#F3E6C8]">
-                      {s.avatarUrl ? (
-                        <img src={s.avatarUrl} alt="" className="h-full w-full object-cover" />
-                      ) : (
-                        initials(s.fullName)
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-2 py-3 font-semibold text-[#073D2C]">{s.fullName}</td>
-                  <td className="px-2 py-3 text-slate-ui">{s.email}</td>
-                  <td className="px-2 py-3">
-                    <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                      {s.title}
-                    </span>
-                  </td>
-                  <td className="px-2 py-3">{s.phone}</td>
-                  <td className="px-2 py-3">
-                    <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                      {s.branchName}
-                    </span>
-                  </td>
-                  <td className="px-2 py-3">
-                    <span
-                      className={cn(
-                        'inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold',
-                        s.status === 'active'
-                          ? 'bg-emerald-50 text-emerald-800'
-                          : 'bg-red-50 text-red-700',
-                      )}
-                    >
-                      {s.status === 'active' ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td className="px-2 py-3">
-                    <div className="flex gap-1">
-                      <Link
-                        to={`/admin/staff/${s.id}`}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-orange-50 text-orange-700 hover:bg-orange-100"
-                        title="Edit"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Link>
-                      <Link
-                        to="/admin/team/user-access"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-sky-50 text-sky-700 hover:bg-sky-100"
-                        title="User access"
-                      >
-                        <KeyRound className="h-3.5 w-3.5" />
-                      </Link>
-                      <button
-                        type="button"
-                        title="Deactivate"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-red-50 text-red-700 hover:bg-red-100"
-                        onClick={() =>
-                          toast.message(`${s.fullName} marked inactive (demo)`)
-                        }
-                      >
-                        <UserMinus className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
+              {loading ? (
                 <tr>
                   <td colSpan={8} className="px-2 py-8 text-center text-slate-ui">
-                    No staff members found.
+                    Loading employees…
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((s) => (
+                  <tr key={s.id} className="border-t border-border/70 hover:bg-ivory-100">
+                    <td className="px-2 py-3">
+                      <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[#073D2C] text-[11px] font-semibold text-[#F3E6C8]">
+                        {s.avatarUrl ? (
+                          <img src={s.avatarUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          initials(s.fullName)
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-2 py-3">
+                      <p className="font-semibold text-[#073D2C]">{s.fullName}</p>
+                      {s.employeeCode ? (
+                        <p className="text-[11px] text-slate-ui">Emp #{s.employeeCode}</p>
+                      ) : null}
+                    </td>
+                    <td className="px-2 py-3 text-slate-ui">{s.email || '—'}</td>
+                    <td className="px-2 py-3">
+                      <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                        {s.title || formatRoleLabel(s.role)}
+                      </span>
+                    </td>
+                    <td className="px-2 py-3">{s.phone || '—'}</td>
+                    <td className="px-2 py-3">
+                      <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                        {s.branchName || '—'}
+                      </span>
+                    </td>
+                    <td className="px-2 py-3">
+                      <span
+                        className={cn(
+                          'inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold',
+                          s.status === 'active'
+                            ? 'bg-emerald-50 text-emerald-800'
+                            : 'bg-red-50 text-red-700',
+                        )}
+                      >
+                        {s.status === 'active' ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="px-2 py-3">
+                      <div className="flex gap-1">
+                        <Link
+                          to={`/admin/staff/${s.id}`}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-sky-50 text-sky-700 hover:bg-sky-100"
+                          title="View employee details"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </Link>
+                        {peopleOps ? (
+                          <Link
+                            to={`/admin/staff/${s.id}?edit=1`}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-orange-50 text-orange-700 hover:bg-orange-100"
+                            title="Edit HR details"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Link>
+                        ) : null}
+                        {peopleOps ? (
+                          <button
+                            type="button"
+                            title="Deactivate"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-red-50 text-red-700 hover:bg-red-100"
+                            onClick={() =>
+                              toast.message('Deactivate from User Access / Branches Accounts')
+                            }
+                          >
+                            <UserMinus className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+              {!loading && filtered.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-2 py-8 text-center text-slate-ui">
+                    No employees found.
                   </td>
                 </tr>
               )}
@@ -217,22 +286,285 @@ export function StaffPage() {
 
 export function StaffDetailPage() {
   const { id } = useParams()
-  const staff = allDirectoryStaff().find((s) => s.id === id) ?? allDirectoryStaff()[0]
+  const [searchParams] = useSearchParams()
+  const { user } = useAuth()
+  const peopleOps = canAccessPeopleOps(user)
+  const navigate = useNavigate()
+  const editRequested = searchParams.get('edit') === '1'
+
+  const [staff, setStaff] = useState<Staff | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const [firstName, setFirstName] = useState('')
+  const [middleName, setMiddleName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [birthDate, setBirthDate] = useState('')
+  const [phone, setPhone] = useState('')
+  const [title, setTitle] = useState('')
+  const [department, setDepartment] = useState('')
+  const [hireDate, setHireDate] = useState('')
+  const [employmentType, setEmploymentType] = useState('Full-time')
+  const [address, setAddress] = useState('')
+  const [emergencyName, setEmergencyName] = useState('')
+  const [emergencyRelation, setEmergencyRelation] = useState('')
+  const [emergencyPhone, setEmergencyPhone] = useState('')
+
+  useEffect(() => {
+    if (editRequested && peopleOps) setEditing(true)
+  }, [editRequested, peopleOps])
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      if (!id) return
+      setLoading(true)
+      try {
+        const row = await getEmployeeById(id)
+        if (cancelled) return
+        setStaff(row)
+        if (row) hydrateForm(row)
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : 'Failed to load employee')
+          setStaff(null)
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void load()
+    return subscribeEmployeeHr(() => {
+      void load()
+    })
+  }, [id])
+
+  function hydrateForm(row: Staff) {
+    setFirstName(row.firstName ?? '')
+    setMiddleName(row.middleName ?? '')
+    setLastName(row.lastName ?? '')
+    setBirthDate(row.birthDate ?? '')
+    setPhone(row.phone ?? '')
+    setTitle(row.title ?? '')
+    setDepartment(row.department ?? '')
+    setHireDate(row.hireDate ?? '')
+    setEmploymentType(row.employmentType || 'Full-time')
+    setAddress(row.address ?? '')
+    setEmergencyName(row.emergencyContactName ?? '')
+    setEmergencyRelation(row.emergencyContactRelation ?? '')
+    setEmergencyPhone(row.emergencyContactPhone ?? '')
+  }
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault()
+    if (!staff || !peopleOps) return
+    setSaving(true)
+    try {
+      const updated = await saveEmployeeHrDetails(staff, {
+        firstName: firstName.trim(),
+        middleName: middleName.trim(),
+        lastName: lastName.trim(),
+        birthDate: birthDate || undefined,
+        phone: phone.trim(),
+        title: title.trim(),
+        department: department.trim(),
+        hireDate: hireDate || undefined,
+        employmentType,
+        address: address.trim(),
+        emergencyContactName: emergencyName.trim(),
+        emergencyContactRelation: emergencyRelation.trim(),
+        emergencyContactPhone: emergencyPhone.trim(),
+      })
+      setStaff(updated)
+      hydrateForm(updated)
+      setEditing(false)
+      toast.success('Employee HR details saved')
+      navigate(`/admin/staff/${updated.id}`, { replace: true })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save employee details')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="grid min-h-[40vh] place-items-center text-slate-ui">Loading employee…</div>
+    )
+  }
+
+  if (!staff) {
+    return (
+      <div className="space-y-5">
+        <AdminPageBanner title="Employee not found" description="This account is not in the employee directory." />
+        <Link to="/admin/staff">
+          <Button variant="gold">Back to Employee Database</Button>
+        </Link>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
       <AdminPageBanner
-        eyebrow="Team · Staff"
+        eyebrow="HR · Employee Database"
         title={staff.fullName}
-        description={`${staff.title} · ${staff.branchName}`}
+        description={`${staff.title || formatRoleLabel(staff.role)} · ${staff.branchName || '—'}`}
         actions={
-          <Link to="/admin/staff">
-            <Button variant="gold">Back to Directory</Button>
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link to="/admin/staff">
+              <Button variant="gold" className="gap-1.5">
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button>
+            </Link>
+            {peopleOps && !editing ? (
+              <Button type="button" className="gap-1.5" onClick={() => setEditing(true)}>
+                <Pencil className="h-4 w-4" />
+                Edit details
+              </Button>
+            ) : null}
+          </div>
         }
       />
-      <Card className="p-5">
+
+      {editing && peopleOps ? (
+        <form onSubmit={handleSave} className="space-y-4">
+          <Card className="p-5 sm:p-6">
+            <h2 className={cn(labelClass, 'mb-4')}>Personal information</h2>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <label className="block">
+                <span className={labelClass}>First name</span>
+                <input className={fieldClass} value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Middle name</span>
+                <input className={fieldClass} value={middleName} onChange={(e) => setMiddleName(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Last name</span>
+                <input className={fieldClass} value={lastName} onChange={(e) => setLastName(e.target.value)} required />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Birth date</span>
+                <input type="date" className={fieldClass} value={birthDate} onChange={(e) => setBirthDate(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Mobile number</span>
+                <input
+                  className={fieldClass}
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="09XXXXXXXXX"
+                />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Work email</span>
+                <input className={fieldClass} value={staff.email} disabled />
+              </label>
+            </div>
+          </Card>
+
+          <Card className="p-5 sm:p-6">
+            <h2 className={cn(labelClass, 'mb-4')}>Employment</h2>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="block">
+                <span className={labelClass}>Position / title</span>
+                <input className={fieldClass} value={title} onChange={(e) => setTitle(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Department</span>
+                <input className={fieldClass} value={department} onChange={(e) => setDepartment(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Hire / join date</span>
+                <input type="date" className={fieldClass} value={hireDate} onChange={(e) => setHireDate(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Employment type</span>
+                <select className={fieldClass} value={employmentType} onChange={(e) => setEmploymentType(e.target.value)}>
+                  <option>Full-time</option>
+                  <option>Part-time</option>
+                  <option>Contract</option>
+                </select>
+              </label>
+              <div className="rounded-[10px] border border-border bg-ivory-50 p-3 sm:col-span-2">
+                <p className="text-xs text-slate-ui">Branch · Role · Employee no.</p>
+                <p className="mt-1 font-semibold text-[#073D2C]">
+                  {staff.branchName || '—'} · {formatRoleLabel(staff.role)}
+                  {staff.employeeCode ? ` · Emp #${staff.employeeCode}` : ''}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="p-5 sm:p-6">
+            <h2 className={cn(labelClass, 'mb-4')}>Home address</h2>
+            <label className="block">
+              <span className={labelClass}>Complete residential address</span>
+              <textarea
+                className={cn(fieldClass, 'min-h-[100px] resize-y')}
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="House/Unit, Street, Barangay, City, Province"
+              />
+            </label>
+          </Card>
+
+          <Card className="p-5 sm:p-6">
+            <h2 className={cn(labelClass, 'mb-4')}>Emergency contact</h2>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <label className="block">
+                <span className={labelClass}>Person to contact</span>
+                <input className={fieldClass} value={emergencyName} onChange={(e) => setEmergencyName(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Relationship</span>
+                <input
+                  className={fieldClass}
+                  value={emergencyRelation}
+                  onChange={(e) => setEmergencyRelation(e.target.value)}
+                  placeholder="Spouse, Parent, Sibling…"
+                />
+              </label>
+              <label className="block">
+                <span className={labelClass}>Emergency mobile</span>
+                <input className={fieldClass} value={emergencyPhone} onChange={(e) => setEmergencyPhone(e.target.value)} />
+              </label>
+            </div>
+          </Card>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                hydrateForm(staff)
+                setEditing(false)
+                navigate(`/admin/staff/${staff.id}`, { replace: true })
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" className="gap-1.5" disabled={saving}>
+              <Save className="h-4 w-4" />
+              {saving ? 'Saving…' : 'Save HR details'}
+            </Button>
+          </div>
+        </form>
+      ) : (
         <StaffDetailBody staff={staff} />
-      </Card>
+      )}
+    </div>
+  )
+}
+
+function DetailTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[10px] border border-border p-3">
+      <p className="text-xs text-slate-ui">{label}</p>
+      <p className="mt-1 font-semibold text-[#073D2C] whitespace-pre-wrap">{value || '—'}</p>
     </div>
   )
 }
@@ -240,46 +572,67 @@ export function StaffDetailPage() {
 function StaffDetailBody({ staff }: { staff: Staff }) {
   return (
     <div className="space-y-4 text-sm">
-      <div className="flex items-center gap-2">
-        <Badge variant={staff.status === 'active' ? 'success' : 'danger'}>{staff.status}</Badge>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={staff.status === 'active' ? 'success' : 'danger'}>
+          {staff.status === 'active' ? 'Active' : 'Inactive'}
+        </Badge>
         <span className="text-slate-ui">
-          {staff.title} · {staff.department ?? '—'} · {staff.branchName}
+          {staff.title || formatRoleLabel(staff.role)} · {staff.department || '—'} ·{' '}
+          {staff.branchName || '—'}
         </span>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-[10px] bg-beige p-3">
           <p className="text-xs text-slate-ui">Employee ID</p>
           <p className="font-semibold">{staff.code}</p>
         </div>
         <div className="rounded-[10px] bg-beige p-3">
-          <p className="text-xs text-slate-ui">Hire Date</p>
-          <p className="font-semibold">{staff.hireDate}</p>
+          <p className="text-xs text-slate-ui">Kiosk Emp #</p>
+          <p className="font-semibold">{staff.employeeCode || '—'}</p>
         </div>
         <div className="rounded-[10px] bg-beige p-3">
-          <p className="text-xs text-slate-ui">Type</p>
-          <p className="font-semibold">{staff.employmentType}</p>
+          <p className="text-xs text-slate-ui">Hire date</p>
+          <p className="font-semibold">{staff.hireDate || '—'}</p>
+        </div>
+        <div className="rounded-[10px] bg-beige p-3">
+          <p className="text-xs text-slate-ui">Employment type</p>
+          <p className="font-semibold">{staff.employmentType || '—'}</p>
         </div>
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div className="rounded-[10px] border border-border p-3">
-          <p className="text-xs text-slate-ui">Email</p>
-          <p className="font-semibold">{staff.email}</p>
+
+      <Card className="p-4 sm:p-5">
+        <h3 className={cn(labelClass, 'mb-3')}>Personal & contact</h3>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <DetailTile label="Full name" value={staff.fullName} />
+          <DetailTile label="Birth date" value={staff.birthDate || '—'} />
+          <DetailTile label="Mobile number" value={staff.phone || '—'} />
+          <DetailTile label="Work email" value={staff.email || '—'} />
+          <DetailTile label="Role" value={formatRoleLabel(staff.role)} />
+          <DetailTile label="Branch" value={staff.branchName || '—'} />
         </div>
-        <div className="rounded-[10px] border border-border p-3">
-          <p className="text-xs text-slate-ui">Phone</p>
-          <p className="font-semibold">{staff.phone}</p>
+      </Card>
+
+      <Card className="p-4 sm:p-5">
+        <h3 className={cn(labelClass, 'mb-3')}>Home address</h3>
+        <DetailTile label="Residential address" value={staff.address || 'Not on file yet'} />
+      </Card>
+
+      <Card className="p-4 sm:p-5">
+        <h3 className={cn(labelClass, 'mb-3')}>Emergency contact</h3>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <DetailTile label="Person to contact" value={staff.emergencyContactName || 'Not on file yet'} />
+          <DetailTile label="Relationship" value={staff.emergencyContactRelation || '—'} />
+          <DetailTile label="Emergency mobile" value={staff.emergencyContactPhone || '—'} />
         </div>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
+      </Card>
+
+      {staff.baseSalary > 0 ? (
         <div className="rounded-[10px] border border-border p-3">
-          <p className="text-xs text-slate-ui">Rating</p>
-          <p className="font-semibold">{staff.rating} ★</p>
-        </div>
-        <div className="rounded-[10px] border border-border p-3">
-          <p className="text-xs text-slate-ui">Base Salary</p>
+          <p className="text-xs text-slate-ui">Base salary (HR record)</p>
           <p className="font-semibold">{formatPeso(staff.baseSalary)}</p>
         </div>
-      </div>
+      ) : null}
     </div>
   )
 }

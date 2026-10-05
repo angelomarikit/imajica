@@ -37,15 +37,23 @@ import {
   KeyRound,
   Clock,
   Award,
+  Banknote,
+  Target,
+  CalendarOff,
+  HandCoins,
+  UserMinus,
+  Briefcase,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import logo from '@/assets/logo-imajica.jpg'
 import { BRAND } from '@/constants/brand'
 import { useAuth } from '@/contexts/AuthContext'
 import { cn } from '@/utils/cn'
-import { isFranchiseBranchOwner, isTimeclockStaff } from '@/utils/franchiseAccess'
+import { isFranchiseBranchOwner, isHrRole, isTimeclockStaff } from '@/utils/franchiseAccess'
 import { Button } from '@/components/ui/Button'
 import { MobileDrawer } from '@/components/ui/MobileDrawer'
+import { useBranch } from '@/contexts/BranchContext'
+import type { Branch } from '@/types'
 
 type NavLeaf = {
   to: string
@@ -67,6 +75,8 @@ type NavItem = {
   label: string
   icon: ComponentType<{ className?: string }>
   to?: string
+  /** Exact match only (e.g. list pages that share prefix with /new) */
+  end?: boolean
   children?: NavNode[]
   /** Trailing › like TEAM screenshot */
   trailingChevron?: boolean
@@ -81,7 +91,7 @@ function isNavGroup(node: NavNode): node is NavGroup {
   return 'children' in node && Array.isArray(node.children)
 }
 
-const hqNavSections: NavSection[] = [
+const hqNavSectionsBase: NavSection[] = [
   {
     items: [{ to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
   },
@@ -214,26 +224,6 @@ const hqNavSections: NavSection[] = [
     ],
   },
   {
-    category: 'Attendance and Payroll',
-    items: [
-      {
-        to: '/admin/reports/branches-attendance',
-        label: 'Branches Attendance',
-        icon: Clock,
-      },
-      {
-        to: '/admin/reports/franchise-attendance',
-        label: 'Franchise Attendance',
-        icon: Clock,
-      },
-      {
-        to: '/admin/reports/payroll',
-        label: 'Payroll',
-        icon: Wallet,
-      },
-    ],
-  },
-  {
     category: 'Team',
     items: [
       {
@@ -286,6 +276,75 @@ const hqNavSections: NavSection[] = [
   },
 ]
 
+/** Shared HR module links (Salary, Employee DB, KPIs, Attendance, Leave, …) */
+function buildHrPeopleOpsNavItems(clinics: Branch[]): NavNode[] {
+  const attendanceChildren: NavNode[] = [
+    {
+      to: '/admin/hr/attendance',
+      label: 'All Branches Attendance',
+      icon: Clock,
+      end: true,
+    },
+    ...clinics.map((b) => ({
+      to: `/admin/hr/attendance/${b.id}`,
+      label: `${shortBranchName(b.name)} Attendance`,
+      icon: Clock,
+    })),
+  ]
+
+  return [
+    {
+      label: 'Salary',
+      icon: Banknote,
+      children: [
+        {
+          to: '/admin/hr/salary',
+          label: 'All Salary',
+          icon: Banknote,
+          end: true,
+        },
+        ...clinics.map((b) => ({
+          to: `/admin/hr/salary/${b.id}`,
+          label: `${shortBranchName(b.name)} Salary`,
+          icon: Banknote,
+        })),
+      ],
+    },
+    { to: '/admin/staff', label: 'Employee Database', icon: Users, end: true },
+    { to: '/admin/hr/kpis', label: "KPI's and Performance", icon: Target },
+    {
+      label: 'Attendance',
+      icon: Clock,
+      children: attendanceChildren,
+    },
+    { to: '/admin/hr/leave', label: 'Leave Management', icon: CalendarOff },
+    { to: '/admin/hr/deductions', label: 'Deductions & Benefits', icon: HandCoins },
+    { to: '/admin/hr/recruitment', label: 'Recruitment', icon: Briefcase },
+    { to: '/admin/hr/new-hires', label: 'New Hires', icon: UserPlus },
+    { to: '/admin/hr/exits', label: 'Resignation / Exits', icon: UserMinus },
+    { to: '/admin/hr/training', label: 'Training', icon: GraduationCap },
+  ]
+}
+
+function buildHqNavSections(clinics: Branch[]): NavSection[] {
+  const sections = hqNavSectionsBase.map((section) => ({ ...section, items: [...section.items] }))
+  const hrSection: NavSection = {
+    category: 'HR and Payroll',
+    items: buildHrPeopleOpsNavItems(clinics),
+  }
+  const adminIdx = sections.findIndex((s) => s.category === 'Administration')
+  if (adminIdx >= 0) {
+    sections.splice(adminIdx + 1, 0, hrSection)
+  } else {
+    const settingsIdx = sections.findIndex(
+      (s) => !s.category && s.items.some((i) => 'to' in i && i.to === '/admin/settings'),
+    )
+    if (settingsIdx >= 0) sections.splice(settingsIdx, 0, hrSection)
+    else sections.push(hrSection)
+  }
+  return sections
+}
+
 /** Clinical / ops staff — Timeclock home; no Team or Marketing; HQ-only analytics trimmed */
 function buildTimeclockStaffNavSections(): NavSection[] {
   const hqOnlyAnalytics = new Set([
@@ -293,16 +352,19 @@ function buildTimeclockStaffNavSections(): NavSection[] {
     '/admin/analytics/best-selling-treatments',
     '/admin/analytics/new-client-sales',
   ])
-  const hqOnlyCategories = new Set(['Attendance and Payroll'])
+  const hqOnlyCategories = new Set(['HR and Payroll'])
   const sections: NavSection[] = [
     {
       items: [
         { to: '/admin/attendance', label: 'My Attendance', icon: CalendarDays },
+        { to: '/admin/my-leave', label: 'My Leave', icon: CalendarOff },
+        { to: '/admin/my-training', label: 'My Training', icon: GraduationCap },
         { to: '/admin/commission-sales', label: 'My Commission & Sales', icon: Wallet },
+        { to: '/admin/my-salary', label: 'My Salary', icon: Banknote },
       ],
     },
   ]
-  for (const section of hqNavSections) {
+  for (const section of hqNavSectionsBase) {
     if (!section.category) continue
     if (section.category === 'Team' || section.category === 'Marketing') continue
     if (hqOnlyCategories.has(section.category)) continue
@@ -321,12 +383,32 @@ function buildTimeclockStaffNavSections(): NavSection[] {
   return sections
 }
 
+function shortBranchName(name: string) {
+  return name.split(',')[0]?.trim() || name
+}
+
+/** HR sidebar — org-wide people ops; Attendance expands per clinic */
+function buildHrNavSections(clinics: Branch[]): NavSection[] {
+  return [
+    {
+      items: buildHrPeopleOpsNavItems(clinics),
+    },
+    {
+      items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
+    },
+  ]
+}
+
 /** Clinic manager (BRANCH_ADMIN) — trimmed to their clinic ops only */
 const franchiseOwnerNavSections: NavSection[] = [
   {
     items: [
       { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { to: '/admin/attendance', label: 'My Attendance', icon: Clock },
+      { to: '/admin/my-leave', label: 'My Leave', icon: CalendarOff },
+      { to: '/admin/my-training', label: 'My Training', icon: GraduationCap },
+      { to: '/admin/hr/leave', label: 'Leave Approvals', icon: CalendarOff },
+      { to: '/admin/my-salary', label: 'My Salary', icon: Banknote },
     ],
   },
   {
@@ -454,10 +536,10 @@ const franchiseOwnerNavSections: NavSection[] = [
 
 function linkClass(isActive: boolean) {
   return cn(
-    'relative flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-[12.5px] transition-colors',
+    'relative flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] transition-colors',
     isActive
-      ? 'bg-[#1a4a3c] text-white shadow-[inset_0_0_0_1px_rgba(197,160,89,0.25)]'
-      : 'text-white/85 hover:bg-white/10',
+      ? 'bg-[#1a4a3c] text-white shadow-[inset_0_0_0_1px_rgba(197,160,89,0.28)]'
+      : 'text-white/85 hover:bg-white/[0.08] hover:text-white',
   )
 }
 
@@ -465,7 +547,7 @@ function ActiveBar() {
   return (
     <span
       aria-hidden
-      className="absolute left-0 top-1/2 h-4 w-[2.5px] -translate-y-1/2 rounded-r-full bg-[#C5A059]"
+      className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-[#C5A059]"
     />
   )
 }
@@ -492,8 +574,8 @@ function NestedNavTree({
   return (
     <div
       className={cn(
-        'relative mt-0.5 space-y-px border-l border-white/15 pl-2.5',
-        depth === 0 ? 'ml-4' : 'ml-3',
+        'relative mt-1 space-y-0.5 border-l border-white/12 pl-2.5',
+        depth === 0 ? 'ml-5' : 'ml-3.5',
       )}
     >
       {nodes.map((node) =>
@@ -507,10 +589,10 @@ function NestedNavTree({
             onClick={onNavigate}
             className={({ isActive }) =>
               cn(
-                'flex items-center gap-2 rounded-[8px] px-2 py-1.5 text-[12px] transition-colors',
+                'flex items-center gap-2.5 rounded-[9px] px-2.5 py-2 text-[12.5px] transition-colors',
                 isActive
-                  ? 'bg-[#1a4a3c] font-medium text-white shadow-[inset_0_0_0_1px_rgba(197,160,89,0.2)]'
-                  : 'text-white/75 hover:bg-white/10 hover:text-white',
+                  ? 'bg-[#1a4a3c] font-medium text-white shadow-[inset_0_0_0_1px_rgba(197,160,89,0.22)]'
+                  : 'text-white/75 hover:bg-white/[0.08] hover:text-white',
               )
             }
           >
@@ -518,8 +600,8 @@ function NestedNavTree({
               <>
                 <node.icon
                   className={cn(
-                    'h-3 w-3 shrink-0',
-                    isActive ? 'text-[#C5A059]' : 'text-[#C5A059]/70',
+                    'h-3.5 w-3.5 shrink-0',
+                    isActive ? 'text-[#C5A059]' : 'text-[#C5A059]/65',
                   )}
                 />
                 <span className="leading-snug">{node.label}</span>
@@ -555,19 +637,19 @@ function NestedExpandable({
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className={cn(
-          'flex w-full items-center gap-2 rounded-[8px] px-2 py-1.5 text-[12px] transition-colors',
+          'flex w-full items-center gap-2.5 rounded-[9px] px-2.5 py-2 text-[12.5px] transition-colors',
           childActive
-            ? 'bg-[#1a4a3c] font-medium text-white shadow-[inset_0_0_0_1px_rgba(197,160,89,0.2)]'
-            : 'text-white/75 hover:bg-white/10 hover:text-white',
+            ? 'bg-[#1a4a3c] font-medium text-white shadow-[inset_0_0_0_1px_rgba(197,160,89,0.22)]'
+            : 'text-white/75 hover:bg-white/[0.08] hover:text-white',
         )}
       >
         <group.icon
-          className={cn('h-3 w-3 shrink-0', childActive ? 'text-[#C5A059]' : 'text-[#C5A059]/70')}
+          className={cn('h-3.5 w-3.5 shrink-0', childActive ? 'text-[#C5A059]' : 'text-[#C5A059]/65')}
         />
         <span className="flex-1 text-left leading-snug">{group.label}</span>
         <ChevronDown
           className={cn(
-            'h-3 w-3 shrink-0 text-white/70 transition-transform',
+            'h-3.5 w-3.5 shrink-0 text-white/55 transition-transform',
             expanded && 'rotate-180',
           )}
         />
@@ -602,10 +684,15 @@ function ExpandableNavItem({
         className={cn(linkClass(childActive), 'w-full')}
       >
         {childActive ? <ActiveBar /> : null}
-        <item.icon className={cn('h-3.5 w-3.5 shrink-0', childActive ? 'text-[#C5A059]' : 'text-[#C5A059]/80')} />
+        <item.icon
+          className={cn('h-4 w-4 shrink-0', childActive ? 'text-[#C5A059]' : 'text-[#C5A059]/80')}
+        />
         <span className="flex-1 text-left font-medium leading-snug">{item.label}</span>
         <ChevronDown
-          className={cn('h-3.5 w-3.5 shrink-0 text-white/70 transition-transform', expanded && 'rotate-180')}
+          className={cn(
+            'h-4 w-4 shrink-0 text-white/55 transition-transform',
+            expanded && 'rotate-180',
+          )}
         />
       </button>
       {expanded ? <NestedNavTree nodes={item.children} onNavigate={onNavigate} depth={0} /> : null}
@@ -621,34 +708,52 @@ export function AdminSidebar({
   onOpenChange: (open: boolean) => void
 }) {
   const { user } = useAuth()
+  const { branches } = useBranch()
+  const hrClinics = useMemo(
+    () =>
+      branches
+        .filter((b) => b.status === 'active' && b.branchType !== 'warehouse')
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [branches],
+  )
   const navSections = useMemo(() => {
     if (isTimeclockStaff(user)) return buildTimeclockStaffNavSections()
     if (isFranchiseBranchOwner(user)) return franchiseOwnerNavSections
-    return hqNavSections
-  }, [user])
+    if (isHrRole(user?.role)) return buildHrNavSections(hrClinics)
+    return buildHqNavSections(hrClinics)
+  }, [user, hrClinics])
   const close = () => onOpenChange(false)
 
   const content = (
-    <div className="flex h-full flex-col bg-emerald-950 text-white">
-      <div className="flex items-center gap-2.5 border-b border-white/10 px-3.5 py-3">
-        <img src={logo} alt={BRAND.name} className="h-9 w-9 rounded-full object-cover" />
-        <div>
-          <p className="font-brand text-base leading-tight tracking-wide">IMAJICA</p>
-          <p className="text-[9px] uppercase tracking-[0.16em] text-gold">Medical Aesthetics</p>
+    <div className="flex h-full min-h-0 flex-col bg-emerald-950 text-white">
+      <div className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-4">
+        <img
+          src={logo}
+          alt={BRAND.name}
+          className="h-10 w-10 rounded-full object-cover ring-1 ring-[#C5A059]/35"
+        />
+        <div className="min-w-0">
+          <p className="font-brand text-[17px] leading-tight tracking-wide text-[#E8C547]">
+            IMAJICA
+          </p>
+          <p className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-[#C5A059]/90">
+            Medical Aesthetics
+          </p>
         </div>
       </div>
-      <nav className="flex-1 overflow-y-auto px-2 py-2.5 scrollbar-thin">
+
+      <nav className="scrollbar-sidebar min-h-0 flex-1 overflow-y-auto px-3 py-4">
         {navSections.map((section, sectionIdx) => (
           <div
             key={section.category ?? `section-${sectionIdx}`}
-            className={cn(sectionIdx > 0 && 'mt-2')}
+            className={cn(sectionIdx > 0 && 'mt-5')}
           >
             {section.category ? (
-              <p className="mb-1 px-2.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-[#C5A059]/85">
+              <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#C5A059]/80">
                 {section.category}
               </p>
             ) : null}
-            <div className="space-y-px">
+            <div className="space-y-1">
               {section.items.map((item) =>
                 item.children ? (
                   <ExpandableNavItem
@@ -660,6 +765,7 @@ export function AdminSidebar({
                   <NavLink
                     key={item.to}
                     to={item.to!}
+                    end={item.end}
                     onClick={close}
                     className={({ isActive }) => linkClass(isActive)}
                   >
@@ -668,13 +774,13 @@ export function AdminSidebar({
                         {isActive ? <ActiveBar /> : null}
                         <item.icon
                           className={cn(
-                            'h-3.5 w-3.5 shrink-0',
+                            'h-4 w-4 shrink-0',
                             isActive ? 'text-[#C5A059]' : 'text-[#C5A059]/80',
                           )}
                         />
                         <span className="flex-1 font-medium leading-snug">{item.label}</span>
                         {item.trailingChevron ? (
-                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-white/55" />
+                          <ChevronRight className="h-4 w-4 shrink-0 text-white/45" />
                         ) : null}
                       </>
                     )}
@@ -685,10 +791,14 @@ export function AdminSidebar({
           </div>
         ))}
       </nav>
-      <div className="mx-2 mb-2 overflow-hidden rounded-[10px] border border-white/10">
-        <div className="h-12 bg-[url('https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=400&q=80')] bg-cover bg-center" />
-        <div className="bg-emerald-900 px-2.5 py-2">
-          <p className="font-brand text-xs text-gold">{BRAND.tagline}</p>
+
+      <div className="mt-auto shrink-0 border-t border-white/10 p-3">
+        <div className="rounded-[12px] border border-white/10 bg-gradient-to-br from-[#0f3d32] to-[#0A2E26] px-3.5 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">
+            Imajica
+          </p>
+          <p className="mt-1 font-brand text-sm leading-snug text-[#E8C547]">{BRAND.tagline}</p>
+          <p className="mt-1.5 text-[10px] leading-relaxed text-white/50">{BRAND.slogan}</p>
         </div>
       </div>
     </div>
@@ -696,7 +806,7 @@ export function AdminSidebar({
 
   return (
     <>
-      <aside className="hidden w-64 shrink-0 lg:block">{content}</aside>
+      <aside className="hidden h-full w-[17rem] shrink-0 lg:block">{content}</aside>
       <MobileDrawer open={open} onClose={close} side="left" panelClassName="bg-emerald-950">
         <div className="relative h-full">
           <Button

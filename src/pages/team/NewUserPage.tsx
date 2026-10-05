@@ -8,11 +8,16 @@ import { getBranches } from '@/services/branchService'
 import { createAccessUser } from '@/services/userAccessService'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { cn } from '@/utils/cn'
+import {
+  HQ_SENTINEL_BRANCH_ID,
+  isOrgWideRole,
+} from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
 
 const ROLE_OPTIONS = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
+  'HR',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -50,10 +55,9 @@ export function NewUserPage() {
       toast.error('Password must be at least 6 characters')
       return
     }
-    if (isSupabaseConfigured && !branchId) {
-      toast.error(
-        'With Supabase connected, pick a branch — or use Branches Accounts for franchise/clinic logins. HQ-only users: create Auth user in Dashboard then assign SUPER_ADMIN via SQL.',
-      )
+    const orgWide = isOrgWideRole(role)
+    if (isSupabaseConfigured && !orgWide && !branchId) {
+      toast.error('Select a clinic branch for this role, or choose HR / HQ for All Branches.')
       return
     }
     const branch = branches.find((b) => b.id === branchId)
@@ -64,8 +68,8 @@ export function NewUserPage() {
         email: email.trim(),
         password,
         role,
-        branchId: branchId || null,
-        branchName: branch?.name ?? null,
+        branchId: orgWide ? HQ_SENTINEL_BRANCH_ID : branchId || null,
+        branchName: orgWide ? 'All Branches (organization)' : branch?.name ?? null,
         status: 'active',
       })
       toast.success('User added')
@@ -142,7 +146,15 @@ export function NewUserPage() {
               <select
                 className={cn(fieldClass, !role && 'text-slate-400')}
                 value={role}
-                onChange={(e) => setRole(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setRole(next)
+                  if (isOrgWideRole(next)) {
+                    setBranchId(HQ_SENTINEL_BRANCH_ID)
+                  } else if (branchId === HQ_SENTINEL_BRANCH_ID) {
+                    setBranchId('')
+                  }
+                }}
                 required
               >
                 <option value="" disabled>
@@ -154,19 +166,34 @@ export function NewUserPage() {
                   </option>
                 ))}
               </select>
+              <p className="mt-1.5 text-xs text-slate-ui">
+                For system-wide access, choose <strong>HR</strong> — Branch becomes All Branches.
+              </p>
             </label>
             <label className="block sm:col-span-2">
               <span className={labelClass}>Branch</span>
               <select
-                className={cn(fieldClass, !branchId && 'text-slate-400')}
-                value={branchId}
-                onChange={(e) => setBranchId(e.target.value)}
+                className={cn(
+                  fieldClass,
+                  !branchId && !isOrgWideRole(role) && 'text-slate-400',
+                )}
+                value={isOrgWideRole(role) ? HQ_SENTINEL_BRANCH_ID : branchId}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setBranchId(next)
+                  if (next === HQ_SENTINEL_BRANCH_ID && !isOrgWideRole(role)) {
+                    setRole('HR')
+                  }
+                }}
               >
-                <option value="">Select value</option>
-                <option value="">No Branch (HQ)</option>
+                <option value="">Select clinic branch</option>
+                <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
+                  All Branches (organization) — HR system-wide
+                </option>
                 {branches.map((b) => (
                   <option key={b.id} value={b.id} className="text-[#073D2C]">
-                    {b.name}
+                    {b.code} — {b.name}
+                    {b.branchType === 'franchise' ? ' (Franchise)' : ''}
                   </option>
                 ))}
               </select>

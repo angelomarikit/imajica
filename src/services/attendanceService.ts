@@ -508,6 +508,161 @@ export async function deleteAttendancePunch(input: {
   writeLocal(readLocal().filter((p) => !(p.id === input.id && p.userId === input.userId)))
 }
 
+/** Manila `datetime-local` value (YYYY-MM-DDTHH:mm) from an ISO timestamp. */
+export function toManilaDatetimeLocalValue(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: MANILA_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(d)
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? ''
+  const hour = get('hour') === '24' ? '00' : get('hour')
+  return `${get('year')}-${get('month')}-${get('day')}T${hour}:${get('minute')}`
+}
+
+/** ISO from a Manila `datetime-local` value (YYYY-MM-DDTHH:mm). */
+export function fromManilaDatetimeLocalValue(local: string): string {
+  const trimmed = local.trim()
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)) {
+    throw new Error('Invalid date/time')
+  }
+  const iso = new Date(`${trimmed}:00+08:00`).toISOString()
+  if (Number.isNaN(Date.parse(iso))) throw new Error('Invalid date/time')
+  return iso
+}
+
+/** HR / people-ops: correct Time In or Time Out timestamp. */
+export async function updateAttendancePunchTime(input: {
+  id: string
+  punchedAt: string
+}): Promise<AttendancePunch> {
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase
+      .from('staff_attendance_logs')
+      .update({ punched_at: input.punchedAt })
+      .eq('id', input.id)
+      .select(ATTENDANCE_SELECT)
+      .single()
+    if (error) throw new Error(error.message)
+    const mapped = mapRow(data as DbRow)
+    writeLocal(readLocal().map((p) => (p.id === mapped.id ? mapped : p)))
+    emit()
+    return mapped
+  }
+
+  const rows = readLocal()
+  const idx = rows.findIndex((p) => p.id === input.id)
+  if (idx < 0) throw new Error('Punch not found')
+  const next = { ...rows[idx]!, punchedAt: input.punchedAt }
+  const copy = [...rows]
+  copy[idx] = next
+  writeLocal(copy)
+  return next
+}
+
+/**
+ * HR / people-ops: add a missing Time Out (or corrective punch) for another user.
+ * Skips kiosk/day rules — used for payroll corrections only.
+ */
+export async function createCorrectiveAttendancePunch(input: {
+  userId: string
+  branchId: string
+  punchType: AttendancePunchType
+  punchedAt: string
+}): Promise<AttendancePunch> {
+  if (isSupabaseConfigured && supabase) {
+    const payload = {
+      user_id: input.userId,
+      branch_id: input.branchId,
+      punch_type: input.punchType,
+      punched_at: input.punchedAt,
+      photo_url: null,
+      latitude: null,
+      longitude: null,
+      accuracy_m: null,
+      location_label: 'HR correction',
+    }
+    const { data, error } = await supabase
+      .from('staff_attendance_logs')
+      .insert(payload)
+      .select(ATTENDANCE_SELECT)
+      .single()
+    if (error) throw new Error(error.message)
+    const mapped = mapRow(data as DbRow)
+    writeLocal([mapped, ...readLocal().filter((p) => p.id !== mapped.id)])
+    emit()
+    return mapped
+  }
+
+  const punchedAt = input.punchedAt
+  const id =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `punch-${Date.now()}`
+  const row: AttendancePunch = {
+    id,
+    userId: input.userId,
+    branchId: input.branchId,
+    punchType: input.punchType,
+    punchedAt,
+    photoUrl: null,
+    latitude: null,
+    longitude: null,
+    accuracyM: null,
+    locationLabel: 'HR correction',
+    createdAt: punchedAt,
+  }
+  writeLocal([row, ...readLocal()])
+  return row
+}
+
+/**
+ * Save HR edits for one attendance session (Time In required; Time Out optional).
+ * Creates a Time Out punch when the session was open and HR supplies a time.
+ */
+export async function saveAttendanceSessionTimes(input: {
+  session: AttendanceSession
+  timeInLocal: string
+  timeOutLocal: string | null
+}): Promise<void> {
+  const timeInIso = fromManilaDatetimeLocalValue(input.timeInLocal)
+  let timeOutIso: string | null = null
+  if (input.timeOutLocal?.trim()) {
+    timeOutIso = fromManilaDatetimeLocalValue(input.timeOutLocal)
+    if (timeOutIso <= timeInIso) {
+      throw new Error('Time Out must be after Time In')
+    }
+  }
+
+  await updateAttendancePunchTime({
+    id: input.session.timeIn.id,
+    punchedAt: timeInIso,
+  })
+
+  if (timeOutIso) {
+    if (input.session.timeOut) {
+      await updateAttendancePunchTime({
+        id: input.session.timeOut.id,
+        punchedAt: timeOutIso,
+      })
+    } else {
+      await createCorrectiveAttendancePunch({
+        userId: input.session.timeIn.userId,
+        branchId: input.session.timeIn.branchId,
+        punchType: 'time_out',
+        punchedAt: timeOutIso,
+      })
+    }
+  }
+}
+
 /** Days in a Manila month that have at least one punch */
 export function daysWithPunches(
   punches: AttendancePunch[],

@@ -78,6 +78,7 @@ const DEMO_USERS: Record<string, AuthSessionUser & { password: string }> = {
 const STAFF_ROLES: UserRole[] = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
+  'HR',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -89,6 +90,7 @@ const STAFF_ROLES: UserRole[] = [
 const ROLE_PRIORITY: UserRole[] = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
+  'HR',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',

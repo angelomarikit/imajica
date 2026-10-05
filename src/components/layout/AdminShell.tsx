@@ -8,10 +8,14 @@ export function AdminShell() {
 
   return (
     <div className="flex min-h-screen bg-ivory">
-      <AdminSidebar open={menuOpen} onOpenChange={setMenuOpen} />
+      <div className="print:hidden sticky top-0 h-screen shrink-0 self-start">
+        <AdminSidebar open={menuOpen} onOpenChange={setMenuOpen} />
+      </div>
       <div className="flex min-w-0 flex-1 flex-col">
-        <AdminHeader menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((v) => !v)} />
-        <main className="flex-1 px-4 py-5 lg:px-6 lg:py-6">
+        <div className="print:hidden">
+          <AdminHeader menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((v) => !v)} />
+        </div>
+        <main className="flex-1 px-4 py-5 lg:px-6 lg:py-6 print:p-0">
           <Outlet />
         </main>
       </div>

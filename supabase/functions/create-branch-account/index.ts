@@ -1,4 +1,4 @@
-// Create branch-tagged Auth users (HQ → Branches → Branches Accounts)
+// Create Auth users with role + branch (HQ → Branches Accounts / User Access)
 // Uses service role for auth.admin.createUser; caller must be SUPER_ADMIN / HQ_ADMIN.
 // deno-lint-ignore-file
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
@@ -19,6 +19,11 @@ const BRANCH_ROLES = new Set([
   'RECEPTIONIST',
   'STAFF',
 ])
+
+/** Org-wide roles (All Branches / HQ) — stored on HQ sentinel */
+const ORG_ROLES = new Set(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'CLIENT'])
+
+const ALL_ROLES = new Set([...BRANCH_ROLES, ...ORG_ROLES])
 
 const HQ_SENTINEL = '00000000-0000-0000-0000-000000000001'
 
@@ -97,14 +102,16 @@ serve(async (req) => {
     const email = (body.email ?? '').trim().toLowerCase()
     const password = body.password ?? ''
     const role = (body.role ?? 'BRANCH_ADMIN').trim()
-    const branchId = (body.branchId ?? '').trim()
+    const requestedBranchId = (body.branchId ?? '').trim()
+    const orgWide = ORG_ROLES.has(role)
+    const branchId = orgWide ? HQ_SENTINEL : requestedBranchId
 
     if (!fullName || !email) return json({ error: 'fullName and email are required' }, 400)
     if (password.length < 6) return json({ error: 'password must be at least 6 characters' }, 400)
-    if (!BRANCH_ROLES.has(role)) return json({ error: `invalid role: ${role}` }, 400)
+    if (!ALL_ROLES.has(role)) return json({ error: `invalid role: ${role}` }, 400)
     if (!branchId) return json({ error: 'branchId is required' }, 400)
-    if (branchId === HQ_SENTINEL) {
-      return json({ error: 'Cannot tag a branch account to HQ' }, 400)
+    if (!orgWide && branchId === HQ_SENTINEL) {
+      return json({ error: 'Cannot tag a clinic staff account to HQ' }, 400)
     }
 
     const { data: branch, error: branchErr } = await admin
@@ -119,7 +126,7 @@ serve(async (req) => {
     }
     if (!branch) return json({ error: 'branch not found' }, 400)
     if (branch.status !== 'active') return json({ error: 'branch is not active' }, 400)
-    if (String(branch.branch_type) === 'warehouse') {
+    if (!orgWide && String(branch.branch_type) === 'warehouse') {
       return json({ error: 'cannot tag accounts to warehouse' }, 400)
     }
 
@@ -159,12 +166,16 @@ serve(async (req) => {
       .delete()
       .eq('user_id', userId)
       .in('role_id', [
+        'SUPER_ADMIN',
+        'HQ_ADMIN',
+        'HR',
         'BRANCH_ADMIN',
         'DOCTOR',
         'NURSE',
         'AESTHETICIAN',
         'RECEPTIONIST',
         'STAFF',
+        'CLIENT',
       ])
 
     const { error: roleInsertErr } = await admin.from('user_roles').insert({
@@ -185,7 +196,7 @@ serve(async (req) => {
       email,
       role,
       branchId: branch.id,
-      branchName: branch.name,
+      branchName: orgWide ? 'All Branches (organization)' : branch.name,
       status: 'active',
     })
   } catch (err) {

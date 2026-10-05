@@ -2,11 +2,42 @@ import type { AuthSessionUser, UserRole } from '@/types'
 import { getBranches } from '@/services/branchService'
 
 const HQ_ROLES: UserRole[] = ['SUPER_ADMIN', 'HQ_ADMIN']
-const HQ_SENTINEL = '00000000-0000-0000-0000-000000000001'
+/** Org-wide roles land on the HQ sentinel branch (not a clinic). */
+export const ORG_WIDE_ROLES: UserRole[] = ['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'CLIENT']
+export const HQ_SENTINEL_BRANCH_ID = '00000000-0000-0000-0000-000000000001'
 
-/** HQ / org-wide admins */
+/** HQ / org-wide admins (full system) */
 export function isHqRole(role: UserRole | undefined | null): boolean {
   return Boolean(role && HQ_ROLES.includes(role))
+}
+
+/** Human Resources — all clinics people ops (not full HQ). */
+export function isHrRole(role: UserRole | undefined | null): boolean {
+  return role === 'HR'
+}
+
+/** HQ or HR — can switch All Branches and view people-ops org-wide. */
+export function canAccessPeopleOps(user: AuthSessionUser | null | undefined): boolean {
+  return isHqRole(user?.role) || isHrRole(user?.role)
+}
+
+/**
+ * Who may approve / designate leave:
+ * HR + HQ now; clinic managers for their own branch (ready for that rollout).
+ */
+export function canApproveLeave(
+  user: AuthSessionUser | null | undefined,
+  leaveBranchId?: string | null,
+): boolean {
+  if (!user) return false
+  if (canAccessPeopleOps(user)) return true
+  if (!isBranchOwner(user)) return false
+  if (!leaveBranchId) return true
+  return user.branchId === leaveBranchId
+}
+
+export function isOrgWideRole(role: string | undefined | null): boolean {
+  return Boolean(role && ORG_WIDE_ROLES.includes(role as UserRole))
 }
 
 function resolveBranchType(
@@ -29,7 +60,7 @@ export function isFranchiseBranchOwner(user: AuthSessionUser | null | undefined)
 export function isBranchOwner(user: AuthSessionUser | null | undefined): boolean {
   if (!user) return false
   if (user.role !== 'BRANCH_ADMIN' || !user.branchId) return false
-  if (user.branchId === HQ_SENTINEL) return false
+  if (user.branchId === HQ_SENTINEL_BRANCH_ID) return false
   const type = resolveBranchType(user)
   if (type === 'warehouse') return false
   // Missing type still allowed if they have a real branch_id (DB may not hydrate yet)
@@ -48,7 +79,7 @@ export const TIMECLOCK_ROLES: UserRole[] = [
 export function isTimeclockStaff(user: AuthSessionUser | null | undefined): boolean {
   if (!user) return false
   if (!TIMECLOCK_ROLES.includes(user.role)) return false
-  if (!user.branchId || user.branchId === HQ_SENTINEL) return false
+  if (!user.branchId || user.branchId === HQ_SENTINEL_BRANCH_ID) return false
   const type = resolveBranchType(user)
   if (type === 'warehouse') return false
   return true
@@ -63,9 +94,10 @@ export function canAccessHqAdmin(user: AuthSessionUser | null | undefined): bool
   return isHqRole(user?.role)
 }
 
-/** Post-login / default admin home. HQ + clinic managers → Dashboard; clinical staff → attendance. */
+/** Post-login / default admin home. HQ + clinic managers → Dashboard; HR → attendance; clinical staff → attendance. */
 export function getStaffHomePath(user: AuthSessionUser | null | undefined): string {
   if (!user) return '/login'
+  if (isHrRole(user.role)) return '/admin/hr/salary'
   if (isTimeclockStaff(user)) return '/admin/attendance'
   if (isBranchOwner(user)) return '/admin/dashboard'
   if (isStaffRoleLike(user.role)) return '/admin/dashboard'

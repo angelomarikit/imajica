@@ -10,7 +10,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import type { Branch } from '@/types'
 import { cn } from '@/utils/cn'
-import { isFranchiseBranchOwner, isTimeclockStaff } from '@/utils/franchiseAccess'
+import { isFranchiseBranchOwner, isHrRole, isTimeclockStaff } from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
 
 const hqTabs = [
@@ -29,7 +29,8 @@ const franchiseTabs = [
 
 export function SettingsRoutes() {
   const { user } = useAuth()
-  const staffSettings = isFranchiseBranchOwner(user) || isTimeclockStaff(user)
+  const staffSettings =
+    isFranchiseBranchOwner(user) || isTimeclockStaff(user) || isHrRole(user?.role)
   const tabs = staffSettings ? franchiseTabs : hqTabs
 
   return (
@@ -228,8 +229,8 @@ function UsersSettings() {
     <Card className="p-5">
       <CardHeader title="Staff & Roles" description="Role assignments are enforced via Supabase RLS." />
       <p className="text-sm text-slate-ui">
-        Manage user roles: Super Admin, HQ Admin, Clinic Manager (BRANCH_ADMIN), clinical staff, and
-        Client.
+        Manage user roles: Super Admin, HQ Admin, HR (all clinics), Clinic Manager (BRANCH_ADMIN),
+        clinical staff, and Client.
       </p>
     </Card>
   )

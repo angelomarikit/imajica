@@ -3,7 +3,10 @@ import {
   Clock,
   FileSpreadsheet,
   Filter,
+  Pencil,
+  RotateCcw,
   Search,
+  Trash2,
   Wallet,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -12,11 +15,12 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { PayslipDocument } from '@/components/payroll/PayslipDocument'
 import { useAuth } from '@/contexts/AuthContext'
 import { PAYROLL_DEFAULT_SHIFT } from '@/constants/payrollRosterSeed'
 import {
-  formatAttendanceHours,
   formatManilaTime,
+  listMyAttendance,
   manilaDateKey,
   subscribeAttendance,
 } from '@/services/attendanceService'
@@ -25,9 +29,22 @@ import {
   scheduledMinutesPerDay,
   type AttendancePayrollRow,
 } from '@/services/payrollAttendanceService'
-import { canAccessHqAdmin } from '@/utils/franchiseAccess'
-import { formatPeso, formatPesoExact } from '@/utils/currency'
+import { buildPayslipDocument, type BuiltPayslip } from '@/services/payslipCompute'
+import { gatherPayslipIncentives } from '@/services/payslipIncentives'
+import {
+  deletePayslip,
+  listPayslipsForStaff,
+  preloadPayslips,
+  sendPayslipToEmployee,
+  subscribePayslips,
+} from '@/services/payslipService'
+import { preloadPlanBIncentives, subscribePlanBIncentives } from '@/services/planBIncentiveService'
+import { preloadSalesData, subscribeSalesData } from '@/services/salesService'
+import { preloadAccessUsers } from '@/services/userAccessService'
+import { canAccessPeopleOps } from '@/utils/franchiseAccess'
+import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import type { AttendancePunch } from '@/types'
 
 function defaultMonthRange() {
   const to = manilaDateKey()
@@ -44,10 +61,39 @@ function statusBadge(row: AttendancePayrollRow) {
   return <Badge variant="success">Ready</Badge>
 }
 
+function sumIncentives(row: AttendancePayrollRow, periodFrom: string, periodTo: string) {
+  const inc = gatherPayslipIncentives({ row, periodFrom, periodTo })
+  const total =
+    (inc.staffSalesCommission || 0) +
+    (inc.managerCommission || 0) +
+    (inc.milestoneShare || 0) +
+    (inc.attendanceIncentive || 0) +
+    (inc.planBAmount || 0)
+  // Absences already zero out gross days — do not list them again in deductions vs net
+  const netDeductions = Math.round(
+    (row.lateDeduction + row.undertimeDeduction + row.statutoryTotal) * 100,
+  ) / 100
+  return {
+    incentives: Math.round(total * 100) / 100,
+    staffCommission: inc.staffSalesCommission,
+    netDeductions,
+    netWithIncentives: Math.round((row.netPay + total) * 100) / 100,
+  }
+}
+
 /** HQ payroll from Time In / Time Out + spreadsheet daily rates & statutory deductions. */
-export function AttendancePayrollPage() {
+export function AttendancePayrollPage({
+  title = 'Payroll',
+  description = 'Daily rates, attendance hours, late/undertime, and statutory deductions from the payroll roster.',
+  branchIds,
+}: {
+  title?: string
+  description?: string
+  /** When set, only employees tagged to these clinic branch ids. */
+  branchIds?: string[]
+} = {}) {
   const { user } = useAuth()
-  const allowed = canAccessHqAdmin(user)
+  const allowed = canAccessPeopleOps(user)
   const initial = defaultMonthRange()
 
   const [fromDraft, setFromDraft] = useState(initial.from)
@@ -58,11 +104,16 @@ export function AttendancePayrollPage() {
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState<AttendancePayrollRow[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [salesTick, setSalesTick] = useState(0)
+
+  const branchKey = branchIds?.slice().sort().join(',') ?? ''
 
   async function load() {
     setLoading(true)
     try {
-      const next = await computeAttendancePayroll(from, to)
+      const next = await computeAttendancePayroll(from, to, {
+        branchIds: branchIds?.length ? branchIds : undefined,
+      })
       setRows(next)
       setSelectedId((prev) => {
         if (prev && next.some((r) => r.employee.id === prev)) return prev
@@ -82,12 +133,33 @@ export function AttendancePayrollPage() {
       void load()
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to])
+  }, [from, to, branchKey])
+
+  useEffect(() => {
+    void preloadSalesData().then(() => setSalesTick((n) => n + 1))
+    void preloadPlanBIncentives().then(() => setSalesTick((n) => n + 1))
+    void preloadPayslips()
+    void preloadAccessUsers().then(() => setSalesTick((n) => n + 1))
+    const unsubSales = subscribeSalesData(() => setSalesTick((n) => n + 1))
+    const unsubPlanB = subscribePlanBIncentives(() => setSalesTick((n) => n + 1))
+    return () => {
+      unsubSales()
+      unsubPlanB()
+    }
+  }, [])
+
+  const payrollRows = useMemo(() => {
+    void salesTick
+    return rows.map((r) => {
+      const extras = sumIncentives(r, from, to)
+      return { row: r, ...extras }
+    })
+  }, [rows, from, to, salesTick])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return rows
-    return rows.filter((r) => {
+    if (!q) return payrollRows
+    return payrollRows.filter(({ row: r }) => {
       const e = r.employee
       return (
         e.fullName.toLowerCase().includes(q) ||
@@ -96,19 +168,20 @@ export function AttendancePayrollPage() {
         e.email.toLowerCase().includes(q)
       )
     })
-  }, [rows, query])
+  }, [payrollRows, query])
 
   const selected = rows.find((r) => r.employee.id === selectedId) ?? null
 
   const totals = useMemo(() => {
     return {
-      staff: rows.length,
-      gross: rows.reduce((s, r) => s + r.grossPay, 0),
-      deductions: rows.reduce((s, r) => s + r.totalDeductions, 0),
-      net: rows.reduce((s, r) => s + r.netPay, 0),
-      lateMin: rows.reduce((s, r) => s + r.lateMinutes, 0),
+      staff: payrollRows.length,
+      gross: payrollRows.reduce((s, r) => s + r.row.grossPay, 0),
+      incentives: payrollRows.reduce((s, r) => s + r.incentives, 0),
+      deductions: payrollRows.reduce((s, r) => s + r.netDeductions, 0),
+      net: payrollRows.reduce((s, r) => s + r.netWithIncentives, 0),
+      lateMin: payrollRows.reduce((s, r) => s + r.row.lateMinutes, 0),
     }
-  }, [rows])
+  }, [payrollRows])
 
   if (!allowed) return <Navigate to="/admin/dashboard" replace />
 
@@ -122,7 +195,7 @@ export function AttendancePayrollPage() {
   }
 
   async function handleExport() {
-    if (!rows.length) {
+    if (!payrollRows.length) {
       toast.error('No payroll rows to export')
       return
     }
@@ -143,15 +216,17 @@ export function AttendancePayrollPage() {
           'Late (min)',
           'Undertime (min)',
           'Gross',
+          'Incentives',
+          'Staff Commission 0.5%',
           'Late Deduction',
           'Undertime Deduction',
           'SSS+MPF',
           'Pag-IBIG',
           'PhilHealth',
           'Total Deductions',
-          'Net Pay',
+          'Net Pay (incl. incentives)',
         ],
-        ...rows.map((r) => [
+        ...payrollRows.map(({ row: r, incentives, staffCommission, netDeductions, netWithIncentives }) => [
           r.employee.fullName,
           r.employee.jobTitle,
           r.employee.branchLabel,
@@ -161,13 +236,15 @@ export function AttendancePayrollPage() {
           r.lateMinutes,
           r.undertimeMinutes,
           r.grossPay,
+          incentives,
+          staffCommission,
           r.lateDeduction,
           r.undertimeDeduction,
           r.sssDeduction,
           r.pagibigDeduction,
           r.philhealthDeduction,
-          r.totalDeductions,
-          r.netPay,
+          netDeductions,
+          netWithIncentives,
         ]),
       ]
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(summary), 'Payroll')
@@ -175,7 +252,7 @@ export function AttendancePayrollPage() {
       const detail: (string | number)[][] = [
         ['Staff', 'Date', 'Status', 'Time In', 'Time Out', 'Late (min)', 'Undertime (min)', 'Late ₱', 'Undertime ₱'],
       ]
-      for (const r of rows) {
+      for (const { row: r } of payrollRows) {
         for (const d of r.dayDetails) {
           detail.push([
             r.employee.fullName,
@@ -201,8 +278,8 @@ export function AttendancePayrollPage() {
   return (
     <div className="space-y-5">
       <AdminPageBanner
-        title="Payroll"
-        description="Built from Time In / Time Out vs the Tue–Sun 9:45 AM–7:00 PM shift. Daily rates and SSS / Pag-IBIG / PhilHealth follow the payroll spreadsheet."
+        title={title}
+        description={description}
         stat={{
           value: formatPeso(totals.net),
           label: 'Net payroll',
@@ -221,9 +298,10 @@ export function AttendancePayrollPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Kpi label="Staff on roster" value={String(totals.staff)} icon={Wallet} />
         <Kpi label="Gross pay" value={formatPeso(totals.gross)} icon={Wallet} />
+        <Kpi label="Incentives" value={formatPeso(totals.incentives)} icon={Wallet} />
         <Kpi label="Deductions" value={formatPeso(totals.deductions)} icon={Clock} />
         <Kpi label="Late minutes" value={String(totals.lateMin)} icon={Clock} />
       </div>
@@ -259,13 +337,13 @@ export function AttendancePayrollPage() {
         </div>
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <Card className="overflow-hidden p-0">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
             <div>
               <p className="text-sm font-semibold text-[#073D2C]">Staff payroll</p>
               <p className="text-[11px] text-slate-ui">
-                Gross from days with Time In; late / undertime cut pay by the minute
+                Net includes My Commission incentives (0.5% tagged sales + other incentives)
               </p>
             </div>
             <div className="relative w-full max-w-xs">
@@ -292,13 +370,14 @@ export function AttendancePayrollPage() {
                     <th className="px-3 py-2.5 font-semibold">Present</th>
                     <th className="px-3 py-2.5 font-semibold">Late</th>
                     <th className="px-3 py-2.5 font-semibold">Gross</th>
+                    <th className="px-3 py-2.5 font-semibold">Incentives</th>
                     <th className="px-3 py-2.5 font-semibold">Deductions</th>
                     <th className="px-3 py-2.5 font-semibold">Net</th>
                     <th className="px-3 py-2.5 font-semibold">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/70">
-                  {filtered.map((r) => {
+                  {filtered.map(({ row: r, incentives, netDeductions, netWithIncentives }) => {
                     const active = r.employee.id === selectedId
                     return (
                       <tr
@@ -321,11 +400,14 @@ export function AttendancePayrollPage() {
                         </td>
                         <td className="whitespace-nowrap px-3 py-3">{r.lateMinutes}m</td>
                         <td className="whitespace-nowrap px-3 py-3">{formatPeso(r.grossPay)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-[#6b5420]">
+                          {formatPeso(incentives)}
+                        </td>
                         <td className="whitespace-nowrap px-3 py-3 text-amber-800">
-                          {formatPeso(r.totalDeductions)}
+                          {formatPeso(netDeductions)}
                         </td>
                         <td className="whitespace-nowrap px-3 py-3 font-semibold text-[#073D2C]">
-                          {formatPeso(r.netPay)}
+                          {formatPeso(netWithIncentives)}
                         </td>
                         <td className="px-3 py-3">{statusBadge(r)}</td>
                       </tr>
@@ -337,11 +419,11 @@ export function AttendancePayrollPage() {
           </div>
         </Card>
 
-        <Card className="p-4 sm:p-5">
+        <Card className="p-4 sm:p-5 lg:col-span-1 lg:max-w-none">
           {!selected ? (
             <p className="text-sm text-slate-ui">Select a staff member to preview the payslip.</p>
           ) : (
-            <PayslipPanel row={selected} />
+            <HrPayslipPreview row={selected} periodFrom={from} periodTo={to} />
           )}
         </Card>
       </div>
@@ -349,106 +431,197 @@ export function AttendancePayrollPage() {
   )
 }
 
-function PayslipPanel({ row }: { row: AttendancePayrollRow }) {
-  const e = row.employee
+function HrPayslipPreview({
+  row,
+  periodFrom,
+  periodTo,
+}: {
+  row: AttendancePayrollRow
+  periodFrom: string
+  periodTo: string
+}) {
+  const { user } = useAuth()
+  const [punches, setPunches] = useState<AttendancePunch[]>([])
+  const [sending, setSending] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<BuiltPayslip | null>(null)
+  const [payslipTick, setPayslipTick] = useState(0)
+  const [salesTick, setSalesTick] = useState(0)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  useEffect(() => {
+    void preloadPayslips().then(() => setPayslipTick((n) => n + 1))
+    return subscribePayslips(() => setPayslipTick((n) => n + 1))
+  }, [])
+
+  useEffect(() => {
+    void preloadSalesData().then(() => setSalesTick((n) => n + 1))
+    void preloadPlanBIncentives().then(() => setSalesTick((n) => n + 1))
+    void preloadAccessUsers().then(() => setSalesTick((n) => n + 1))
+    const unsubSales = subscribeSalesData(() => setSalesTick((n) => n + 1))
+    const unsubPlanB = subscribePlanBIncentives(() => setSalesTick((n) => n + 1))
+    return () => {
+      unsubSales()
+      unsubPlanB()
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      if (!row.matchedUserId) {
+        setPunches([])
+        return
+      }
+      try {
+        const rows = await listMyAttendance(row.matchedUserId)
+        if (!cancelled) setPunches(rows)
+      } catch {
+        if (!cancelled) setPunches([])
+      }
+    }
+    void load()
+  }, [row.matchedUserId])
+
+  const computed = useMemo(() => {
+    void salesTick
+    const incentives = gatherPayslipIncentives({
+      row,
+      periodFrom,
+      periodTo,
+      attendancePunches: punches,
+    })
+    return buildPayslipDocument({ row, periodFrom, periodTo, incentives })
+  }, [row, periodFrom, periodTo, punches, salesTick])
+
+  // Reset draft when the auto-calculated payslip changes (new staff / range / punches)
+  useEffect(() => {
+    setDraft(computed)
+    setEditing(false)
+  }, [computed])
+
+  const payslip = draft ?? computed
+
+  const sentForStaff = useMemo(() => {
+    void payslipTick
+    return listPayslipsForStaff({
+      userId: row.matchedUserId,
+      email: row.employee.email,
+    })
+  }, [payslipTick, row.matchedUserId, row.employee.email])
+
+  async function handleSend() {
+    if (!user) return
+    setSending(true)
+    try {
+      await sendPayslipToEmployee({
+        payslip,
+        sentByUserId: user.id,
+        sentByName: user.fullName,
+      })
+      toast.success(`Payslip sent to ${payslip.employeeName} — visible on their My Salary page`)
+      setEditing(false)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not send payslip')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function handleDelete(id: string, label: string) {
+    if (
+      !window.confirm(
+        `Delete payslip for ${label}? The employee will no longer see it on My Salary.`,
+      )
+    ) {
+      return
+    }
+    setDeletingId(id)
+    try {
+      await deletePayslip(id)
+      toast.success('Payslip deleted')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete payslip')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   return (
     <div className="space-y-4">
-      <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-ui">
-          Payslip preview
-        </p>
-        <h2 className="text-lg font-semibold text-charcoal">{e.fullName}</h2>
-        <p className="text-sm text-slate-ui">
-          {e.jobTitle} · {e.branchLabel}
-        </p>
-        {!row.matchedUserId ? (
-          <p className="mt-2 text-xs text-amber-800">
-            Not linked to a timeclock account — attendance shows as absent until emails/names match.
-          </p>
+      <div className="flex flex-wrap items-center gap-2 print:hidden">
+        <Button
+          type="button"
+          variant={editing ? 'primary' : 'secondary'}
+          size="sm"
+          onClick={() => setEditing((v) => !v)}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          {editing ? 'Done editing' : 'Edit before send'}
+        </Button>
+        {editing ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setDraft(computed)
+              toast.message('Reset to calculated amounts')
+            }}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset to calculated
+          </Button>
         ) : null}
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
-        <Mini label="Present" value={`${row.daysPresent}`} />
-        <Mini label="Absent" value={`${row.daysAbsent}`} />
-        <Mini label="MBS" value={formatPeso(row.mbs)} />
-      </div>
+      <PayslipDocument
+        payslip={payslip}
+        showSend
+        sending={sending}
+        onSend={() => void handleSend()}
+        editable={editing}
+        onChange={setDraft}
+      />
 
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-ui">Earnings</p>
-        <ul className="space-y-1.5 text-sm">
-          <li className="flex justify-between gap-2">
-            <span>
-              Days worked ({row.daysPresent} × {formatPesoExact(e.salaryPerDay)})
-            </span>
-            <span className="font-medium">{formatPeso(row.grossPay)}</span>
-          </li>
-        </ul>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-ui">
-          Deductions (from attendance + sheet)
-        </p>
-        <ul className="space-y-1.5 text-sm">
-          <li className="flex justify-between gap-2">
-            <span>Late ({row.lateMinutes} min)</span>
-            <span>-{formatPeso(row.lateDeduction)}</span>
-          </li>
-          <li className="flex justify-between gap-2">
-            <span>Undertime ({row.undertimeMinutes} min)</span>
-            <span>-{formatPeso(row.undertimeDeduction)}</span>
-          </li>
-          <li className="flex justify-between gap-2 text-slate-ui">
-            <span>Unpaid absences ({row.daysAbsent} day)</span>
-            <span>({formatPeso(row.absenceDeduction)} not earned)</span>
-          </li>
-          <li className="flex justify-between gap-2">
-            <span>SSS + MPF</span>
-            <span>-{formatPeso(row.sssDeduction)}</span>
-          </li>
-          <li className="flex justify-between gap-2">
-            <span>Pag-IBIG</span>
-            <span>-{formatPeso(row.pagibigDeduction)}</span>
-          </li>
-          <li className="flex justify-between gap-2">
-            <span>PhilHealth</span>
-            <span>-{formatPeso(row.philhealthDeduction)}</span>
-          </li>
-        </ul>
-      </div>
-
-      <div className="rounded-[12px] bg-emerald-50 p-4">
-        <p className="text-xs text-slate-ui">Net pay</p>
-        <p className="font-metric text-3xl font-semibold tracking-tight text-emerald-900">
-          {formatPeso(row.netPay)}
-        </p>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-ui">
-          Daily attendance
-        </p>
-        <div className="max-h-56 space-y-1 overflow-y-auto text-xs">
-          {row.dayDetails.map((d) => (
-            <div
-              key={d.dateKey}
-              className="flex items-center justify-between gap-2 rounded-[8px] border border-border/70 px-2.5 py-1.5"
-            >
-              <span className="font-medium text-charcoal">{d.dateKey}</span>
-              <span className="capitalize text-slate-ui">{d.status}</span>
-              <span className="text-slate-ui">
-                {d.timeIn ? formatManilaTime(d.timeIn) : '—'}
-                {' → '}
-                {d.timeOut ? formatManilaTime(d.timeOut) : '—'}
-              </span>
-              <span className="text-[#073D2C]">
-                {d.hours != null ? formatAttendanceHours(d.hours) : '—'}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
+      {sentForStaff.length > 0 ? (
+        <Card className="overflow-hidden p-0">
+          <div className="border-b border-border px-4 py-3">
+            <p className="text-sm font-semibold text-[#073D2C]">Sent payslips for this employee</p>
+            <p className="text-[11px] text-slate-ui">
+              Delete a slip if amounts were wrong — it disappears from My Salary immediately.
+            </p>
+          </div>
+          <ul className="divide-y divide-border/70">
+            {sentForStaff.map((s) => (
+              <li
+                key={s.id}
+                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+              >
+                <div>
+                  <p className="text-sm font-semibold text-[#0A2E26]">{s.periodLabel}</p>
+                  <p className="text-[11px] text-slate-ui">
+                    Sent {new Date(s.sentAt).toLocaleString('en-PH')} · {s.sentByName}
+                  </p>
+                  <p className="mt-0.5 font-metric text-sm font-semibold text-emerald-900">
+                    {formatPeso(s.netPay)}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  disabled={deletingId === s.id}
+                  onClick={() => void handleDelete(s.id, s.periodLabel)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {deletingId === s.id ? 'Deleting…' : 'Delete'}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
     </div>
   )
 }
@@ -474,14 +647,5 @@ function Kpi({
         </span>
       </div>
     </Card>
-  )
-}
-
-function Mini({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[10px] border border-border bg-ivory-50 px-2 py-2 text-center">
-      <p className="text-[10px] uppercase tracking-wide text-slate-ui">{label}</p>
-      <p className="text-sm font-semibold text-[#073D2C]">{value}</p>
-    </div>
   )
 }

@@ -52,6 +52,10 @@ export type PayrollRosterEmployee = {
   ecEmployer: number
   pagibigEmployer: number
   philhealthEmployer: number
+  /** Recurring monthly extra employee deduction (HR-editable) */
+  otherDeduction?: number
+  /** Recurring monthly allowance / benefit (HR-editable) */
+  allowance?: number
 }
 
 function emp(

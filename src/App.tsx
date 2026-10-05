@@ -3,7 +3,15 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import { AdminShell } from '@/components/layout/AdminShell'
 import { ClientShell } from '@/components/layout/ClientShell'
-import { PublicOnly, RequireAuth, RequireClient, RequireHqAdmin, RequireRole, RequireStaff } from '@/components/layout/RouteGuards'
+import {
+  PublicOnly,
+  RequireAuth,
+  RequireClient,
+  RequireHqAdmin,
+  RequirePeopleOps,
+  RequireRole,
+  RequireStaff,
+} from '@/components/layout/RouteGuards'
 import { AuthProvider, isStaffRole, useAuth } from '@/contexts/AuthContext'
 import { BranchProvider } from '@/contexts/BranchContext'
 import { SalesDataBootstrap } from '@/components/SalesDataBootstrap'
@@ -64,11 +72,27 @@ import { DashboardPage } from '@/pages/dashboard/DashboardPage'
 import { KioskTimeClockPage } from '@/pages/attendance/KioskTimeClockPage'
 import { MyAttendancePage } from '@/pages/attendance/MyAttendancePage'
 import { MyCommissionSalesPage } from '@/pages/staff/MyCommissionSalesPage'
+import { MySalaryPage } from '@/pages/staff/MySalaryPage'
+import { MyLeavePage } from '@/pages/staff/MyLeavePage'
+import { MyTrainingPage } from '@/pages/staff/MyTrainingPage'
 import { PlanBIncentivePage } from '@/pages/staff/PlanBIncentivePage'
 import { BranchAttendancePage } from '@/pages/attendance/BranchAttendancePage'
 import { BranchesAttendancePage } from '@/pages/attendance/BranchesAttendancePage'
 import { FranchiseAttendancePage } from '@/pages/attendance/FranchiseAttendancePage'
 import { AttendancePayrollPage } from '@/pages/payroll/AttendancePayrollPage'
+import { HrModulePage } from '@/pages/hr/HrModulePage'
+import { HrKpisPage } from '@/pages/hr/HrKpisPage'
+import { HrLeavePage } from '@/pages/hr/HrLeavePage'
+import { HrDeductionsPage } from '@/pages/hr/HrDeductionsPage'
+import {
+  HrAllBranchesAttendancePage,
+  HrClinicAttendancePage,
+} from '@/pages/hr/HrAttendancePages'
+import { HrAllSalaryPage, HrClinicSalaryPage } from '@/pages/hr/HrSalaryPages'
+import { HrRecruitmentPage } from '@/pages/hr/HrRecruitmentPage'
+import { HrNewHiresPage } from '@/pages/hr/HrNewHiresPage'
+import { HrExitsPage } from '@/pages/hr/HrExitsPage'
+import { HrTrainingPage } from '@/pages/hr/HrTrainingPage'
 import { InventoryPage } from '@/pages/inventory/InventoryPage'
 import { MarketingPage } from '@/pages/marketing/MarketingPage'
 import { PackagesPage } from '@/pages/packages/PackagesPage'
@@ -91,6 +115,7 @@ function HomeRedirect() {
 function AdminDashboardGate() {
   const { user } = useAuth()
   // HQ sees org-wide dashboard; clinic manager sees their store only.
+  // HR uses people-ops home (attendance), not the sales dashboard.
   if (user && !isHqRole(user.role) && !isBranchOwner(user)) {
     return <Navigate to={getStaffHomePath(user)} replace />
   }
@@ -135,11 +160,14 @@ export default function App() {
                 <Route index element={<AdminIndexRedirect />} />
                 <Route path="dashboard" element={<AdminDashboardGate />} />
                 <Route path="attendance" element={<MyAttendancePage />} />
+                <Route path="my-leave" element={<MyLeavePage />} />
+                <Route path="my-training" element={<MyTrainingPage />} />
                 <Route path="commission-sales" element={<MyCommissionSalesPage />} />
+                <Route path="my-salary" element={<MySalaryPage />} />
                 <Route
                   path="plan-b-incentive"
                   element={
-                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'BRANCH_ADMIN']}>
+                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'BRANCH_ADMIN']}>
                       <PlanBIncentivePage />
                     </RequireRole>
                   }
@@ -147,7 +175,7 @@ export default function App() {
                 <Route
                   path="reports/branch-attendance"
                   element={
-                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'BRANCH_ADMIN']}>
+                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'BRANCH_ADMIN']}>
                       <BranchAttendancePage />
                     </RequireRole>
                   }
@@ -155,25 +183,121 @@ export default function App() {
                 <Route
                   path="reports/branches-attendance"
                   element={
-                    <RequireHqAdmin>
+                    <RequirePeopleOps>
                       <BranchesAttendancePage />
-                    </RequireHqAdmin>
+                    </RequirePeopleOps>
                   }
                 />
                 <Route
                   path="reports/franchise-attendance"
                   element={
-                    <RequireHqAdmin>
+                    <RequirePeopleOps>
                       <FranchiseAttendancePage />
-                    </RequireHqAdmin>
+                    </RequirePeopleOps>
                   }
                 />
                 <Route
                   path="reports/payroll"
                   element={
-                    <RequireHqAdmin>
+                    <RequirePeopleOps>
                       <AttendancePayrollPage />
-                    </RequireHqAdmin>
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/salary"
+                  element={
+                    <RequirePeopleOps>
+                      <HrAllSalaryPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/salary/:branchId"
+                  element={
+                    <RequirePeopleOps>
+                      <HrClinicSalaryPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/attendance"
+                  element={
+                    <RequirePeopleOps>
+                      <HrAllBranchesAttendancePage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/attendance/:branchId"
+                  element={
+                    <RequirePeopleOps>
+                      <HrClinicAttendancePage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/kpis"
+                  element={
+                    <RequirePeopleOps>
+                      <HrKpisPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/leave"
+                  element={
+                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'BRANCH_ADMIN']}>
+                      <HrLeavePage />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="hr/deductions"
+                  element={
+                    <RequirePeopleOps>
+                      <HrDeductionsPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/recruitment"
+                  element={
+                    <RequirePeopleOps>
+                      <HrRecruitmentPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/new-hires"
+                  element={
+                    <RequirePeopleOps>
+                      <HrNewHiresPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/exits"
+                  element={
+                    <RequirePeopleOps>
+                      <HrExitsPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/training"
+                  element={
+                    <RequirePeopleOps>
+                      <HrTrainingPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/:module"
+                  element={
+                    <RequirePeopleOps>
+                      <HrModulePage />
+                    </RequirePeopleOps>
                   }
                 />
                 <Route path="appointments" element={<AppointmentsPage />} />
@@ -219,17 +343,17 @@ export default function App() {
                 <Route
                   path="staff/sales"
                   element={
-                    <RequireHqAdmin>
+                    <RequirePeopleOps>
                       <StaffSalesPage />
-                    </RequireHqAdmin>
+                    </RequirePeopleOps>
                   }
                 />
                 <Route
                   path="staff/positions"
                   element={
-                    <RequireHqAdmin>
+                    <RequirePeopleOps>
                       <StaffPositionsPage />
-                    </RequireHqAdmin>
+                    </RequirePeopleOps>
                   }
                 />
                 <Route path="staff" element={<StaffPage />} />
@@ -237,25 +361,25 @@ export default function App() {
                 <Route
                   path="commissions"
                   element={
-                    <RequireHqAdmin>
+                    <RequirePeopleOps>
                       <CommissionsPage />
-                    </RequireHqAdmin>
+                    </RequirePeopleOps>
                   }
                 />
                 <Route
                   path="payroll"
                   element={
-                    <RequireHqAdmin>
+                    <RequirePeopleOps>
                       <PayrollPage />
-                    </RequireHqAdmin>
+                    </RequirePeopleOps>
                   }
                 />
                 <Route
                   path="team/recruitment-lms"
                   element={
-                    <RequireHqAdmin>
+                    <RequirePeopleOps>
                       <RecruitmentLmsPage />
-                    </RequireHqAdmin>
+                    </RequirePeopleOps>
                   }
                 />
                 <Route

@@ -2,6 +2,7 @@
 export type UserRole =
   | 'SUPER_ADMIN'
   | 'HQ_ADMIN'
+  | 'HR'
   | 'BRANCH_ADMIN'
   | 'DOCTOR'
   | 'NURSE'
@@ -144,8 +145,15 @@ export interface ClientSkinProfile {
 
 export interface Staff {
   id: string
+  /** Linked auth / profiles id when sourced from User Access */
+  profileId?: string
   code: string
+  /** Shared kiosk employee number when available */
+  employeeCode?: string | null
   fullName: string
+  firstName?: string
+  middleName?: string
+  lastName?: string
   email: string
   phone: string
   role: UserRole
@@ -561,6 +569,46 @@ export interface PlanBIncentive {
   notes?: string
   createdByUserId: string
   createdByName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type LeaveType = 'sick' | 'vacation' | 'emergency'
+export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled'
+export type LeaveRequestSource = 'employee_applied' | 'hr_designated' | 'manager_designated'
+
+/** Annual leave credits for one employee (calendar year). */
+export interface LeaveBalance {
+  id: string
+  userId: string
+  year: number
+  sickDays: number
+  vacationDays: number
+  emergencyDays: number
+  sickUsed: number
+  vacationUsed: number
+  emergencyUsed: number
+  updatedAt: string
+}
+
+export interface LeaveRequest {
+  id: string
+  userId: string
+  employeeName: string
+  employeeEmail?: string
+  branchId: string | null
+  branchName: string
+  leaveType: LeaveType
+  startDate: string
+  endDate: string
+  days: number
+  reason?: string
+  status: LeaveRequestStatus
+  source: LeaveRequestSource
+  reviewedBy?: string | null
+  reviewedByName?: string
+  reviewedAt?: string | null
+  reviewNote?: string
   createdAt: string
   updatedAt: string
 }

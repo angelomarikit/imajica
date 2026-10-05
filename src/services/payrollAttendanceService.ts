@@ -1,9 +1,9 @@
 import {
   PAYROLL_DEFAULT_SHIFT,
-  PAYROLL_ROSTER_SEED,
   monthlyBasicSalary,
   type PayrollRosterEmployee,
 } from '@/constants/payrollRosterSeed'
+import { ATTENDANCE_INCENTIVE_AMOUNT as ATTENDANCE_INCENTIVE_AMOUNT_CONST } from '@/constants/payrollIncentives'
 import {
   buildAttendanceSessions,
   listAttendanceForBranches,
@@ -12,7 +12,11 @@ import {
 } from '@/services/attendanceService'
 import type { AttendancePunch } from '@/types'
 import { getAccessUsers } from '@/services/userAccessService'
+import { staffNamesMatch } from '@/services/staffCommissionService'
 import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
+import { getMergedPayrollRoster } from '@/services/payrollProfileService'
+
+export const ATTENDANCE_INCENTIVE_AMOUNT = ATTENDANCE_INCENTIVE_AMOUNT_CONST
 
 const MANILA_TZ = 'Asia/Manila'
 
@@ -98,6 +102,8 @@ export type AttendancePayrollRow = {
   sssDeduction: number
   pagibigDeduction: number
   philhealthDeduction: number
+  otherDeduction: number
+  allowance: number
   statutoryTotal: number
   attendanceDeductions: number
   totalDeductions: number
@@ -107,28 +113,61 @@ export type AttendancePayrollRow = {
   sessions: AttendanceSession[]
 }
 
-function resolveUserId(employee: PayrollRosterEmployee): string | null {
+/**
+ * Every login / kiosk account that belongs to this roster employee.
+ * Staff often have both a team email and an @imajica.com kiosk email with different UUIDs —
+ * attendance punches live on one of them; we must include all.
+ */
+function resolveUserIds(employee: PayrollRosterEmployee): string[] {
   const users = getAccessUsers()
   const emails = new Set(
     [employee.email, ...employee.matchEmails].map(normalizeEmail).filter(Boolean),
   )
-  const byEmail = users.find((u) => emails.has(normalizeEmail(u.email)))
-  if (byEmail) return byEmail.id
+  const ids = new Set<string>()
 
-  const target = normalizeName(employee.fullName)
-  const targetParts = target.split(' ').filter(Boolean)
-  const byName = users.find((u) => {
-    const n = normalizeName(u.fullName)
-    if (n === target) return true
-    // first + last match
-    const parts = n.split(' ').filter(Boolean)
-    if (parts.length < 2 || targetParts.length < 2) return false
-    return (
-      parts[0] === targetParts[0] &&
-      parts[parts.length - 1] === targetParts[targetParts.length - 1]
-    )
-  })
-  return byName?.id ?? null
+  for (const u of users) {
+    const email = normalizeEmail(u.email)
+    if (email && emails.has(email)) ids.add(u.id)
+    if (staffNamesMatch(employee.fullName, u.fullName)) ids.add(u.id)
+  }
+
+  // Legacy first+last fallback (kept for odd directory spellings)
+  if (ids.size === 0) {
+    const target = normalizeName(employee.fullName)
+    const targetParts = target.split(' ').filter(Boolean)
+    for (const u of users) {
+      const n = normalizeName(u.fullName)
+      if (n === target) {
+        ids.add(u.id)
+        continue
+      }
+      const parts = n.split(' ').filter(Boolean)
+      if (parts.length < 2 || targetParts.length < 2) continue
+      if (
+        parts[0] === targetParts[0] &&
+        parts[parts.length - 1] === targetParts[targetParts.length - 1]
+      ) {
+        ids.add(u.id)
+      }
+    }
+  }
+
+  return [...ids]
+}
+
+/** Prefer the account that actually punched in this period (kiosk UUID over unused team UUID). */
+function pickPrimaryUserId(userIds: string[], punches: AttendancePunch[]): string | null {
+  if (!userIds.length) return null
+  let best = userIds[0]!
+  let bestCount = -1
+  for (const id of userIds) {
+    const count = punches.reduce((n, p) => (p.userId === id ? n + 1 : n), 0)
+    if (count > bestCount) {
+      bestCount = count
+      best = id
+    }
+  }
+  return best
 }
 
 function prorateMonthly(amount: number, scheduledInPeriod: number): number {
@@ -205,10 +244,12 @@ function buildRow(
   from: string,
   to: string,
 ): AttendancePayrollRow {
-  const matchedUserId = resolveUserId(employee)
-  const userPunches = matchedUserId
-    ? punches.filter((p) => p.userId === matchedUserId)
+  const matchedIds = resolveUserIds(employee)
+  const idSet = new Set(matchedIds)
+  const userPunches = matchedIds.length
+    ? punches.filter((p) => idSet.has(p.userId))
     : []
+  const matchedUserId = pickPrimaryUserId(matchedIds, userPunches)
   const sessions = buildAttendanceSessions(userPunches)
   const byDate = new Map<string, AttendanceSession>()
   for (const s of sessions) {
@@ -239,11 +280,16 @@ function buildRow(
   )
   const pagibigDeduction = prorateMonthly(employee.pagibigEmployee, scheduledCount)
   const philhealthDeduction = prorateMonthly(employee.philhealthEmployee, scheduledCount)
-  const statutoryTotal = sssDeduction + pagibigDeduction + philhealthDeduction
+  const otherDeduction = prorateMonthly(employee.otherDeduction || 0, scheduledCount)
+  const allowance = prorateMonthly(employee.allowance || 0, scheduledCount)
+  const statutoryTotal = sssDeduction + pagibigDeduction + philhealthDeduction + otherDeduction
   const attendanceDeductions = lateDeduction + undertimeDeduction + absenceDeduction
   const totalDeductions = statutoryTotal + lateDeduction + undertimeDeduction
-  // Absences reduce gross (not paid) — do not double-count in net
-  const netPay = Math.max(0, Math.round((grossPay - totalDeductions) * 100) / 100)
+  // Absences reduce gross (not paid) — do not double-count in net; allowance adds to take-home
+  const netPay = Math.max(
+    0,
+    Math.round((grossPay + allowance - totalDeductions) * 100) / 100,
+  )
 
   return {
     employee,
@@ -261,6 +307,8 @@ function buildRow(
     sssDeduction,
     pagibigDeduction,
     philhealthDeduction,
+    otherDeduction,
+    allowance,
     statutoryTotal,
     attendanceDeductions,
     totalDeductions: totalDeductions + absenceDeduction,
@@ -280,18 +328,24 @@ const ALL_CLINIC_BRANCH_IDS = Object.values(BRANCH_IDS)
 export async function computeAttendancePayroll(
   from: string,
   to: string,
+  opts?: { branchIds?: string[] },
 ): Promise<AttendancePayrollRow[]> {
-  const punches = await listAttendanceForBranches(ALL_CLINIC_BRANCH_IDS, from, to)
-  return PAYROLL_ROSTER_SEED.map((employee) => buildRow(employee, punches, from, to)).sort(
-    (a, b) => a.employee.fullName.localeCompare(b.employee.fullName),
-  )
+  const scopeIds =
+    opts?.branchIds?.length ? opts.branchIds : ALL_CLINIC_BRANCH_IDS
+  const punches = await listAttendanceForBranches(scopeIds, from, to)
+  let roster = getMergedPayrollRoster()
+  if (opts?.branchIds?.length) {
+    const allowed = new Set(opts.branchIds)
+    roster = roster.filter((e) => e.branchId != null && allowed.has(e.branchId))
+  }
+  return roster
+    .map((employee) => buildRow(employee, punches, from, to))
+    .sort((a, b) => a.employee.fullName.localeCompare(b.employee.fullName))
 }
 
 export function getPayrollRoster(): PayrollRosterEmployee[] {
-  return PAYROLL_ROSTER_SEED
+  return getMergedPayrollRoster()
 }
-
-export const ATTENDANCE_INCENTIVE_AMOUNT = 1000
 
 export type MonthlyAttendanceIncentive = {
   monthFrom: string
@@ -313,11 +367,15 @@ export type MonthlyAttendanceIncentive = {
  */
 export function computeMonthlyAttendanceIncentive(
   punches: AttendancePunch[],
-  /** Any YYYY-MM-DD in the month to evaluate */
-  monthAnchorDate: string,
+  /** Any YYYY-MM-DD in the month to evaluate (Date also accepted) */
+  monthAnchorDate: string | Date,
   asOfDateKey = manilaDateKey(),
 ): MonthlyAttendanceIncentive {
-  const [y, m] = monthAnchorDate.split('-').map(Number)
+  const anchor =
+    typeof monthAnchorDate === 'string'
+      ? monthAnchorDate
+      : manilaDateKey(monthAnchorDate)
+  const [y, m] = anchor.split('-').map(Number)
   const year = y || Number(asOfDateKey.slice(0, 4))
   const month = m || Number(asOfDateKey.slice(5, 7))
   const monthFrom = `${year}-${String(month).padStart(2, '0')}-01`
