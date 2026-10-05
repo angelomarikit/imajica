@@ -30,7 +30,9 @@ function handoffVariant(
   return 'danger'
 }
 
-function funnelVariant(stage: MarketingFunnelStage): 'success' | 'warning' | 'neutral' | 'info' {
+function funnelVariant(
+  stage: MarketingFunnelStage,
+): 'success' | 'warning' | 'neutral' | 'info' | 'danger' {
   if (stage === 'buy') return 'success'
   if (stage === 'show_up') return 'info'
   if (stage === 'book') return 'warning'
