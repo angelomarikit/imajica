@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { FileSpreadsheet, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
@@ -35,6 +35,10 @@ function formatRange(from: string, until: string) {
 }
 
 export function CouponListPage() {
+  const { pathname } = useLocation()
+  const couponBase = pathname.includes('/admin/marketing/')
+    ? '/admin/marketing/offers'
+    : '/admin/catalog/promotions'
   const { user } = useAuth()
   const franchiseOwner = isFranchiseBranchOwner(user)
   const forcedBranchId = useForcedBranchId()
@@ -108,8 +112,8 @@ export function CouponListPage() {
   return (
     <div className="space-y-5">
       <AdminPageBanner
-        title="Imajica Promo Coupons"
-        description="Configure marketing discount codes, validity dates, value discounts, and scoping applicability settings."
+        title={couponBase.includes('marketing') ? 'Offers' : 'Imajica Promo Coupons'}
+        description="Coupons and promo codes for campaigns and clinic conversion."
         stat={{ value: coupons.length, label: 'Total Coupons' }}
       />
 
@@ -120,7 +124,7 @@ export function CouponListPage() {
             <Button variant="secondary" onClick={exportCsv}>
               <FileSpreadsheet className="h-4 w-4" /> Export Excel
             </Button>
-            <Link to="/admin/catalog/promotions/new">
+            <Link to={`${couponBase}/new`}>
               <Button>
                 <Plus className="h-4 w-4" /> Add New Coupon
               </Button>
@@ -234,7 +238,7 @@ export function CouponListPage() {
                     <td className="px-2 py-3">
                       <div className="flex gap-1.5">
                         <Link
-                          to={`/admin/catalog/promotions/new?edit=${c.id}`}
+                          to={`${couponBase}/new?edit=${c.id}`}
                           className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#E8D9B8] text-[#073D2C]"
                           aria-label="Edit"
                         >

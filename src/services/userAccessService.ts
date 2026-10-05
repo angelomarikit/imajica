@@ -97,7 +97,7 @@ export async function listAccessUsers(): Promise<AccessUser[]> {
   return localUsers()
 }
 
-/** Branch-tagged accounts only (Branches Accounts). */
+/** Clinic staff + org-wide HR / Marketing (Branches Accounts directory). */
 export async function listBranchAccounts(): Promise<AccessUser[]> {
   if (isSupabaseConfigured && supabase) {
     const { data, error } = await supabase
@@ -106,11 +106,18 @@ export async function listBranchAccounts(): Promise<AccessUser[]> {
       .order('full_name')
     if (error) {
       const all = await listAccessUsers()
-      return all.filter((u) => Boolean(u.branchId))
+      return all.filter(
+        (u) =>
+          Boolean(u.branchId) ||
+          u.role === 'HR' ||
+          u.role === 'MARKETING',
+      )
     }
     return (data as DirectoryRow[] | null)?.map(mapRow) ?? []
   }
-  return localUsers().filter((u) => Boolean(u.branchId))
+  return localUsers().filter(
+    (u) => Boolean(u.branchId) || u.role === 'HR' || u.role === 'MARKETING',
+  )
 }
 
 /** @deprecated sync helper — prefer listAccessUsers() */
@@ -142,7 +149,7 @@ export function subscribeAccessUsers(listener: () => void) {
 }
 
 const HQ_SENTINEL_ID = '00000000-0000-0000-0000-000000000001'
-const ORG_ROLES = new Set(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'CLIENT'])
+const ORG_ROLES = new Set(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'MARKETING', 'CLIENT'])
 
 export async function createAccessUser(
   input: Omit<AccessUser, 'id'> & { id?: string; password?: string },
@@ -196,9 +203,9 @@ export async function createAccessUser(
           'Edge Function "create-branch-account" is missing. In the Imajica Supabase project (browser): Edge Functions → Create function → name create-branch-account → paste supabase/functions/create-branch-account/index.ts → turn Verify JWT OFF → Deploy. CLI is optional.',
         )
       }
-      if (/invalid role:\s*HR/i.test(detail)) {
+      if (/invalid role:\s*(HR|MARKETING)/i.test(detail)) {
         throw new Error(
-          'HR role rejected by Edge Function — redeploy create-branch-account (latest code allows HR + All Branches).',
+          'Org role rejected by Edge Function — redeploy create-branch-account (latest code allows HR / Marketing + All Branches).',
         )
       }
       if (/non-2xx|FunctionsHttpError/i.test(detail)) {
@@ -233,7 +240,7 @@ export async function createAccessUser(
     role: input.role,
     branchId: offlineOrg ? null : input.branchId,
     branchName: offlineOrg
-      ? input.role === 'HR'
+      ? input.role === 'HR' || input.role === 'MARKETING'
         ? 'All Branches (organization)'
         : 'No Branch (HQ)'
       : input.branchName,

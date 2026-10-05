@@ -498,6 +498,29 @@ export async function recordBookingCheckout(
   touchClientFromSale(persisted[0]!, all)
   syncClientsFromSalesRegistry()
   emitChange()
+
+  const saleHead = persisted[0]!
+  const serviceSummary = persisted
+    .map((s) => s.treatmentOrPackage)
+    .filter(Boolean)
+    .join(', ')
+  const total = persisted.reduce((sum, s) => sum + (s.totalAmount || 0), 0)
+  void import('@/services/clientService')
+    .then(({ getClientById }) => {
+      const client = getClientById(saleHead.clientId)
+      return import('@/services/marketingLeadService').then(({ syncHandoffOnSale }) =>
+        syncHandoffOnSale({
+          clientId: saleHead.clientId,
+          fullName: saleHead.clientName || client?.fullName || '',
+          phone: client?.phone || '',
+          saleAmount: total,
+          serviceSummary,
+          branchId: saleHead.branchId,
+        }),
+      )
+    })
+    .catch(() => undefined)
+
   return persisted
 }
 

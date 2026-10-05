@@ -11,6 +11,8 @@ export function Dialog({
   confirmLabel = 'Confirm',
   onConfirm,
   destructive,
+  wide,
+  hideFooter,
 }: {
   open: boolean
   onClose: () => void
@@ -20,25 +22,34 @@ export function Dialog({
   confirmLabel?: string
   onConfirm?: () => void
   destructive?: boolean
+  wide?: boolean
+  hideFooter?: boolean
 }) {
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button type="button" className="absolute inset-0 bg-emerald-950/40" aria-label="Close dialog" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md rounded-[12px] bg-white p-6 shadow-xl">
+      <div
+        className={cn(
+          'relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-[12px] bg-white p-6 shadow-xl',
+          wide ? 'max-w-2xl' : 'max-w-md',
+        )}
+      >
         <h3 className="font-display text-lg font-semibold tracking-tight text-charcoal">{title}</h3>
         {description ? <p className="mt-2 text-sm text-slate-ui">{description}</p> : null}
         {children ? <div className="mt-4">{children}</div> : null}
-        <div className="mt-6 flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          {onConfirm ? (
-            <Button variant={destructive ? 'destructive' : 'primary'} onClick={onConfirm}>
-              {confirmLabel}
+        {!hideFooter ? (
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
             </Button>
-          ) : null}
-        </div>
+            {onConfirm ? (
+              <Button variant={destructive ? 'destructive' : 'primary'} onClick={onConfirm}>
+                {confirmLabel}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   )

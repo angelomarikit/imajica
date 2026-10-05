@@ -11,7 +11,6 @@ import {
   Ticket,
   User,
   Wallet,
-  Megaphone,
   Settings,
   X,
   ChevronDown,
@@ -43,13 +42,23 @@ import {
   HandCoins,
   UserMinus,
   Briefcase,
+  Gift,
+  Megaphone,
+  MessageCircle,
+  TrendingUp,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import logo from '@/assets/logo-imajica.jpg'
 import { BRAND } from '@/constants/brand'
 import { useAuth } from '@/contexts/AuthContext'
+import { useMarketingHandoffUnread } from '@/hooks/useMarketingHandoffUnread'
 import { cn } from '@/utils/cn'
-import { isFranchiseBranchOwner, isHrRole, isTimeclockStaff } from '@/utils/franchiseAccess'
+import {
+  isFranchiseBranchOwner,
+  isHrRole,
+  isMarketingRole,
+  isTimeclockStaff,
+} from '@/utils/franchiseAccess'
 import { Button } from '@/components/ui/Button'
 import { MobileDrawer } from '@/components/ui/MobileDrawer'
 import { useBranch } from '@/contexts/BranchContext'
@@ -80,10 +89,14 @@ type NavItem = {
   children?: NavNode[]
   /** Trailing › like TEAM screenshot */
   trailingChevron?: boolean
+  /** Unread count badge (e.g. Marketing Handoffs) */
+  badgeCount?: number
 }
 
 type NavSection = {
   category?: string
+  /** Optional icon shown beside the category label (Marketing & Sales screenshot) */
+  categoryIcon?: ComponentType<{ className?: string }>
   items: NavItem[]
 }
 
@@ -268,13 +281,39 @@ const hqNavSectionsBase: NavSection[] = [
     ],
   },
   {
-    category: 'Marketing',
-    items: [{ to: '/admin/marketing', label: 'Marketing', icon: Megaphone }],
+    category: 'Marketing & Sales',
+    categoryIcon: ClipboardList,
+    items: buildMarketingNavItems(),
   },
   {
     items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
   },
 ]
+
+/** Marketing role + HQ Marketing & Sales section (exact order) */
+function buildMarketingNavItems(): NavItem[] {
+  return [
+    { to: '/admin/marketing/dashboard', label: 'KPI Overview', icon: LayoutGrid },
+    { to: '/admin/marketing/messages', label: 'Messages', icon: MessageCircle },
+    { to: '/admin/marketing/ads', label: 'Ads', icon: Megaphone },
+    { to: '/admin/marketing/sales', label: 'Sales & Goals', icon: TrendingUp },
+    { to: '/admin/marketing/offers', label: 'Offers', icon: Gift },
+  ]
+}
+
+/** Marketing sidebar — org-wide campaigns / leads / promos (not full HQ) */
+function buildMarketingNavSections(): NavSection[] {
+  return [
+    {
+      category: 'Marketing & Sales',
+      categoryIcon: ClipboardList,
+      items: buildMarketingNavItems(),
+    },
+    {
+      items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
+    },
+  ]
+}
 
 /** Shared HR module links (Salary, Employee DB, KPIs, Attendance, Leave, …) */
 function buildHrPeopleOpsNavItems(clinics: Branch[]): NavNode[] {
@@ -346,7 +385,7 @@ function buildHqNavSections(clinics: Branch[]): NavSection[] {
 }
 
 /** Clinical / ops staff — Timeclock home; no Team or Marketing; HQ-only analytics trimmed */
-function buildTimeclockStaffNavSections(): NavSection[] {
+function buildTimeclockStaffNavSections(handoffUnread = 0): NavSection[] {
   const hqOnlyAnalytics = new Set([
     '/admin/analytics/sales-product-report',
     '/admin/analytics/best-selling-treatments',
@@ -356,6 +395,12 @@ function buildTimeclockStaffNavSections(): NavSection[] {
   const sections: NavSection[] = [
     {
       items: [
+        {
+          to: '/admin/marketing/handoffs',
+          label: 'Marketing Handoffs',
+          icon: MessageCircle,
+          badgeCount: handoffUnread,
+        },
         { to: '/admin/attendance', label: 'My Attendance', icon: CalendarDays },
         { to: '/admin/my-leave', label: 'My Leave', icon: CalendarOff },
         { to: '/admin/my-training', label: 'My Training', icon: GraduationCap },
@@ -400,10 +445,17 @@ function buildHrNavSections(clinics: Branch[]): NavSection[] {
 }
 
 /** Clinic manager (BRANCH_ADMIN) — trimmed to their clinic ops only */
-const franchiseOwnerNavSections: NavSection[] = [
+function buildFranchiseOwnerNavSections(handoffUnread = 0): NavSection[] {
+  return [
   {
     items: [
       { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      {
+        to: '/admin/marketing/handoffs',
+        label: 'Marketing Handoffs',
+        icon: MessageCircle,
+        badgeCount: handoffUnread,
+      },
       { to: '/admin/attendance', label: 'My Attendance', icon: Clock },
       { to: '/admin/my-leave', label: 'My Leave', icon: CalendarOff },
       { to: '/admin/my-training', label: 'My Training', icon: GraduationCap },
@@ -533,6 +585,7 @@ const franchiseOwnerNavSections: NavSection[] = [
     items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
   },
 ]
+}
 
 function linkClass(isActive: boolean) {
   return cn(
@@ -716,12 +769,14 @@ export function AdminSidebar({
         .sort((a, b) => a.name.localeCompare(b.name)),
     [branches],
   )
+  const { unread: handoffUnread } = useMarketingHandoffUnread()
   const navSections = useMemo(() => {
-    if (isTimeclockStaff(user)) return buildTimeclockStaffNavSections()
-    if (isFranchiseBranchOwner(user)) return franchiseOwnerNavSections
+    if (isTimeclockStaff(user)) return buildTimeclockStaffNavSections(handoffUnread)
+    if (isFranchiseBranchOwner(user)) return buildFranchiseOwnerNavSections(handoffUnread)
     if (isHrRole(user?.role)) return buildHrNavSections(hrClinics)
+    if (isMarketingRole(user?.role)) return buildMarketingNavSections()
     return buildHqNavSections(hrClinics)
-  }, [user, hrClinics])
+  }, [user, hrClinics, handoffUnread])
   const close = () => onOpenChange(false)
 
   const content = (
@@ -749,9 +804,20 @@ export function AdminSidebar({
             className={cn(sectionIdx > 0 && 'mt-5')}
           >
             {section.category ? (
-              <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#C5A059]/80">
-                {section.category}
-              </p>
+              section.categoryIcon ? (
+                <div className="mb-2 flex items-center gap-2 px-1">
+                  <span className="h-px flex-1 bg-white/15" aria-hidden />
+                  <p className="flex shrink-0 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#C5A059]/80">
+                    <section.categoryIcon className="h-3 w-3 text-[#C5A059]/70" />
+                    {section.category}
+                  </p>
+                  <span className="h-px flex-1 bg-white/15" aria-hidden />
+                </div>
+              ) : (
+                <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#C5A059]/80">
+                  {section.category}
+                </p>
+              )
             ) : null}
             <div className="space-y-1">
               {section.items.map((item) =>
@@ -779,6 +845,11 @@ export function AdminSidebar({
                           )}
                         />
                         <span className="flex-1 font-medium leading-snug">{item.label}</span>
+                        {item.badgeCount && item.badgeCount > 0 ? (
+                          <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#F02849] px-1 text-[10px] font-bold leading-none text-white">
+                            {item.badgeCount > 99 ? '99+' : item.badgeCount}
+                          </span>
+                        ) : null}
                         {item.trailingChevron ? (
                           <ChevronRight className="h-4 w-4 shrink-0 text-white/45" />
                         ) : null}

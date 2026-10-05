@@ -21,7 +21,7 @@ const BRANCH_ROLES = new Set([
 ])
 
 /** Org-wide roles (All Branches / HQ) — stored on HQ sentinel */
-const ORG_ROLES = new Set(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'CLIENT'])
+const ORG_ROLES = new Set(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'MARKETING', 'CLIENT'])
 
 const ALL_ROLES = new Set([...BRANCH_ROLES, ...ORG_ROLES])
 
@@ -169,6 +169,7 @@ serve(async (req) => {
         'SUPER_ADMIN',
         'HQ_ADMIN',
         'HR',
+        'MARKETING',
         'BRANCH_ADMIN',
         'DOCTOR',
         'NURSE',

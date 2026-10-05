@@ -18,6 +18,7 @@ const ROLE_OPTIONS = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
   'HR',
+  'MARKETING',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -57,7 +58,7 @@ export function NewUserPage() {
     }
     const orgWide = isOrgWideRole(role)
     if (isSupabaseConfigured && !orgWide && !branchId) {
-      toast.error('Select a clinic branch for this role, or choose HR / HQ for All Branches.')
+      toast.error('Select a clinic branch for this role, or choose HR / Marketing / HQ for All Branches.')
       return
     }
     const branch = branches.find((b) => b.id === branchId)
@@ -167,7 +168,8 @@ export function NewUserPage() {
                 ))}
               </select>
               <p className="mt-1.5 text-xs text-slate-ui">
-                For system-wide access, choose <strong>HR</strong> — Branch becomes All Branches.
+                For system-wide access, choose <strong>HR</strong> or <strong>Marketing</strong> —
+                Branch becomes All Branches.
               </p>
             </label>
             <label className="block sm:col-span-2">
@@ -188,7 +190,7 @@ export function NewUserPage() {
               >
                 <option value="">Select clinic branch</option>
                 <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
-                  All Branches (organization) — HR system-wide
+                  All Branches (organization) — HR / Marketing
                 </option>
                 {branches.map((b) => (
                   <option key={b.id} value={b.id} className="text-[#073D2C]">

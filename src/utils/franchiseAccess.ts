@@ -3,7 +3,7 @@ import { getBranches } from '@/services/branchService'
 
 const HQ_ROLES: UserRole[] = ['SUPER_ADMIN', 'HQ_ADMIN']
 /** Org-wide roles land on the HQ sentinel branch (not a clinic). */
-export const ORG_WIDE_ROLES: UserRole[] = ['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'CLIENT']
+export const ORG_WIDE_ROLES: UserRole[] = ['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'MARKETING', 'CLIENT']
 export const HQ_SENTINEL_BRANCH_ID = '00000000-0000-0000-0000-000000000001'
 
 /** HQ / org-wide admins (full system) */
@@ -14,6 +14,16 @@ export function isHqRole(role: UserRole | undefined | null): boolean {
 /** Human Resources — all clinics people ops (not full HQ). */
 export function isHrRole(role: UserRole | undefined | null): boolean {
   return role === 'HR'
+}
+
+/** Marketing — org-wide campaigns / leads / promotions (not full HQ). */
+export function isMarketingRole(role: UserRole | undefined | null): boolean {
+  return role === 'MARKETING'
+}
+
+/** HQ or Marketing — marketing tools. */
+export function canAccessMarketing(user: AuthSessionUser | null | undefined): boolean {
+  return isHqRole(user?.role) || isMarketingRole(user?.role)
 }
 
 /** HQ or HR — can switch All Branches and view people-ops org-wide. */
@@ -98,6 +108,7 @@ export function canAccessHqAdmin(user: AuthSessionUser | null | undefined): bool
 export function getStaffHomePath(user: AuthSessionUser | null | undefined): string {
   if (!user) return '/login'
   if (isHrRole(user.role)) return '/admin/hr/salary'
+  if (isMarketingRole(user.role)) return '/admin/marketing/dashboard'
   if (isTimeclockStaff(user)) return '/admin/attendance'
   if (isBranchOwner(user)) return '/admin/dashboard'
   if (isStaffRoleLike(user.role)) return '/admin/dashboard'

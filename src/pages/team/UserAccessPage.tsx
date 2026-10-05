@@ -24,6 +24,7 @@ const ROLE_OPTIONS = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
   'HR',
+  'MARKETING',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -335,7 +336,7 @@ export function UserAccessPage() {
                       ? {
                           branchId: HQ_SENTINEL_BRANCH_ID,
                           branchName:
-                            role === 'HR'
+                            role === 'HR' || role === 'MARKETING'
                               ? 'All Branches (organization)'
                               : 'No Branch (HQ / org role)',
                         }
@@ -373,7 +374,7 @@ export function UserAccessPage() {
               >
                 {isOrgWideRole(editing.role) ? (
                   <option value={HQ_SENTINEL_BRANCH_ID}>
-                    {editing.role === 'HR'
+                    {editing.role === 'HR' || editing.role === 'MARKETING'
                       ? 'All Branches (organization)'
                       : 'No Branch (HQ / org role)'}
                   </option>

@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/Button'
@@ -23,6 +23,8 @@ function RequiredMark() {
 
 export function NewClientPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const handoffLeadId = searchParams.get('handoff') || undefined
   const fileRef = useRef<HTMLInputElement>(null)
   const forcedBranchId = useForcedBranchId()
   const branchOptions = useMemo(() => {
@@ -31,13 +33,22 @@ export function NewClientPage() {
     return all
   }, [forcedBranchId])
 
-  const [firstName, setFirstName] = useState('')
-  const [lastName, setLastName] = useState('')
-  const [email, setEmail] = useState('')
-  const [phone, setPhone] = useState('')
+  const prefillName = searchParams.get('name')?.trim() || ''
+  const nameParts = useMemo(() => {
+    const bits = prefillName.split(/\s+/).filter(Boolean)
+    if (bits.length <= 1) return { first: bits[0] || '', last: '' }
+    return { first: bits.slice(0, -1).join(' '), last: bits[bits.length - 1] || '' }
+  }, [prefillName])
+
+  const [firstName, setFirstName] = useState(nameParts.first)
+  const [lastName, setLastName] = useState(nameParts.last)
+  const [email, setEmail] = useState(searchParams.get('email') || '')
+  const [phone, setPhone] = useState(searchParams.get('phone') || '')
   const [dateOfBirth, setDateOfBirth] = useState('')
   const [gender, setGender] = useState<Client['gender'] | ''>('')
-  const [branchId, setBranchId] = useState(forcedBranchId ?? branchOptions[0]?.id ?? '')
+  const [branchId, setBranchId] = useState(
+    searchParams.get('branchId') || forcedBranchId || branchOptions[0]?.id || '',
+  )
   const [occupation, setOccupation] = useState('')
   const [address, setAddress] = useState('')
   const [emergencyContactName, setEmergencyContactName] = useState('')
@@ -105,8 +116,13 @@ export function NewClientPage() {
         currentMedications,
         adminNotes,
         avatarUrl: avatarPreview ?? undefined,
+        marketingLeadId: handoffLeadId,
       })
-      toast.success(`${client.fullName} registered (${client.code})`)
+      toast.success(
+        handoffLeadId
+          ? `${client.fullName} registered — Marketing handoff linked`
+          : `${client.fullName} registered (${client.code})`,
+      )
       navigate(`/admin/clients/${client.id}`)
     } finally {
       setSaving(false)
@@ -122,7 +138,9 @@ export function NewClientPage() {
           </p>
           <h1 className="font-display text-4xl">New Customer</h1>
           <p className="text-sm text-slate-ui">
-            Register a new client profile for appointments, treatments, and clinical records.
+            {handoffLeadId
+              ? 'Prefilling from a Marketing handoff — keep full name + phone so Book / Show up / Buy sync automatically.'
+              : 'Register a new client profile for appointments, treatments, and clinical records.'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

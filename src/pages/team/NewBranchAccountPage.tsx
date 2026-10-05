@@ -16,6 +16,7 @@ import { formatRoleLabel } from '@/utils/roleLabels'
 
 const BRANCH_ROLE_OPTIONS = [
   'HR',
+  'MARKETING',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -190,7 +191,8 @@ export function NewBranchAccountPage() {
                 ))}
               </select>
               <p className="mt-1.5 text-xs text-slate-ui">
-                For system-wide access, choose <strong>HR</strong> — Branch becomes All Branches.
+                For system-wide access, choose <strong>HR</strong> or <strong>Marketing</strong> —
+                Branch becomes All Branches.
               </p>
             </label>
             <label className="block sm:col-span-2">
@@ -206,8 +208,8 @@ export function NewBranchAccountPage() {
                 onChange={(e) => {
                   const next = e.target.value
                   setBranchId(next)
-                  // Picking All Branches implies HR org-wide access
-                  if (next === HQ_SENTINEL_BRANCH_ID) {
+                  // Picking All Branches implies an org-wide role (default HR if clinic role)
+                  if (next === HQ_SENTINEL_BRANCH_ID && !isOrgWideRole(role)) {
                     setRole('HR')
                   }
                 }}
@@ -217,7 +219,7 @@ export function NewBranchAccountPage() {
                   Select branch from directory
                 </option>
                 <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
-                  All Branches (organization) — HR system-wide
+                  All Branches (organization) — HR / Marketing
                 </option>
                 {branches.map((b) => (
                   <option key={b.id} value={b.id} className="text-[#073D2C]">
@@ -226,7 +228,7 @@ export function NewBranchAccountPage() {
                   </option>
                 ))}
               </select>
-              {role === 'HR' || branchId === HQ_SENTINEL_BRANCH_ID ? (
+              {isOrgWideRole(role) || branchId === HQ_SENTINEL_BRANCH_ID ? (
                 <p className="mt-1.5 text-xs text-emerald-800">
                   This account can see data across every clinic (not tied to one branch).
                 </p>

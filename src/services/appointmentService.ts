@@ -653,6 +653,17 @@ export async function createAppointment(input: CreateAppointmentInput): Promise<
 
     const saved = mapJoinedRowToAppointment(primary.data as unknown as AppointmentJoinedRow)
     window.dispatchEvent(new Event(CHANGE_EVENT))
+    void import('@/services/marketingLeadService')
+      .then(({ syncHandoffOnPatientBooked }) =>
+        syncHandoffOnPatientBooked({
+          fullName: saved.clientName,
+          phone: saved.clientPhone || '',
+          clientId: saved.clientId,
+          appointmentId: saved.id,
+          branchId: saved.branchId,
+        }),
+      )
+      .catch(() => undefined)
     return saved
   }
 
@@ -695,6 +706,17 @@ export async function createAppointment(input: CreateAppointmentInput): Promise<
 
   const next = [...readLocal().filter((a) => a.id !== appointment.id), appointment]
   writeLocal(next)
+  void import('@/services/marketingLeadService')
+    .then(({ syncHandoffOnPatientBooked }) =>
+      syncHandoffOnPatientBooked({
+        fullName: appointment.clientName,
+        phone: appointment.clientPhone || '',
+        clientId: appointment.clientId,
+        appointmentId: appointment.id,
+        branchId: appointment.branchId,
+      }),
+    )
+    .catch(() => undefined)
   return appointment
 }
 
@@ -712,7 +734,9 @@ export async function updateAppointmentStatus(
 
     if (!primary.error && primary.data) {
       window.dispatchEvent(new Event(CHANGE_EVENT))
-      return mapJoinedRowToAppointment(primary.data as unknown as AppointmentJoinedRow)
+      const saved = mapJoinedRowToAppointment(primary.data as unknown as AppointmentJoinedRow)
+      syncMarketingFromAppointmentStatus(saved, status)
+      return saved
     }
 
     const fallback = await supabase
@@ -726,7 +750,9 @@ export async function updateAppointmentStatus(
       throw new Error(supabaseErrorMessage(fallback.error || primary.error || { message: 'Update failed' }))
     }
     window.dispatchEvent(new Event(CHANGE_EVENT))
-    return mapJoinedRowToAppointment(fallback.data as unknown as AppointmentJoinedRow)
+    const savedFb = mapJoinedRowToAppointment(fallback.data as unknown as AppointmentJoinedRow)
+    syncMarketingFromAppointmentStatus(savedFb, status)
+    return savedFb
   }
 
   const local = readLocal()
@@ -734,7 +760,38 @@ export async function updateAppointmentStatus(
   if (!inLocal) return null
   const updated = { ...inLocal, status }
   writeLocal(local.map((a) => (a.id === id ? updated : a)))
+  syncMarketingFromAppointmentStatus(updated, status)
   return updated
+}
+
+function syncMarketingFromAppointmentStatus(
+  appointment: Appointment,
+  status: AppointmentStatus,
+): void {
+  if (status === 'checked_in' || status === 'completed' || status === 'in_progress') {
+    void import('@/services/marketingLeadService')
+      .then(({ syncHandoffOnShowUp }) =>
+        syncHandoffOnShowUp({
+          clientId: appointment.clientId,
+          fullName: appointment.clientName,
+          phone: appointment.clientPhone,
+        }),
+      )
+      .catch(() => undefined)
+    return
+  }
+  if (status === 'cancelled' || status === 'no_show') {
+    void import('@/services/marketingLeadService')
+      .then(({ syncHandoffOnBookingCancelled }) =>
+        syncHandoffOnBookingCancelled({
+          clientId: appointment.clientId,
+          fullName: appointment.clientName,
+          phone: appointment.clientPhone,
+          appointmentId: appointment.id,
+        }),
+      )
+      .catch(() => undefined)
+  }
 }
 
 export function subscribeAppointments(listener: () => void): () => void {

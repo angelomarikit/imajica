@@ -223,7 +223,8 @@ export type NewClientInput = {
   avatarUrl?: string
 }
 
-export function registerClient(input: NewClientInput): Client {
+/** After local register — try match Marketing handoff by full name + phone */
+export function registerClient(input: NewClientInput & { marketingLeadId?: string }): Client {
   const fullName = [input.firstName, input.middleName, input.lastName]
     .map((p) => p?.trim())
     .filter(Boolean)
@@ -253,7 +254,19 @@ export function registerClient(input: NewClientInput): Client {
     currentMedications: input.currentMedications?.trim() || undefined,
     adminNotes: input.adminNotes?.trim() || undefined,
   }
-  return saveClient(client)
+  const saved = saveClient(client)
+  void import('@/services/marketingLeadService')
+    .then(({ syncHandoffOnPatientBooked }) =>
+      syncHandoffOnPatientBooked({
+        fullName: saved.fullName,
+        phone: saved.phone,
+        clientId: saved.id,
+        branchId: saved.preferredBranchId,
+        leadId: input.marketingLeadId,
+      }),
+    )
+    .catch(() => undefined)
+  return saved
 }
 
 /** Merge sales-import clients; never wipe contact details with empty sales rows. */

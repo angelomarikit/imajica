@@ -27,6 +27,7 @@ const ROLE_OPTIONS = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
   'HR',
+  'MARKETING',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -36,8 +37,8 @@ const ROLE_OPTIONS = [
   'CLIENT',
 ] as const
 
-/** Org-wide roles use HQ sentinel — HR = All Branches across clinics */
-const ORG_ROLES = new Set<string>(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'CLIENT'])
+/** Org-wide roles use HQ sentinel — HR / Marketing = All Branches across clinics */
+const ORG_ROLES = new Set<string>(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'MARKETING', 'CLIENT'])
 
 export function BranchAccountsPage() {
   const navigate = useNavigate()
@@ -459,7 +460,7 @@ export function BranchAccountsPage() {
               >
                 <option value="">
                   {ORG_ROLES.has(editing.role)
-                    ? editing.role === 'HR'
+                    ? editing.role === 'HR' || editing.role === 'MARKETING'
                       ? 'All Branches (organization)'
                       : 'No Branch (HQ / org role)'
                     : 'Select branch'}

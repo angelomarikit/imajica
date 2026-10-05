@@ -1,0 +1,27 @@
+---
+description: Marketing role is org-wide campaigns/leads/promos (not full HQ)
+alwaysApply: true
+---
+
+# Marketing role
+
+| Product name | DB role id | Branch assignment |
+|---|---|---|
+| **Marketing** | `MARKETING` | HQ sentinel → **All Branches (organization)** |
+
+## Access
+
+- Sidebar category **Marketing & Sales** (client funnel names, exact order): **KPI Overview**, **Messages**, **Ads**, **Sales & Goals**, **Offers**
+- Routes: `/admin/marketing/dashboard`, `/admin/marketing/messages`, `/admin/marketing/ads`, `/admin/marketing/sales`, `/admin/marketing/offers`
+- Funnel: ADS → **Message** → **Book** → **Show up** → **Buy** (KPIs: CPM, BR, SR, CR, AOV, ₱2M/branch)
+- Lead sources: Facebook Ads, Facebook Groups, Instagram, TikTok (+ website, walk-in, referral)
+- **Ads:** Named Facebook-style campaigns on `/admin/marketing/ads` — manual spend + impressions/reach/clicks/messages/clients; ranked by clients so owners see best creatives. No SMS / landing-offer blast tab.
+- **Handoff:** Marketing taps **Send to clinic** on a message → staff / clinic manager see **Marketing Handoffs** (`/admin/marketing/handoffs`) as a **read-only status board** (Messenger-style unread badge). Funnel advances only from existing clinic flows (book / cancel / show-up / checkout sale) matched by full name + phone; service + price sync back to Marketing KPIs. No manual stage editing on Handoffs.
+- Create account: role `MARKETING` → branch dropdown locks to **All Branches (organization)**
+- Not full HQ (no warehouse, user-access admin, branch CRUD unless HQ)
+
+## Implementation notes
+
+- Frontend: `isMarketingRole`, `canAccessMarketing`, `RequireMarketing`, `buildMarketingNavItems`, `useMarketingHandoffUnread`
+- Sync: `syncHandoffOnPatientBooked` / `syncHandoffOnShowUp` / `syncHandoffOnBookingCancelled` / `syncHandoffOnSale` in `marketingLeadService`
+- Data: `marketing_leads` (+ handoff_* columns), `marketing_ad_spend`; migrations `20261005000066`–`69`

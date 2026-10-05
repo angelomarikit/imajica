@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
@@ -27,6 +27,10 @@ function Required() {
 }
 
 export function NewCouponPage() {
+  const { pathname } = useLocation()
+  const couponBase = pathname.includes('/admin/marketing/')
+    ? '/admin/marketing/offers'
+    : '/admin/catalog/promotions'
   const navigate = useNavigate()
   const { user } = useAuth()
   const franchiseOwner = isFranchiseBranchOwner(user)
@@ -110,7 +114,7 @@ export function NewCouponPage() {
         createCoupon(payload)
         toast.success('Coupon saved')
       }
-      navigate('/admin/catalog/promotions')
+      navigate(couponBase)
     } finally {
       setSaving(false)
     }
@@ -123,7 +127,7 @@ export function NewCouponPage() {
         title={editId ? 'Edit Promotion Coupon' : 'Create Promotion Coupon'}
         description="Register promo codes, adjust discounts, and select validity settings."
         actions={
-          <Link to="/admin/catalog/promotions">
+          <Link to={couponBase}>
             <Button
               type="button"
               variant="secondary"
@@ -312,7 +316,7 @@ export function NewCouponPage() {
       </div>
 
       <div className="flex flex-wrap justify-end gap-2">
-        <Link to="/admin/catalog/promotions">
+        <Link to={couponBase}>
           <Button type="button" variant="secondary">
             Cancel
           </Button>

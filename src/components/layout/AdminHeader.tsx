@@ -1,8 +1,9 @@
-import { Bell, ChevronDown, LogOut, Menu, X } from 'lucide-react'
+import { Bell, ChevronDown, LogOut, Menu, MessageCircle, X } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
+import { useMarketingHandoffUnread } from '@/hooks/useMarketingHandoffUnread'
 import { SearchInput, Select } from '@/components/ui/SearchInput'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/utils/cn'
@@ -19,6 +20,7 @@ export function AdminHeader({
 }) {
   const { user, logout } = useAuth()
   const { branches, selectedBranchId, setSelectedBranchId, branchLocked } = useBranch()
+  const { unread, enabled: handoffsEnabled } = useMarketingHandoffUnread()
   const [query, setQuery] = useState('')
   const [accountOpen, setAccountOpen] = useState(false)
   const navigate = useNavigate()
@@ -74,14 +76,36 @@ export function AdminHeader({
             options={branchOptions}
             className="min-w-0 flex-1 basis-[10rem] sm:w-44 sm:flex-none"
           />
-          <button
-            type="button"
-            className="relative shrink-0 rounded-full border border-border bg-white p-2.5"
-            aria-label="Notifications"
-          >
-            <Bell className="h-4 w-4 text-charcoal" />
-            <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500" />
-          </button>
+          {handoffsEnabled ? (
+            <button
+              type="button"
+              onClick={() => navigate('/admin/marketing/handoffs')}
+              className="relative shrink-0 rounded-full border border-border bg-[#E4E6EB] p-2.5 hover:bg-[#d8dadf]"
+              aria-label={
+                unread > 0
+                  ? `Marketing handoffs, ${unread} new`
+                  : 'Marketing handoffs'
+              }
+              title="Marketing Handoffs"
+            >
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#0084FF] text-white">
+                <MessageCircle className="h-3.5 w-3.5" fill="currentColor" strokeWidth={0} />
+              </span>
+              {unread > 0 ? (
+                <span className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#F02849] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-ivory">
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              ) : null}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="relative shrink-0 rounded-full border border-border bg-white p-2.5"
+              aria-label="Notifications"
+            >
+              <Bell className="h-4 w-4 text-charcoal" />
+            </button>
+          )}
           <div className="relative shrink-0">
             <button
               type="button"

@@ -3,6 +3,7 @@ export type UserRole =
   | 'SUPER_ADMIN'
   | 'HQ_ADMIN'
   | 'HR'
+  | 'MARKETING'
   | 'BRANCH_ADMIN'
   | 'DOCTOR'
   | 'NURSE'

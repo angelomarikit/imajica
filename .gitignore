@@ -25,3 +25,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local temp (ffmpeg extract / marketing video frames — not app source)
+.tmp-ffmpeg/
+.tmp-marketing-frames/
+.tmp-*/
+reference/marketing/*.mp4
+reference/marketing/*.zip

@@ -8,6 +8,7 @@ import {
   RequireAuth,
   RequireClient,
   RequireHqAdmin,
+  RequireMarketing,
   RequirePeopleOps,
   RequireRole,
   RequireStaff,
@@ -94,7 +95,11 @@ import { HrNewHiresPage } from '@/pages/hr/HrNewHiresPage'
 import { HrExitsPage } from '@/pages/hr/HrExitsPage'
 import { HrTrainingPage } from '@/pages/hr/HrTrainingPage'
 import { InventoryPage } from '@/pages/inventory/InventoryPage'
-import { MarketingPage } from '@/pages/marketing/MarketingPage'
+import { MarketingDashboardPage } from '@/pages/marketing/MarketingDashboardPage'
+import { MarketingMessagesPage } from '@/pages/marketing/MarketingMessagesPage'
+import { MarketingAdsPage } from '@/pages/marketing/MarketingAdsPage'
+import { MarketingSalesGoalsPage } from '@/pages/marketing/MarketingSalesGoalsPage'
+import { MarketingHandoffsPage } from '@/pages/marketing/MarketingHandoffsPage'
 import { PackagesPage } from '@/pages/packages/PackagesPage'
 import { PayrollPage } from '@/pages/payroll/PayrollPage'
 import { LandingPage } from '@/pages/public/LandingPage'
@@ -469,11 +474,94 @@ export default function App() {
                 />
                 <Route
                   path="marketing"
+                  element={<Navigate to="/admin/marketing/dashboard" replace />}
+                />
+                <Route
+                  path="marketing/dashboard"
                   element={
-                    <RequireHqAdmin>
-                      <MarketingPage />
-                    </RequireHqAdmin>
+                    <RequireMarketing>
+                      <MarketingDashboardPage />
+                    </RequireMarketing>
                   }
+                />
+                <Route
+                  path="marketing/handoffs"
+                  element={
+                    <RequireRole
+                      roles={[
+                        'SUPER_ADMIN',
+                        'HQ_ADMIN',
+                        'BRANCH_ADMIN',
+                        'RECEPTIONIST',
+                        'STAFF',
+                        'DOCTOR',
+                        'NURSE',
+                        'AESTHETICIAN',
+                      ]}
+                    >
+                      <MarketingHandoffsPage />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="marketing/messages"
+                  element={
+                    <RequireMarketing>
+                      <MarketingMessagesPage />
+                    </RequireMarketing>
+                  }
+                />
+                <Route
+                  path="marketing/leads"
+                  element={<Navigate to="/admin/marketing/messages" replace />}
+                />
+                <Route
+                  path="marketing/ads"
+                  element={
+                    <RequireMarketing>
+                      <MarketingAdsPage />
+                    </RequireMarketing>
+                  }
+                />
+                <Route
+                  path="marketing/campaigns"
+                  element={<Navigate to="/admin/marketing/ads" replace />}
+                />
+                <Route
+                  path="marketing/sales"
+                  element={
+                    <RequireMarketing>
+                      <MarketingSalesGoalsPage />
+                    </RequireMarketing>
+                  }
+                />
+                <Route
+                  path="marketing/sales-performance"
+                  element={<Navigate to="/admin/marketing/sales" replace />}
+                />
+                <Route
+                  path="marketing/offers"
+                  element={
+                    <RequireMarketing>
+                      <CouponListPage />
+                    </RequireMarketing>
+                  }
+                />
+                <Route
+                  path="marketing/offers/new"
+                  element={
+                    <RequireMarketing>
+                      <NewCouponPage />
+                    </RequireMarketing>
+                  }
+                />
+                <Route
+                  path="marketing/promotions"
+                  element={<Navigate to="/admin/marketing/offers" replace />}
+                />
+                <Route
+                  path="marketing/promotions/new"
+                  element={<Navigate to="/admin/marketing/offers/new" replace />}
                 />
                 <Route path="operations/expenses" element={<ExpensesPage />} />
                 <Route path="operations/branch-orders" element={<BranchOrdersPage />} />

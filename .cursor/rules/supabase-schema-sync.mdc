@@ -20,7 +20,7 @@ You MUST update Supabase SQL in the same change set:
 
 | App area | Tables / notes |
 |---|---|
-| Auth / roles | `profiles` (+ `status`), `user_roles`, `roles` (`BRANCH_ADMIN` = Clinic Manager; `HR` = org-wide people ops on HQ sentinel), helpers `is_hr` / `is_people_ops`, views `v_team_user_access` / `v_user_access_directory`, RPC `set_profile_active` |
+| Auth / roles | `profiles` (+ `status`), `user_roles`, `roles` (`BRANCH_ADMIN` = Clinic Manager; `HR` = org-wide people ops; `MARKETING` = org-wide marketing on HQ sentinel), helpers `is_hr` / `is_people_ops` / `is_marketing` / `can_access_marketing`, views `v_team_user_access` / `v_user_access_directory` / `v_branch_accounts_directory` (clinic staff + HR/Marketing), RPC `set_profile_active` |
 | Branches / settings | `branches` (+ `branch_type`), `branch_hours`, `branch_rooms`, `system_settings`; RPC `set_branch_active` |
 | Team / recruitment & LMS | `recruitment_applicants` (+ `current_stage`, `source`, pipeline statuses), `recruitment_stage_events` (timeline), `new_hires` (onboarding checklist + docs from Hired), storage bucket `new-hire-docs`, `training_materials` + `training_material_assignees` + `training_material_progress` (employee completion), storage `training-materials`, `lms_courses`, `lms_enrollments` |
 | Customer registration & list | `clients` (+ occupation, middle_name, emergency_*, medical_*, avatar_url, admin_notes), `client_skin_profiles`, `client_notes` |
@@ -33,7 +33,7 @@ You MUST update Supabase SQL in the same change set:
 | Analytics reports | `v_analytics_sales_transactions`, `analytics_sales_summary`, `analytics_product_sales_report`, `analytics_best_selling_treatments`, `analytics_new_client_sales`, `imajica_transaction_fee`; `clients.lead_source` |
 | Staff / payroll | `staff` (+ HR profile fields), `staff_positions`, `commissions`, `payroll_*`, `payroll_employee_profiles` (+ `other_deduction`, `allowance` — HR Deductions & Benefits → salary), `plan_b_incentives`, `employee_payslips`; leave: `leave_balances` + `leave_requests`; HR KPIs from sales + attendance + Plan B; exits: `employee_exits` (+ exit interview + turnover checklist), storage `exit-docs` |
 | Staff attendance | `staff_attendance_logs` (time_in / time_out + selfie + geolocation; HR/people-ops may update/insert corrective punches); storage bucket `attendance-selfies`; `profiles.employee_code`; public RPCs `kiosk_lookup_employee` / `kiosk_attendance_punch` (shared `/timeclock` kiosk) |
-| Marketing campaigns | `marketing_campaigns` |
+| Marketing campaigns | `marketing_campaigns`, `marketing_leads` (funnel + social sources + handoff_* to clinic), `marketing_ad_spend` (named FB-style campaigns: name, status, impressions/reach/clicks/messages/clients + spend for CPM) |
 | Inventory | `inventory_items`, `branch_inventory`, `inventory_movements` |
 
 ## Do NOT
