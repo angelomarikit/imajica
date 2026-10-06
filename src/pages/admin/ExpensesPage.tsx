@@ -14,7 +14,8 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Drawer } from '@/components/ui/Drawer'
 import { useAuth } from '@/contexts/AuthContext'
-import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useBranch } from '@/contexts/BranchContext'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   createExpense,
   deleteExpense,
@@ -23,7 +24,7 @@ import {
   subscribeExpenses,
 } from '@/services/expenseService'
 import type { ExpenseScope, OperationalExpense } from '@/types'
-import { formatPeso } from '@/utils/currency'
+import { formatPeso, formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
@@ -55,8 +56,10 @@ function formatDate(iso: string) {
 
 export function ExpensesPage() {
   const { user } = useAuth()
+  const { branches } = useBranch()
   const franchiseOwner = isFranchiseBranchOwner(user)
   const forcedBranchId = useForcedBranchId()
+  const effectiveBranchId = useEffectiveBranchId()
   const [expenses, setExpenses] = useState(() => getExpenses())
   const [tab, setTab] = useState<TabId>(franchiseOwner ? 'branch' : 'all')
   const [fromDate, setFromDate] = useState('')
@@ -73,11 +76,24 @@ export function ExpensesPage() {
   const [department, setDepartment] = useState('')
   const [amount, setAmount] = useState('0')
   const [scope, setScope] = useState<ExpenseScope>('branch')
-  const [deductCash, setDeductCash] = useState(false)
+  const [deductCash, setDeductCash] = useState(true)
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [status, setStatus] = useState<'active' | 'inactive'>('active')
 
   useEffect(() => subscribeExpenses(() => setExpenses(getExpenses())), [])
+
+  const resolveBranch = () => {
+    const branchId =
+      forcedBranchId ||
+      (effectiveBranchId !== 'all' ? effectiveBranchId : undefined) ||
+      user?.branchId ||
+      undefined
+    const branchName =
+      (branchId ? branches.find((b) => b.id === branchId)?.name : undefined) ||
+      user?.branchName ||
+      undefined
+    return { branchId, branchName }
+  }
 
   const filtered = useMemo(() => {
     return expenses.filter((e) => {
@@ -113,7 +129,7 @@ export function ExpensesPage() {
     setDepartment('')
     setAmount('0')
     setScope(franchiseOwner ? 'branch' : tab === 'ops' ? 'ops' : 'branch')
-    setDeductCash(false)
+    setDeductCash(true)
     setExpenseDate(new Date().toISOString().slice(0, 10))
     setStatus('active')
     setDrawerOpen(true)
@@ -137,35 +153,62 @@ export function ExpensesPage() {
       toast.error('Expense name is required')
       return
     }
+    const amt = Number(amount) || 0
+    if (amt <= 0) {
+      toast.error('Enter an expense amount greater than 0')
+      return
+    }
+    const resolvedScope = franchiseOwner ? 'branch' : scope
+    const { branchId, branchName } = resolveBranch()
+    if (resolvedScope === 'branch' && !branchId && !franchiseOwner) {
+      // HQ must pick a branch filter or assign branch for cash to hit the right drawer
+      toast.error('Select a branch in the header before logging a branch expense')
+      return
+    }
+
     if (editing) {
       saveExpense({
         ...editing,
         name: name.trim(),
         category,
         department: department.trim() || undefined,
-        amount: Number(amount) || 0,
-        scope: franchiseOwner ? 'branch' : scope,
+        amount: amt,
+        scope: resolvedScope,
         deductCash,
         expenseDate,
         status,
-        branchId: franchiseOwner ? forcedBranchId ?? editing.branchId : editing.branchId,
-        branchName: franchiseOwner ? user?.branchName ?? editing.branchName : editing.branchName,
+        branchId:
+          resolvedScope === 'branch'
+            ? branchId ?? editing.branchId
+            : undefined,
+        branchName:
+          resolvedScope === 'branch'
+            ? branchName ?? editing.branchName
+            : undefined,
       })
-      toast.success('Expense updated')
+      toast.success(
+        deductCash
+          ? `Expense updated — cash drawer deducted ${formatPesoExact(amt)}`
+          : 'Expense updated (cash not deducted)',
+      )
     } else {
       createExpense({
         name,
         category,
         department,
-        amount: Number(amount) || 0,
-        scope: franchiseOwner ? 'branch' : scope,
+        amount: amt,
+        scope: resolvedScope,
         deductCash,
         expenseDate,
         status,
-        branchId: franchiseOwner ? forcedBranchId : undefined,
-        branchName: franchiseOwner ? user?.branchName : undefined,
+        branchId: resolvedScope === 'branch' ? branchId : undefined,
+        branchName: resolvedScope === 'branch' ? branchName : undefined,
       })
-      toast.success('Expense added')
+      toast.success(
+        deductCash
+          ? `Expense logged — cash drawer deducted ${formatPesoExact(amt)}`
+          : 'Expense logged (cash not deducted)',
+      )
     }
     setDrawerOpen(false)
   }
@@ -462,14 +505,19 @@ export function ExpensesPage() {
               <option value="inactive">Inactive</option>
             </select>
           </Field>
-          <label className="flex items-center gap-2 text-sm font-medium">
+          <label className="flex items-start gap-2 text-sm font-medium">
             <input
               type="checkbox"
               checked={deductCash}
               onChange={(e) => setDeductCash(e.target.checked)}
-              className="h-4 w-4 accent-emerald-900"
+              className="mt-0.5 h-4 w-4 accent-emerald-900"
             />
-            Deduct cash
+            <span>
+              Deduct cash
+              <span className="mt-0.5 block text-xs font-normal text-slate-ui">
+                When checked, this amount reduces today&apos;s Cash Flow Snapshot ending balance.
+              </span>
+            </span>
           </label>
         </div>
       </Drawer>

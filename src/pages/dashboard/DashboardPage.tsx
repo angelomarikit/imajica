@@ -19,6 +19,7 @@ import {
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/Button'
+import { Dialog } from '@/components/ui/Dialog'
 import { BRAND } from '@/constants/brand'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
@@ -29,6 +30,13 @@ import {
   toDateKey,
 } from '@/services/appointmentService'
 import { getClients, preloadClientsFromSupabase, subscribeClients } from '@/services/clientService'
+import {
+  readConfirmedCash,
+  readManualCashDeducted,
+  subscribeCashDrawer,
+  writeConfirmedCash,
+  writeManualCashDeducted,
+} from '@/services/cashDrawerService'
 import { getExpenses, subscribeExpenses } from '@/services/expenseService'
 import {
   getBookingRows,
@@ -85,42 +93,6 @@ function birthdayMeta(dob: Date, from: Date) {
     year: 'numeric',
   })
   return { daysUntil, age: Math.max(0, age), displayDate }
-}
-
-function cashStorageKey(scope: string, dateKey: string) {
-  return `imajica_cash_confirm_${scope}_${dateKey}`
-}
-
-function cashDeductKey(scope: string, dateKey: string) {
-  return `imajica_cash_deduct_${scope}_${dateKey}`
-}
-
-function readConfirmedCash(scope: string, dateKey: string): number | null {
-  try {
-    const raw = localStorage.getItem(cashStorageKey(scope, dateKey))
-    if (raw == null) return null
-    const n = Number(raw)
-    return Number.isFinite(n) ? n : null
-  } catch {
-    return null
-  }
-}
-
-function writeConfirmedCash(scope: string, dateKey: string, amount: number) {
-  localStorage.setItem(cashStorageKey(scope, dateKey), String(amount))
-}
-
-function readCashDeducted(scope: string, dateKey: string): number {
-  try {
-    const n = Number(localStorage.getItem(cashDeductKey(scope, dateKey)) ?? 0)
-    return Number.isFinite(n) && n > 0 ? n : 0
-  } catch {
-    return 0
-  }
-}
-
-function writeCashDeducted(scope: string, dateKey: string, amount: number) {
-  localStorage.setItem(cashDeductKey(scope, dateKey), String(Math.max(0, amount)))
 }
 
 function monthBounds(d = new Date()): { from: string; to: string } {
@@ -545,6 +517,9 @@ function BranchOpsDashboard() {
   const [expenses, setExpenses] = useState<OperationalExpense[]>(() => getExpenses())
   const [cashTick, setCashTick] = useState(0)
   const [breakdown, setBreakdown] = useState<SalesBreakdownView | null>(null)
+  const [deductOpen, setDeductOpen] = useState(false)
+  const [deductAmount, setDeductAmount] = useState('')
+  const [deductSaving, setDeductSaving] = useState(false)
 
   useEffect(() => {
     const refreshSales = () => setSales(getSales())
@@ -564,6 +539,7 @@ function BranchOpsDashboard() {
       subscribeClients(refreshClients),
       subscribeExpenses(refreshExpenses),
       subscribeAppointments(refreshAppts),
+      subscribeCashDrawer(() => setCashTick((n) => n + 1)),
     ]
     return () => unsubs.forEach((u) => u())
   }, [])
@@ -812,17 +788,31 @@ function BranchOpsDashboard() {
     yesterday.setDate(yesterday.getDate() - 1)
     const yKey = todayDateKey(yesterday)
     const beginning = readConfirmedCash(cashScope, yKey) ?? 0
-    const deducted = readCashDeducted(cashScope, todayKey)
+    const manualDeducted = readManualCashDeducted(cashScope, todayKey)
     // Cash drawer is always today's ops — not the selected reporting range.
     const todaySalesTotal = scopedSales
       .filter((s) => saleDateKey(s) === todayKey)
       .reduce((n, s) => n + (s.totalAmount || 0), 0)
-    const todayExpenseTotal = scopedExpenses
-      .filter((e) => e.expenseDate === todayKey && e.status === 'active')
+    // Only expenses marked "Deduct cash" reduce the drawer (reporting expenses do not).
+    const expenseCashOut = scopedExpenses
+      .filter(
+        (e) =>
+          e.expenseDate === todayKey &&
+          e.status === 'active' &&
+          e.deductCash,
+      )
       .reduce((n, e) => n + (e.amount || 0), 0)
-    const ending = beginning + todaySalesTotal - todayExpenseTotal - deducted
+    const deducted = expenseCashOut + manualDeducted
+    const ending = beginning + todaySalesTotal - deducted
     const confirmedToday = readConfirmedCash(cashScope, todayKey)
-    return { beginning, ending, deducted, confirmedToday }
+    return {
+      beginning,
+      ending,
+      deducted,
+      expenseCashOut,
+      manualDeducted,
+      confirmedToday,
+    }
   }, [cashScope, todayKey, scopedSales, scopedExpenses, cashTick])
 
   const customerBirthdays = useMemo(() => {
@@ -885,24 +875,34 @@ function BranchOpsDashboard() {
     })
   }
 
-  function deductCash() {
-    const raw = window.prompt('Deduct cash amount (₱)', '')
-    if (raw == null) return
-    const amount = Number(String(raw).replace(/[^\d.]/g, ''))
+  function openDeductCash() {
+    setDeductAmount('')
+    setDeductOpen(true)
+  }
+
+  function submitDeductCash() {
+    const amount = Number(String(deductAmount).replace(/[^\d.]/g, ''))
     if (!Number.isFinite(amount) || amount <= 0) {
-      toast.error('Enter a valid amount to deduct')
+      toast.error('Please enter exact cash')
       return
     }
     if (amount > cash.ending) {
       toast.error('Deduction cannot exceed ending cash')
       return
     }
-    writeCashDeducted(cashScope, todayKey, cash.deducted + amount)
-    writeConfirmedCash(cashScope, todayKey, cash.ending - amount)
-    setCashTick((n) => n + 1)
-    toast.success('Cash deducted', {
-      description: `${formatPesoExact(amount)} removed from ${branchLabel} drawer.`,
-    })
+    setDeductSaving(true)
+    try {
+      writeManualCashDeducted(cashScope, todayKey, cash.manualDeducted + amount)
+      writeConfirmedCash(cashScope, todayKey, cash.ending - amount)
+      setCashTick((n) => n + 1)
+      setDeductOpen(false)
+      setDeductAmount('')
+      toast.success('Cash deducted', {
+        description: `${formatPesoExact(amount)} removed from ${branchLabel} drawer.`,
+      })
+    } finally {
+      setDeductSaving(false)
+    }
   }
 
   const rangeLabel = formatRangeLabel(rangeFrom, rangeTo)
@@ -924,6 +924,43 @@ function BranchOpsDashboard() {
         view={breakdown}
         onClose={() => setBreakdown(null)}
       />
+
+      <Dialog
+        open={deductOpen}
+        onClose={() => {
+          if (deductSaving) return
+          setDeductOpen(false)
+        }}
+        title="Deduct Cash"
+        description="Please enter exact cash to deduct from today's drawer."
+        confirmLabel={deductSaving ? 'Saving…' : 'Deduct Cash'}
+        onConfirm={submitDeductCash}
+        destructive
+      >
+        <label className="block text-sm">
+          <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-600">
+            Exact cash (₱)
+          </span>
+          <input
+            type="text"
+            inputMode="decimal"
+            autoFocus
+            className="h-11 w-full rounded-[10px] border border-border bg-white px-3 text-sm text-[#073D2C] outline-none focus:border-emerald-800/40 focus:ring-2 focus:ring-emerald-900/10"
+            placeholder="0.00"
+            value={deductAmount}
+            onChange={(e) => setDeductAmount(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                submitDeductCash()
+              }
+            }}
+          />
+          <span className="mt-1.5 block text-xs text-slate-500">
+            Available ending cash: {formatPesoExact(cash.ending)}
+          </span>
+        </label>
+      </Dialog>
 
       {/* Welcome */}
       <section className="relative rounded-2xl bg-[#05281F] text-white shadow-[0_16px_40px_rgba(5,40,31,0.28)]">
@@ -1226,13 +1263,18 @@ function BranchOpsDashboard() {
             </div>
           </div>
           <p className="mt-2 text-[11px] text-slate-500">
-            Ending = beginning + daily sales − expenses
-            {cash.deducted > 0 ? ` − deductions (${formatPesoExact(cash.deducted)})` : ''}
+            Ending = beginning + daily sales − cash expenses
+            {cash.expenseCashOut > 0
+              ? ` (${formatPesoExact(cash.expenseCashOut)})`
+              : ''}
+            {cash.manualDeducted > 0
+              ? ` − manual deductions (${formatPesoExact(cash.manualDeducted)})`
+              : ''}
             {cash.confirmedToday != null ? ' · confirmed' : ''}.
           </p>
           <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
             {branchOwner ? (
-              <Button type="button" variant="gold" className="rounded-xl" onClick={deductCash}>
+              <Button type="button" variant="gold" className="rounded-xl" onClick={openDeductCash}>
                 <Minus className="mr-1.5 h-3.5 w-3.5" />
                 Deduct Cash
               </Button>
