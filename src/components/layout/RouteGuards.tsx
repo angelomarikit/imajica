@@ -50,6 +50,7 @@ export function RequireStaff({ children }: { children?: React.ReactNode }) {
     'HQ_ADMIN',
     'HR',
     'MARKETING',
+    'BRANCH_MARKETING',
     'BRANCH_ADMIN',
     'DOCTOR',
     'NURSE',
@@ -70,9 +71,13 @@ export function RequirePeopleOps({ children }: { children?: React.ReactNode }) {
   return <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR']}>{children}</RequireRole>
 }
 
-/** HQ or Marketing — campaigns, leads, promotions, sales performance. */
+/** HQ, org Marketing, or Branch Marketing — campaigns, leads, promotions, sales performance. */
 export function RequireMarketing({ children }: { children?: React.ReactNode }) {
-  return <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'MARKETING']}>{children}</RequireRole>
+  return (
+    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'MARKETING', 'BRANCH_MARKETING']}>
+      {children}
+    </RequireRole>
+  )
 }
 
 /** Client portal only — staff are sent to their staff home. */

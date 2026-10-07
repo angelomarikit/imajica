@@ -17,6 +17,7 @@ import { formatRoleLabel } from '@/utils/roleLabels'
 const BRANCH_ROLE_OPTIONS = [
   'HR',
   'MARKETING',
+  'BRANCH_MARKETING',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -191,8 +192,8 @@ export function NewBranchAccountPage() {
                 ))}
               </select>
               <p className="mt-1.5 text-xs text-slate-ui">
-                For system-wide access, choose <strong>HR</strong> or <strong>Marketing</strong> —
-                Branch becomes All Branches.
+                <strong>Marketing</strong> = org leader (All Branches).{' '}
+                <strong>Branch Marketing</strong> = one clinic only (pick the branch below).
               </p>
             </label>
             <label className="block sm:col-span-2">
@@ -208,9 +209,9 @@ export function NewBranchAccountPage() {
                 onChange={(e) => {
                   const next = e.target.value
                   setBranchId(next)
-                  // Picking All Branches implies an org-wide role (default HR if clinic role)
+                  // All Branches → org Marketing (not Branch Marketing / clinic staff)
                   if (next === HQ_SENTINEL_BRANCH_ID && !isOrgWideRole(role)) {
-                    setRole('HR')
+                    setRole(role === 'BRANCH_MARKETING' ? 'MARKETING' : 'HR')
                   }
                 }}
                 required
@@ -231,6 +232,10 @@ export function NewBranchAccountPage() {
               {isOrgWideRole(role) || branchId === HQ_SENTINEL_BRANCH_ID ? (
                 <p className="mt-1.5 text-xs text-emerald-800">
                   This account can see data across every clinic (not tied to one branch).
+                </p>
+              ) : role === 'BRANCH_MARKETING' ? (
+                <p className="mt-1.5 text-xs text-emerald-800">
+                  Branch Marketing sees only this clinic&apos;s marketing data and handoffs.
                 </p>
               ) : null}
             </label>

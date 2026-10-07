@@ -24,13 +24,18 @@ import {
 } from '@/services/marketingLeadService'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { useEffectiveBranchId } from '@/hooks/useEffectiveBranchId'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useAuth } from '@/contexts/AuthContext'
+import { isBranchMarketingRole } from '@/utils/franchiseAccess'
 
 const fieldClass =
   'mt-1.5 w-full rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm text-[#073D2C] outline-none focus:border-emerald-800/40 focus:ring-2 focus:ring-emerald-900/10'
 
 export function MarketingMessagesPage() {
+  const { user } = useAuth()
   const headerBranch = useEffectiveBranchId()
+  const forcedBranchId = useForcedBranchId()
+  const branchLocked = isBranchMarketingRole(user?.role) || Boolean(forcedBranchId)
   const [leads, setLeads] = useState<MarketingLead[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
@@ -44,16 +49,17 @@ export function MarketingMessagesPage() {
     fullName: '',
     phone: '',
     email: '',
-    branchId: '',
+    branchId: forcedBranchId || '',
     source: 'facebook_ads' as MarketingLeadSource,
     notes: '',
   })
   const [saving, setSaving] = useState(false)
 
-  const branches = useMemo(
-    () => getBranches().filter((b) => b.status === 'active' && b.branchType !== 'warehouse'),
-    [],
-  )
+  const branches = useMemo(() => {
+    const all = getBranches().filter((b) => b.status === 'active' && b.branchType !== 'warehouse')
+    if (forcedBranchId) return all.filter((b) => b.id === forcedBranchId)
+    return all
+  }, [forcedBranchId])
 
   async function refresh() {
     setLoading(true)
@@ -106,13 +112,18 @@ export function MarketingMessagesPage() {
       toast.error('Name is required')
       return
     }
+    const resolvedBranchId = forcedBranchId || form.branchId || null
+    if (branchLocked && !resolvedBranchId) {
+      toast.error('Clinic branch is required')
+      return
+    }
     setSaving(true)
     try {
       await createMarketingLead({
         fullName: form.fullName,
         phone: form.phone,
         email: form.email,
-        branchId: form.branchId || null,
+        branchId: resolvedBranchId,
         source: form.source,
         notes: form.notes,
       })
@@ -122,7 +133,7 @@ export function MarketingMessagesPage() {
         fullName: '',
         phone: '',
         email: '',
-        branchId: headerBranch !== 'all' ? headerBranch : '',
+        branchId: forcedBranchId || (headerBranch !== 'all' ? headerBranch : ''),
         source: 'facebook_ads',
         notes: '',
       })
@@ -136,7 +147,10 @@ export function MarketingMessagesPage() {
   function openHandoff(lead: MarketingLead) {
     setHandoffLead(lead)
     setHandoffForm({
-      branchId: lead.branchId || (headerBranch !== 'all' ? headerBranch : ''),
+      branchId:
+        forcedBranchId ||
+        lead.branchId ||
+        (headerBranch !== 'all' ? headerBranch : ''),
       note: lead.handoffNote || lead.notes || '',
     })
   }
@@ -376,16 +390,22 @@ export function MarketingMessagesPage() {
             <span className="font-medium text-[#073D2C]">Clinic branch</span>
             <select
               className={fieldClass}
-              value={form.branchId}
+              value={forcedBranchId || form.branchId}
+              disabled={branchLocked}
               onChange={(e) => setForm({ ...form, branchId: e.target.value })}
             >
-              <option value="">Not sure yet</option>
+              {!branchLocked ? <option value="">Not sure yet</option> : null}
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
               ))}
             </select>
+            {branchLocked ? (
+              <span className="mt-1 block text-[11px] text-slate-ui">
+                Locked to your assigned clinic.
+              </span>
+            ) : null}
           </label>
           <label className="block text-sm">
             <span className="font-medium text-[#073D2C]">Notes</span>
@@ -421,17 +441,23 @@ export function MarketingMessagesPage() {
             <span className="font-medium text-[#073D2C]">Clinic *</span>
             <select
               className={fieldClass}
-              value={handoffForm.branchId}
+              value={forcedBranchId || handoffForm.branchId}
+              disabled={branchLocked}
               onChange={(e) => setHandoffForm({ ...handoffForm, branchId: e.target.value })}
               required
             >
-              <option value="">Select clinic</option>
+              {!branchLocked ? <option value="">Select clinic</option> : null}
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
               ))}
             </select>
+            {branchLocked ? (
+              <span className="mt-1 block text-[11px] text-slate-ui">
+                Handoffs go only to your assigned clinic.
+              </span>
+            ) : null}
           </label>
           <label className="block text-sm">
             <span className="font-medium text-[#073D2C]">Note for staff</span>

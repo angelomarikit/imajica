@@ -56,7 +56,7 @@ import { cn } from '@/utils/cn'
 import {
   isFranchiseBranchOwner,
   isHrRole,
-  isMarketingRole,
+  isAnyMarketingRole,
   isTimeclockStaff,
 } from '@/utils/franchiseAccess'
 import { Button } from '@/components/ui/Button'
@@ -774,7 +774,7 @@ export function AdminSidebar({
     if (isTimeclockStaff(user)) return buildTimeclockStaffNavSections(handoffUnread)
     if (isFranchiseBranchOwner(user)) return buildFranchiseOwnerNavSections(handoffUnread)
     if (isHrRole(user?.role)) return buildHrNavSections(hrClinics)
-    if (isMarketingRole(user?.role)) return buildMarketingNavSections()
+    if (isAnyMarketingRole(user?.role)) return buildMarketingNavSections()
     return buildHqNavSections(hrClinics)
   }, [user, hrClinics, handoffUnread])
   const close = () => onOpenChange(false)

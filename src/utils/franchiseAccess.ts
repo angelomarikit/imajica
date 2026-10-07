@@ -16,14 +16,24 @@ export function isHrRole(role: UserRole | undefined | null): boolean {
   return role === 'HR'
 }
 
-/** Marketing — org-wide campaigns / leads / promotions (not full HQ). */
+/** Marketing — org-wide campaigns / leads / promotions (leader; HQ sentinel). */
 export function isMarketingRole(role: UserRole | undefined | null): boolean {
   return role === 'MARKETING'
 }
 
-/** HQ or Marketing — marketing tools. */
+/** Branch Marketing — same marketing tools, locked to one clinic (like staff). */
+export function isBranchMarketingRole(role: UserRole | undefined | null): boolean {
+  return role === 'BRANCH_MARKETING'
+}
+
+/** Org Marketing or Branch Marketing. */
+export function isAnyMarketingRole(role: UserRole | undefined | null): boolean {
+  return isMarketingRole(role) || isBranchMarketingRole(role)
+}
+
+/** HQ or any Marketing role — marketing tools. */
 export function canAccessMarketing(user: AuthSessionUser | null | undefined): boolean {
-  return isHqRole(user?.role) || isMarketingRole(user?.role)
+  return isHqRole(user?.role) || isAnyMarketingRole(user?.role)
 }
 
 /** HQ or HR — can switch All Branches and view people-ops org-wide. */
@@ -97,7 +107,7 @@ export function isTimeclockStaff(user: AuthSessionUser | null | undefined): bool
 
 /** Staff who must stay locked to a single branch in UI/data. */
 export function isBranchScopedStaff(user: AuthSessionUser | null | undefined): boolean {
-  return isBranchOwner(user) || isTimeclockStaff(user)
+  return isBranchOwner(user) || isTimeclockStaff(user) || isBranchMarketingRole(user?.role)
 }
 
 export function canAccessHqAdmin(user: AuthSessionUser | null | undefined): boolean {
@@ -108,7 +118,7 @@ export function canAccessHqAdmin(user: AuthSessionUser | null | undefined): bool
 export function getStaffHomePath(user: AuthSessionUser | null | undefined): string {
   if (!user) return '/login'
   if (isHrRole(user.role)) return '/admin/hr/salary'
-  if (isMarketingRole(user.role)) return '/admin/marketing/dashboard'
+  if (isAnyMarketingRole(user.role)) return '/admin/marketing/dashboard'
   if (isTimeclockStaff(user)) return '/admin/attendance'
   if (isBranchOwner(user)) return '/admin/dashboard'
   if (isStaffRoleLike(user.role)) return '/admin/dashboard'

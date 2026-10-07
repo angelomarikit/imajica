@@ -20,7 +20,7 @@ You MUST update Supabase SQL in the same change set:
 
 | App area | Tables / notes |
 |---|---|
-| Auth / roles | `profiles` (+ `status`), `user_roles`, `roles` (`BRANCH_ADMIN` = Clinic Manager; `HR` = org-wide people ops; `MARKETING` = org-wide marketing on HQ sentinel), helpers `is_hr` / `is_people_ops` / `is_marketing` / `can_access_marketing`, views `v_team_user_access` / `v_user_access_directory` / `v_branch_accounts_directory` (clinic staff + HR/Marketing), RPC `set_profile_active` |
+| Auth / roles | `profiles` (+ `status`), `user_roles`, `roles` (`BRANCH_ADMIN` = Clinic Manager; `HR` = org-wide people ops; `MARKETING` = org-wide marketing leader on HQ sentinel; `BRANCH_MARKETING` = clinic-scoped marketing), helpers `is_hr` / `is_people_ops` / `is_marketing` / `is_branch_marketing` / `can_access_marketing`, views `v_team_user_access` / `v_user_access_directory` / `v_branch_accounts_directory` (clinic staff + Branch Marketing + HR/Marketing), RPC `set_profile_active` |
 | Branches / settings | `branches` (+ `branch_type`), `branch_hours`, `branch_rooms`, `system_settings`; RPC `set_branch_active` |
 | Team / recruitment & LMS | `recruitment_applicants` (+ `current_stage`, `source`, pipeline statuses), `recruitment_stage_events` (timeline), `new_hires` (onboarding checklist + docs from Hired), storage bucket `new-hire-docs`, `training_materials` + `training_material_assignees` + `training_material_progress` (employee completion), storage `training-materials`, `lms_courses`, `lms_enrollments` |
 | Customer registration & list | `clients` (+ occupation, middle_name, emergency_*, medical_*, avatar_url, admin_notes), `client_skin_profiles`, `client_notes` |

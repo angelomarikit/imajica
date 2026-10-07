@@ -23,6 +23,7 @@ import {
 } from '@/services/marketingAdSpendService'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 
 const fieldClass =
   'mt-1.5 w-full rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm text-[#073D2C] outline-none focus:border-[#1877F2]/50 focus:ring-2 focus:ring-[#1877F2]/15'
@@ -91,16 +92,22 @@ function statusVariant(status: AdCampaignStatus): 'success' | 'warning' | 'neutr
 }
 
 export function MarketingAdsPage() {
+  const headerBranch = useEffectiveBranchId()
+  const forcedBranchId = useForcedBranchId()
   const [rows, setRows] = useState<MarketingAdSpend[]>([])
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<MarketingAdSpend | null>(null)
-  const [form, setForm] = useState<FormState>(emptyForm)
+  const [form, setForm] = useState<FormState>(() => ({
+    ...emptyForm(),
+    branchId: forcedBranchId || '',
+  }))
   const [saving, setSaving] = useState(false)
 
-  const branches = useMemo(
-    () => getBranches().filter((b) => b.status === 'active' && b.branchType !== 'warehouse'),
-    [],
-  )
+  const branches = useMemo(() => {
+    const all = getBranches().filter((b) => b.status === 'active' && b.branchType !== 'warehouse')
+    if (forcedBranchId) return all.filter((b) => b.id === forcedBranchId)
+    return all
+  }, [forcedBranchId])
 
   useEffect(() => {
     void listMarketingAdSpend().then(setRows)
@@ -109,17 +116,22 @@ export function MarketingAdsPage() {
     })
   }, [])
 
+  const scopedRows = useMemo(() => {
+    if (headerBranch === 'all') return rows
+    return rows.filter((r) => !r.branchId || r.branchId === headerBranch)
+  }, [rows, headerBranch])
+
   const totals = useMemo(() => {
-    const spend = rows.reduce((s, r) => s + r.amount, 0)
-    const clients = rows.reduce((s, r) => s + r.clients, 0)
-    const messages = rows.reduce((s, r) => s + r.messages, 0)
-    const best = [...rows].sort((a, b) => b.clients - a.clients)[0] ?? null
+    const spend = scopedRows.reduce((s, r) => s + r.amount, 0)
+    const clients = scopedRows.reduce((s, r) => s + r.clients, 0)
+    const messages = scopedRows.reduce((s, r) => s + r.messages, 0)
+    const best = [...scopedRows].sort((a, b) => b.clients - a.clients)[0] ?? null
     return { spend, clients, messages, best }
-  }, [rows])
+  }, [scopedRows])
 
   function openCreate() {
     setEditing(null)
-    setForm(emptyForm())
+    setForm({ ...emptyForm(), branchId: forcedBranchId || '' })
     setOpen(true)
   }
 
@@ -150,7 +162,7 @@ export function MarketingAdsPage() {
         clicks: parseMetric(form.clicks),
         messages: parseMetric(form.messages),
         clients: parseMetric(form.clients),
-        branchId: form.branchId || null,
+        branchId: forcedBranchId || form.branchId || null,
         notes: form.notes,
       }
       if (editing) {
@@ -216,14 +228,14 @@ export function MarketingAdsPage() {
       ) : null}
 
       <div className="grid gap-3">
-        {rows.length === 0 ? (
+        {scopedRows.length === 0 ? (
           <Card className="p-10 text-center text-sm text-slate-ui">
             No campaigns yet. Create one with a clear name (e.g. “Glow Face — San Mateo Boost”) and
             paste metrics from Ads Manager.
           </Card>
         ) : null}
 
-        {rows.map((c, index) => {
+        {scopedRows.map((c, index) => {
           const d = campaignDerivedMetrics(c)
           return (
             <Card
@@ -443,13 +455,16 @@ export function MarketingAdsPage() {
 
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-sm">
-              <span className="text-slate-ui">Branch (optional)</span>
+              <span className="text-slate-ui">
+                {forcedBranchId ? 'Branch' : 'Branch (optional)'}
+              </span>
               <select
                 className={fieldClass}
-                value={form.branchId}
+                value={forcedBranchId || form.branchId}
+                disabled={Boolean(forcedBranchId)}
                 onChange={(e) => setForm({ ...form, branchId: e.target.value })}
               >
-                <option value="">All / org-wide</option>
+                {!forcedBranchId ? <option value="">All / org-wide</option> : null}
                 {branches.map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.name}

@@ -13,6 +13,7 @@ const cors = {
 
 const BRANCH_ROLES = new Set([
   'BRANCH_ADMIN',
+  'BRANCH_MARKETING',
   'DOCTOR',
   'NURSE',
   'AESTHETICIAN',
@@ -170,6 +171,7 @@ serve(async (req) => {
         'HQ_ADMIN',
         'HR',
         'MARKETING',
+        'BRANCH_MARKETING',
         'BRANCH_ADMIN',
         'DOCTOR',
         'NURSE',

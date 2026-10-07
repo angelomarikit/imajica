@@ -19,6 +19,7 @@ const ROLE_OPTIONS = [
   'HQ_ADMIN',
   'HR',
   'MARKETING',
+  'BRANCH_MARKETING',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -58,7 +59,9 @@ export function NewUserPage() {
     }
     const orgWide = isOrgWideRole(role)
     if (isSupabaseConfigured && !orgWide && !branchId) {
-      toast.error('Select a clinic branch for this role, or choose HR / Marketing / HQ for All Branches.')
+      toast.error(
+        'Select a clinic branch for this role, or choose HR / Marketing / HQ for All Branches. Branch Marketing needs a clinic.',
+      )
       return
     }
     const branch = branches.find((b) => b.id === branchId)
@@ -168,8 +171,8 @@ export function NewUserPage() {
                 ))}
               </select>
               <p className="mt-1.5 text-xs text-slate-ui">
-                For system-wide access, choose <strong>HR</strong> or <strong>Marketing</strong> —
-                Branch becomes All Branches.
+                <strong>Marketing</strong> = All Branches (leader).{' '}
+                <strong>Branch Marketing</strong> = one clinic only.
               </p>
             </label>
             <label className="block sm:col-span-2">
@@ -184,6 +187,10 @@ export function NewUserPage() {
                   const next = e.target.value
                   setBranchId(next)
                   if (next === HQ_SENTINEL_BRANCH_ID && !isOrgWideRole(role)) {
+                    if (role === 'BRANCH_MARKETING') {
+                      setRole('MARKETING')
+                      return
+                    }
                     setRole('HR')
                   }
                 }}

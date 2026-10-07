@@ -110,13 +110,18 @@ export async function listBranchAccounts(): Promise<AccessUser[]> {
         (u) =>
           Boolean(u.branchId) ||
           u.role === 'HR' ||
-          u.role === 'MARKETING',
+          u.role === 'MARKETING' ||
+          u.role === 'BRANCH_MARKETING',
       )
     }
     return (data as DirectoryRow[] | null)?.map(mapRow) ?? []
   }
   return localUsers().filter(
-    (u) => Boolean(u.branchId) || u.role === 'HR' || u.role === 'MARKETING',
+    (u) =>
+      Boolean(u.branchId) ||
+      u.role === 'HR' ||
+      u.role === 'MARKETING' ||
+      u.role === 'BRANCH_MARKETING',
   )
 }
 
