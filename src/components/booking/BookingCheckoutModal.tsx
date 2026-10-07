@@ -364,7 +364,11 @@ export function BookingCheckoutModal({
       onPlaced()
       onClose()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not place order')
+      const raw = err instanceof Error ? err.message : 'Could not place order'
+      const message = /not signed in/i.test(raw)
+        ? 'Not signed in to the database. Sign out and sign in again with your Cainta (or clinic) account, then retry Place Order.'
+        : raw
+      toast.error(message)
     } finally {
       setSaving(false)
     }

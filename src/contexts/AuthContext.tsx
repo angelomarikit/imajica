@@ -224,6 +224,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (data.session?.user) {
           const sessionUser = await resolveSupabaseSessionUser(data.session.user)
           if (!cancelled) persist(sessionUser)
+        } else {
+          // localStorage-only “demo” login cannot call RLS/RPC (checkout shows “Not signed in”)
+          if (!cancelled) persist(null)
         }
       } catch (err) {
         console.error('[auth] session restore failed', err)
@@ -304,19 +307,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return sessionUser
         }
 
-        // Known offline demo accounts still work when the Auth user was never created
-        const demoFallback = buildDemoSession(normalized, roleHint)
-        if (demoFallback) {
-          console.warn(
-            '[auth] Supabase sign-in failed; using local demo session for',
-            normalized,
-            error?.message,
-          )
-          persist(demoFallback)
-          return demoFallback
-        }
-
-        throw error ?? new Error('Invalid email or password')
+        // Do not fall back to localStorage-only demo while Supabase is configured —
+        // checkout / sales RPC require a real JWT ("Not signed in" on Place Order).
+        const authMsg = error?.message || 'Invalid email or password'
+        throw new Error(
+          /invalid login|invalid credentials|email not confirmed/i.test(authMsg)
+            ? `${authMsg}. Use the branch Auth account created in Team → Branch Accounts (not an offline demo login).`
+            : authMsg,
+        )
       }
 
       const demoSession = buildDemoSession(normalized, roleHint)

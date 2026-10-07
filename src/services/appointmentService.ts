@@ -358,6 +358,13 @@ async function ensureRemoteClient(input: {
 }): Promise<{ id: string; fullName: string; email?: string; phone?: string }> {
   if (!supabase) throw new Error('Supabase is not configured')
 
+  const { requireSupabaseSession, mapBookingAuthError } = await import('@/utils/supabaseSession')
+  try {
+    await requireSupabaseSession()
+  } catch (err) {
+    throw new Error(mapBookingAuthError(err instanceof Error ? err.message : 'Not signed in'))
+  }
+
   const fullName = input.fullName.trim()
   const email = input.email?.trim() || ''
   const phone = input.phone?.trim() || ''
@@ -403,11 +410,11 @@ async function ensureRemoteClient(input: {
     if (row.ok === false && row.error) {
       const msg = String(row.error)
       if (!/function|schema cache|not found/i.test(msg)) {
-        throw new Error(msg)
+        throw new Error(mapBookingAuthError(msg))
       }
     }
   } else if (rpcError && !/function|schema cache|does not exist|404/i.test(rpcError.message)) {
-    throw new Error(supabaseErrorMessage(rpcError))
+    throw new Error(mapBookingAuthError(supabaseErrorMessage(rpcError)))
   }
 
   // Legacy fallback when RPC not applied yet

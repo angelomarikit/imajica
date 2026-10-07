@@ -395,6 +395,13 @@ export async function recordBookingCheckout(
   }))
 
   if (isSupabaseConfigured && supabase) {
+    const { requireSupabaseSession, mapBookingAuthError } = await import('@/utils/supabaseSession')
+    try {
+      await requireSupabaseSession()
+    } catch (err) {
+      throw new Error(mapBookingAuthError(err instanceof Error ? err.message : 'Not signed in'))
+    }
+
     const branchId = head.branchId?.trim() ?? ''
     if (!isUuid(branchId)) {
       throw new Error(
