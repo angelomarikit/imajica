@@ -6,6 +6,9 @@ export interface AuditEntry {
 }
 
 export async function writeAuditLog(entry: AuditEntry): Promise<void> {
-  // Demo: console. Production: insert into audit_logs via Supabase with RLS.
-  console.info('[audit]', entry)
+  // Production: insert into audit_logs via Supabase with RLS.
+  // Keep console quiet — spam here freezes DevTools when browsing customer profiles.
+  if (import.meta.env.DEV && import.meta.env.VITE_DEBUG_AUDIT === '1') {
+    console.info('[audit]', entry)
+  }
 }

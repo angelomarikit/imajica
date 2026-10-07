@@ -98,9 +98,15 @@ function isInstallmentPayment(paymentType?: string) {
   return p.includes('installment') || p.includes('split') || p.includes('partial')
 }
 
+const catalogMatchCache = new Map<string, CatalogMatch | null>()
+
 export function matchCatalog(name: string, itemType: Sale['itemType'], branchName: string): CatalogMatch | null {
+  const cacheKey = `${itemType}|${branchName}|${name}`
+  if (catalogMatchCache.has(cacheKey)) return catalogMatchCache.get(cacheKey) ?? null
+
   const key = normKey(name)
   const fuzzy = (a: string, b: string) => a.includes(b) || b.includes(a)
+  let result: CatalogMatch | null = null
   if (itemType === 'package') {
     const row =
       PACKAGE_CATALOG_SEED.find(
@@ -108,9 +114,8 @@ export function matchCatalog(name: string, itemType: Sale['itemType'], branchNam
           (normKey(p.name) === key || fuzzy(normKey(p.name), key)) &&
           (!p.branch || p.branch === branchName),
       ) || PACKAGE_CATALOG_SEED.find((p) => normKey(p.name) === key || fuzzy(normKey(p.name), key))
-    if (row) return { price: row.price, sessions: row.sessions, name: row.name }
-  }
-  if (itemType === 'service') {
+    if (row) result = { price: row.price, sessions: row.sessions, name: row.name }
+  } else if (itemType === 'service') {
     const row =
       SERVICE_CATALOG_SEED.find(
         (s) =>
@@ -118,13 +123,13 @@ export function matchCatalog(name: string, itemType: Sale['itemType'], branchNam
           (!s.branch || s.branch === branchName),
       ) ||
       SERVICE_CATALOG_SEED.find((s) => normKey(s.name) === key || fuzzy(normKey(s.name), key))
-    if (row) return { price: row.price, sessions: row.sessions, name: row.name }
-  }
-  if (itemType === 'product') {
+    if (row) result = { price: row.price, sessions: row.sessions, name: row.name }
+  } else if (itemType === 'product') {
     const row = PRODUCT_CATALOG_SEED.find((p) => normKey(p.name) === key || normKey(p.sku) === key)
-    if (row) return { price: row.retailPrice, sessions: 1, name: row.name }
+    if (row) result = { price: row.retailPrice, sessions: 1, name: row.name }
   }
-  return null
+  catalogMatchCache.set(cacheKey, result)
+  return result
 }
 
 function entitlementKey(s: Sale) {
@@ -356,9 +361,33 @@ export function getSessionHistory(
   clientName?: string,
 ): ClientSessionHistoryRow[] {
   const clientSales = getClientSales(clientId, sales, clientName)
-  const availed = getAvailedServices(clientId, sales, clientName)
-  const rows: ClientSessionHistoryRow[] = []
+  const availed = getAvailedServices(clientId, clientSales, clientName)
+  return getSessionHistoryFromAvailed(clientSales, availed)
+}
 
+export function recomputeClientSalesProfile(
+  clientId: string,
+  sales: Sale[],
+  clientName?: string,
+) {
+  // One pass over the full sales list, then derive all tabs from the client subset
+  const rows = getClientSales(clientId, sales, clientName)
+  const availed = getAvailedServices(clientId, rows, clientName)
+  return {
+    contractValue: computeContractValue(clientId, rows, clientName),
+    availed,
+    products: getPurchasedProducts(clientId, rows, clientName),
+    installments: getInstallmentBalances(clientId, rows, clientName),
+    sessions: getSessionHistoryFromAvailed(rows, availed),
+    sessionsCount: availed.reduce((sum, a) => sum + a.totalSessions, 0),
+  }
+}
+
+function getSessionHistoryFromAvailed(
+  clientSales: Sale[],
+  availed: ClientAvailedLine[],
+): ClientSessionHistoryRow[] {
+  const rows: ClientSessionHistoryRow[] = []
   for (const a of availed) {
     const related = clientSales
       .filter(
@@ -385,34 +414,32 @@ export function getSessionHistory(
   return rows
 }
 
-export function recomputeClientSalesProfile(
-  clientId: string,
-  sales: Sale[],
-  clientName?: string,
-) {
-  const contractValue = computeContractValue(clientId, sales, clientName)
-  const availed = getAvailedServices(clientId, sales, clientName)
-  return {
-    contractValue,
-    availed,
-    products: getPurchasedProducts(clientId, sales, clientName),
-    installments: getInstallmentBalances(clientId, sales, clientName),
-    sessions: getSessionHistory(clientId, sales, clientName),
-    sessionsCount: availed.reduce((sum, a) => sum + a.totalSessions, 0),
-  }
-}
+let enrichCacheKey = ''
+let enrichCacheValue: Sale[] = []
 
 /** Mark first sale per client for New Client Sales report */
 export function enrichFirstClientFlags(sales: Sale[]): Sale[] {
-  const firstByClient = new Map<string, string>()
-  const sorted = [...sales].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-  for (const s of sorted) {
-    if (!firstByClient.has(s.clientId)) firstByClient.set(s.clientId, s.id)
+  if (!sales.length) return sales
+  const key = `${sales.length}:${sales[0]?.id}:${sales[sales.length - 1]?.id}:${sales[Math.floor(sales.length / 2)]?.id ?? ''}`
+  if (key === enrichCacheKey && enrichCacheValue.length === sales.length) {
+    return enrichCacheValue
   }
-  const firstIds = new Set(firstByClient.values())
-  return sales.map((s) => ({
+
+  // Single O(n) pass — avoid sorting a full copy of ~10k+ sales on every call
+  const firstByClient = new Map<string, { id: string; at: string }>()
+  for (const s of sales) {
+    const prev = firstByClient.get(s.clientId)
+    if (!prev || s.createdAt < prev.at || (s.createdAt === prev.at && s.id < prev.id)) {
+      firstByClient.set(s.clientId, { id: s.id, at: s.createdAt })
+    }
+  }
+  const firstIds = new Set([...firstByClient.values()].map((v) => v.id))
+  const enriched = sales.map((s) => ({
     ...s,
     isFirstClientSale: firstIds.has(s.id),
     leadSource: s.leadSource || 'Walk-In',
   }))
+  enrichCacheKey = key
+  enrichCacheValue = enriched
+  return enriched
 }

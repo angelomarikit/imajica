@@ -20,16 +20,10 @@ import { Card } from '@/components/ui/Card'
 import { Tabs } from '@/components/ui/Tabs'
 import { useAuth } from '@/contexts/AuthContext'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
-import {
-  computeContractValue,
-  getAvailedServices,
-  getInstallmentBalances,
-  getPurchasedProducts,
-  getSessionHistory,
-} from '@/services/clientSalesProfileService'
+import { recomputeClientSalesProfile } from '@/services/clientSalesProfileService'
 import { getClientById, getClients, hydrateClientFromSupabase, persistClientToSupabase, preloadClientsFromSupabase, saveClient, subscribeClients } from '@/services/clientService'
-import { getAnalyticsSales, subscribeAnalytics } from '@/services/analyticsService'
-import { preloadSalesData } from '@/services/salesService'
+import { subscribeAnalytics } from '@/services/analyticsService'
+import { getSales, preloadSalesData } from '@/services/salesService'
 import { getBranches } from '@/services/branchService'
 import type { Client } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
@@ -115,23 +109,36 @@ export function ClientProfilePage() {
   useEffect(() => {
     const refreshClient = () => setClient(id ? getClientById(id) : getClients()[0])
     refreshClient()
-    void Promise.all([preloadSalesData(), preloadClientsFromSupabase()]).then(async () => {
-      setSalesTick((n) => n + 1)
+    void (async () => {
+      // Hydrate this profile first; defer full sales preload until Services tab
       if (id) {
         const hydrated = await hydrateClientFromSupabase(id)
         if (hydrated) setClient(hydrated)
         else refreshClient()
-      } else {
-        refreshClient()
       }
-    })
+      await preloadClientsFromSupabase()
+      refreshClient()
+    })()
     const unsubClients = subscribeClients(refreshClient)
-    const unsubSales = subscribeAnalytics(() => setSalesTick((n) => n + 1))
     return () => {
       unsubClients()
-      unsubSales()
     }
   }, [id])
+
+  useEffect(() => {
+    if (tab !== 'services') return
+    let cancelled = false
+    void preloadSalesData().then(() => {
+      if (!cancelled) setSalesTick((n) => n + 1)
+    })
+    const unsubSales = subscribeAnalytics(() => {
+      if (!cancelled) setSalesTick((n) => n + 1)
+    })
+    return () => {
+      cancelled = true
+      unsubSales()
+    }
+  }, [tab])
 
   if (client && !canViewClient) {
     return <Navigate to="/admin/clients" replace />
@@ -142,19 +149,20 @@ export function ClientProfilePage() {
     setForm(null)
   }, [id])
 
-  const sales = useMemo(() => getAnalyticsSales(), [salesTick])
-
+  // Only scan sales when Services & Products is open (avoids ~10k-row work on every tab)
   const profile = useMemo(() => {
     if (!client) return null
-    const contractValue = computeContractValue(client.id, sales, client.fullName)
-    return {
-      contractValue,
-      availed: getAvailedServices(client.id, sales, client.fullName),
-      products: getPurchasedProducts(client.id, sales, client.fullName),
-      installments: getInstallmentBalances(client.id, sales, client.fullName),
-      sessions: getSessionHistory(client.id, sales, client.fullName),
+    if (tab !== 'services') {
+      return {
+        contractValue: client.totalSpent || 0,
+        availed: [],
+        products: [],
+        installments: [],
+        sessions: [],
+      }
     }
-  }, [client, sales])
+    return recomputeClientSalesProfile(client.id, getSales(), client.fullName)
+  }, [client, salesTick, tab])
 
   function startEdit() {
     if (!client) return

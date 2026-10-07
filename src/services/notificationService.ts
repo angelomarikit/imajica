@@ -15,7 +15,9 @@ export interface NotificationPayload {
  */
 export async function sendNotification(payload: NotificationPayload): Promise<void> {
   // In production, call a Supabase Edge Function that holds provider secrets.
-  console.info('[notificationService]', payload)
+  if (import.meta.env.DEV && import.meta.env.VITE_DEBUG_NOTIFICATIONS === '1') {
+    console.info('[notificationService]', payload)
+  }
   toast.message(`Notification queued (${payload.channel})`, {
     description: payload.templateKey,
   })

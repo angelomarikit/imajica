@@ -6,6 +6,7 @@ import {
 } from '@/constants/clientProfileSeed'
 import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { isUuid } from '@/utils/uuid'
 
 const STORAGE_KEY = 'imajica_clients'
 const CHANGE_EVENT = 'imajica:clients-changed'
@@ -33,6 +34,22 @@ function pickText(...values: Array<string | null | undefined>) {
   return ''
 }
 
+/** Prefer real contact; treat placeholders / generated locals as empty. */
+function pickContact(...values: Array<string | null | undefined>) {
+  const fallback: string[] = []
+  for (const v of values) {
+    if (v == null) continue
+    const s = String(v).trim()
+    if (!s || s === '-' || s.toLowerCase() === 'n/a') continue
+    if (s.toLowerCase().endsWith('@imajica.local')) {
+      fallback.push(s)
+      continue
+    }
+    return s
+  }
+  return fallback[0] || ''
+}
+
 function mergeClientRecords(base: Client, incoming: Partial<Client>): Client {
   const gender =
     incoming.gender === 'female' || incoming.gender === 'male'
@@ -41,17 +58,24 @@ function mergeClientRecords(base: Client, incoming: Partial<Client>): Client {
         ? base.gender
         : incoming.gender || base.gender || 'prefer_not_to_say'
 
+  // Prefer a stable UUID id when either side has one (never demote DB → client-import-*)
+  const id =
+    (isUuid(base.id) && base.id) ||
+    (isUuid(incoming.id) && incoming.id) ||
+    incoming.id ||
+    base.id
+
   return {
     ...base,
     ...incoming,
-    id: incoming.id || base.id,
+    id,
     code: pickText(base.code, incoming.code) || base.code,
     fullName: pickText(incoming.fullName, base.fullName) || base.fullName,
-    email: pickText(base.email, incoming.email),
-    phone: pickText(base.phone, incoming.phone),
-    dateOfBirth: pickText(base.dateOfBirth, incoming.dateOfBirth),
+    email: pickContact(base.email, incoming.email),
+    phone: pickContact(base.phone, incoming.phone),
+    dateOfBirth: pickContact(base.dateOfBirth, incoming.dateOfBirth),
     gender,
-    address: pickText(base.address, incoming.address) || undefined,
+    address: pickContact(base.address, incoming.address) || undefined,
     occupation: pickText(base.occupation, incoming.occupation) || undefined,
     middleName: pickText(base.middleName, incoming.middleName) || undefined,
     preferredBranchId: pickText(incoming.preferredBranchId, base.preferredBranchId),
@@ -178,8 +202,11 @@ export function getClients(): Client[] {
   return [...readExtra()].map(mergeProfileOntoClient).sort(compareClientsByRecentAvail)
 }
 
+/** Lookup without sorting the full registry (profile pages call this often). */
 export function getClientById(id: string): Client | undefined {
-  return getClients().find((c) => c.id === id)
+  if (!id) return undefined
+  const row = readExtra().find((c) => c.id === id)
+  return row ? mergeProfileOntoClient(row) : undefined
 }
 
 export function saveClient(client: Client): Client {
@@ -351,7 +378,11 @@ export function upsertClientsFromSalesImport(imported: Client[]): void {
       byId.set(row.id, row)
       continue
     }
-    byId.set(row.id, mergeClientRecords(prev, { ...row, id: row.id }))
+    // Keep Supabase UUID when present — do not replace with client-import-* ids
+    const keepId = isUuid(prev.id) ? prev.id : isUuid(row.id) ? row.id : prev.id
+    if (prev.id !== keepId) byId.delete(prev.id)
+    if (row.id !== keepId) byId.delete(row.id)
+    byId.set(keepId, mergeClientRecords(prev, { ...row, id: keepId }))
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify([...byId.values()]))
   applyKnownClientProfiles()
@@ -425,36 +456,48 @@ function mapRemoteClient(row: RemoteClientRow): Client {
 /**
  * Pull client contact profiles from Supabase into the local registry.
  * Fills empty phone/email/gender/DOB/address that sales-only rows lack.
+ * Remote rows are additive — never deletes local-only customers.
  */
 export async function preloadClientsFromSupabase(): Promise<number> {
   if (!isSupabaseConfigured || !supabase) return 0
-  const { data, error } = await supabase
-    .from('clients')
-    .select(
-      `
+
+  // Paginate so HQ always gets the full migrated set (not just first page)
+  const pageSize = 1000
+  const all: RemoteClientRow[] = []
+  for (let from = 0; from < 20000; from += pageSize) {
+    const to = from + pageSize - 1
+    const { data, error } = await supabase
+      .from('clients')
+      .select(
+        `
       id, code, full_name, email, phone, date_of_birth, gender, address,
       occupation, middle_name, preferred_branch_id, status, is_vip, avatar_url,
       registered_at, total_visits, total_spent, reward_points,
       emergency_contact_name, emergency_contact_phone, medical_concerns,
       current_medications, admin_notes, membership_label
     `,
-    )
-    .order('updated_at', { ascending: false })
-    .limit(5000)
+      )
+      .order('updated_at', { ascending: false })
+      .range(from, to)
 
-  if (error) {
-    if (!/does not exist|schema cache|column/i.test(error.message)) {
-      console.error('[clients] preload failed', error.message)
+    if (error) {
+      if (!/does not exist|schema cache|column/i.test(error.message)) {
+        console.error('[clients] preload failed', error.message)
+      }
+      break
     }
-    return 0
+    if (!data?.length) break
+    all.push(...(data as RemoteClientRow[]))
+    if (data.length < pageSize) break
   }
-  if (!data?.length) return 0
+
+  if (!all.length) return 0
 
   const existing = readExtra()
   const byId = new Map(existing.map((c) => [c.id, c]))
   let changed = 0
 
-  for (const raw of data as RemoteClientRow[]) {
+  for (const raw of all) {
     const remote = mapRemoteClient(raw)
     const prev = byId.get(remote.id)
     const byName = !prev
@@ -465,8 +508,9 @@ export async function preloadClientsFromSupabase(): Promise<number> {
 
     if (byName && byName.id !== remote.id) {
       byId.delete(byName.id)
-      const merged = mergeClientRecords(byName, remote)
-      byId.set(remote.id, merged)
+      // Remote profile wins for blank local sales stubs
+      const merged = mergeClientRecords(remote, byName)
+      byId.set(remote.id, { ...merged, id: remote.id })
       changed += 1
       continue
     }
@@ -477,24 +521,28 @@ export async function preloadClientsFromSupabase(): Promise<number> {
       continue
     }
 
-    const merged = mergeClientRecords(prev, remote)
+    // Prefer remote contact onto existing local row (fill blanks / placeholders)
+    const merged = mergeClientRecords(remote, prev)
+    const next = { ...merged, id: remote.id }
     const dirty =
-      merged.email !== prev.email ||
-      merged.phone !== prev.phone ||
-      merged.dateOfBirth !== prev.dateOfBirth ||
-      merged.gender !== prev.gender ||
-      merged.address !== prev.address ||
-      merged.preferredBranchId !== prev.preferredBranchId
-    byId.set(remote.id, merged)
+      next.email !== prev.email ||
+      next.phone !== prev.phone ||
+      next.dateOfBirth !== prev.dateOfBirth ||
+      next.gender !== prev.gender ||
+      next.address !== prev.address ||
+      next.preferredBranchId !== prev.preferredBranchId ||
+      next.id !== prev.id
+    byId.set(remote.id, next)
+    if (prev.id !== remote.id) byId.delete(prev.id)
     if (dirty) changed += 1
   }
 
-  if (changed > 0) {
+  if (changed > 0 || all.length > existing.length) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify([...byId.values()]))
     applyKnownClientProfiles()
     emitChange()
   }
-  return changed
+  return changed || all.length
 }
 
 /** Refresh one client profile from Supabase (used on profile details page). */

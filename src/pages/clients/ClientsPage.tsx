@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Calendar,
   ChevronLeft,
   ChevronRight,
   Eye,
+  FileSpreadsheet,
   MoreHorizontal,
   Phone,
   Plus,
@@ -25,6 +26,12 @@ import {
   preloadClientsFromSupabase,
   subscribeClients,
 } from '@/services/clientService'
+import {
+  applyCustomerMigrationImport,
+  parseMigrationCustomerSheet,
+  planCustomerMigrationImport,
+  type MigrationImportSummary,
+} from '@/services/customerMigrationImportService'
 import { preloadSalesData, syncClientsFromSalesRegistry } from '@/services/salesService'
 import { subscribeAnalytics } from '@/services/analyticsService'
 import type { Client } from '@/types'
@@ -68,6 +75,10 @@ export function ClientsPage() {
   const [clients, setClients] = useState<Client[]>(() => getClients())
   const [loading, setLoading] = useState(() => getClients().length === 0)
   const [page, setPage] = useState(1)
+  const [importing, setImporting] = useState(false)
+  const [importPlan, setImportPlan] = useState<MigrationImportSummary | null>(null)
+  const importFileRef = useRef<HTMLInputElement>(null)
+  const pendingImportRows = useRef<ReturnType<typeof parseMigrationCustomerSheet> | null>(null)
   const forcedBranchId = useForcedBranchId()
   const branchScoped = isBranchOwner(user) || Boolean(forcedBranchId)
   const hqView = isHqRole(user?.role)
@@ -77,12 +88,21 @@ export function ClientsPage() {
       setClients(getClients())
       setLoading(false)
     }
+    setLoading(true)
     applyKnownClientProfiles()
-    void Promise.all([preloadSalesData(), preloadClientsFromSupabase()]).then(() => {
-      syncClientsFromSalesRegistry()
-      applyKnownClientProfiles()
-      refresh()
-    })
+    // 1) Supabase registry first (migrated profiles)
+    // 2) Sales stats layered on top — contact fields preserved
+    void (async () => {
+      try {
+        await preloadClientsFromSupabase()
+        refresh()
+        await preloadSalesData()
+        syncClientsFromSalesRegistry()
+        applyKnownClientProfiles()
+      } finally {
+        refresh()
+      }
+    })()
     const unsubClients = subscribeClients(refresh)
     const unsubSales = subscribeAnalytics(refresh)
     return () => {
@@ -148,6 +168,67 @@ export function ClientsPage() {
     toast.success('Customer removed')
   }
 
+  async function handleMigrationFile(file: File) {
+    setImporting(true)
+    setImportPlan(null)
+    try {
+      const XLSX = await import('xlsx')
+      const buf = await file.arrayBuffer()
+      const wb = XLSX.read(buf, { type: 'array' })
+      const sheet =
+        wb.Sheets.Customers ||
+        wb.Sheets.Patients ||
+        wb.Sheets[wb.SheetNames[0]!]
+      if (!sheet) throw new Error('No Customers/Patients sheet found')
+      const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null })
+      const rows = parseMigrationCustomerSheet(raw)
+      const plan = planCustomerMigrationImport(rows, getClients())
+      pendingImportRows.current = rows
+      setImportPlan(plan)
+      toast.message(
+        `Preview: ${plan.toUpdate} update · ${plan.toInsert} insert · ${plan.skipped} skip (no duplicates)`,
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not read migration file')
+      pendingImportRows.current = null
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  async function confirmMigrationImport() {
+    const rows = pendingImportRows.current
+    const plan = importPlan
+    if (!rows || !plan) return
+    const ok = window.confirm(
+      `Apply customer migration?\n\n` +
+        `Update (fill missing only): ${plan.toUpdate}\n` +
+        `Insert (new unique): ${plan.toInsert}\n` +
+        `Skip: ${plan.skipped}\n\n` +
+        `Existing profile values will NOT be overwritten.`,
+    )
+    if (!ok) return
+    setImporting(true)
+    try {
+      const result = await applyCustomerMigrationImport(rows, { syncRemote: true })
+      setClients(getClients())
+      setImportPlan(null)
+      pendingImportRows.current = null
+      toast.success(
+        `Migration done — updated ${result.updated}, inserted ${result.inserted}, skipped ${result.skipped}` +
+          (result.syncedRemote ? ` · synced ${result.syncedRemote} to database` : ''),
+      )
+      if (result.errors.length) {
+        toast.error(`${result.errors.length} sync warning(s) — check console`)
+        console.warn('[customer migration]', result.errors.slice(0, 20))
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Migration failed')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <div className="space-y-5">
       <AdminPageBanner
@@ -163,12 +244,76 @@ export function ClientsPage() {
       <Card className="p-5">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-[#073D2C]">Customer Profile Management</h2>
-          <Link to="/admin/clients/new">
-            <Button>
-              <Plus className="h-4 w-4" /> Add Customer
-            </Button>
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            {hqView ? (
+              <>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    e.target.value = ''
+                    if (file) void handleMigrationFile(file)
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={importing}
+                  onClick={() => importFileRef.current?.click()}
+                >
+                  <FileSpreadsheet className="h-4 w-4" />
+                  {importing ? 'Reading…' : 'Import migration'}
+                </Button>
+                <a href="/templates/customer_migration_import.xlsx" download>
+                  <Button type="button" variant="secondary">
+                    Download import template
+                  </Button>
+                </a>
+              </>
+            ) : null}
+            <Link to="/admin/clients/new">
+              <Button>
+                <Plus className="h-4 w-4" /> Add Customer
+              </Button>
+            </Link>
+          </div>
         </div>
+
+        {hqView && importPlan ? (
+          <div className="mb-5 rounded-[12px] border border-[#C5A059]/40 bg-amber-50/60 px-4 py-3 text-sm text-[#073D2C]">
+            <p className="font-semibold">Migration preview (no changes applied yet)</p>
+            <p className="mt-1 text-slate-ui">
+              {importPlan.totalRows} rows →{' '}
+              <span className="font-medium text-[#073D2C]">{importPlan.toUpdate} fill missing</span>
+              {' · '}
+              <span className="font-medium text-[#073D2C]">{importPlan.toInsert} new</span>
+              {' · '}
+              {importPlan.skipped} skip
+            </p>
+            <p className="mt-1 text-xs text-slate-ui">
+              Match order: phone → email → unique full name. Existing values are never overwritten.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button type="button" disabled={importing} onClick={() => void confirmMigrationImport()}>
+                {importing ? 'Applying…' : 'Confirm import'}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={importing}
+                onClick={() => {
+                  setImportPlan(null)
+                  pendingImportRows.current = null
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         <div className="mb-6 flex flex-wrap gap-2">
           <div className="relative min-w-[240px] flex-1">
@@ -211,7 +356,9 @@ export function ClientsPage() {
                   {c.fullName}
                 </h3>
                 <p className="mt-1 text-center text-xs text-slate-ui">
-                  {c.email?.trim() ? c.email : '—'}
+                  {c.email?.trim() && !c.email.toLowerCase().endsWith('@imajica.local')
+                    ? c.email
+                    : '—'}
                 </p>
 
                 <ul className="mt-4 space-y-2.5 text-sm text-slate-ui">
