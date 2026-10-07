@@ -1,7 +1,7 @@
 import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { getBranches } from '@/services/branchService'
-import { getAccessUsers, listAccessUsers } from '@/services/userAccessService'
+import { getAccessUsers, listAccessUsers, preloadAccessUsers } from '@/services/userAccessService'
 import type { AccessUser, Staff, UserRole } from '@/types'
 import { TIMECLOCK_ROLES } from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
@@ -385,47 +385,49 @@ export async function saveEmployeeHrDetails(
   return applyHr({ ...staff, fullName }, next)
 }
 
-/**
- * Active non-doctor staff for booking checkout.
- * When branchId is set, only accounts tagged to that clinic (Branches Accounts / kiosk).
- */
-export function getActiveStaffForBooking(branchId?: string): Staff[] {
+const BOOKING_STAFF_ROLES = new Set<string>([
+  ...TIMECLOCK_ROLES.filter((r) => r !== 'DOCTOR'),
+  'BRANCH_ADMIN',
+])
+
+function staffForBookingFromUsers(users: AccessUser[], branchId?: string): Staff[] {
+  const local = readLocalHr()
   if (!branchId) {
     return mergeStaffById(
-      getDirectoryStaff().filter((s) => s.status === 'active' && s.role !== 'DOCTOR'),
+      users
+        .filter(
+          (u) =>
+            u.status === 'active' &&
+            isDirectoryEmployee(u) &&
+            BOOKING_STAFF_ROLES.has(u.role as UserRole),
+        )
+        .map((u) => applyHr(accessUserToStaff(u), local[u.id])),
     )
   }
-
-  const bookingRoles = new Set<string>([
-    ...TIMECLOCK_ROLES.filter((r) => r !== 'DOCTOR'),
-    'BRANCH_ADMIN',
-  ])
-
-  const local = readLocalHr()
   return mergeStaffById(
-    getAccessUsers()
+    users
       .filter(
         (u) =>
           u.status === 'active' &&
           Boolean(u.branchId) &&
           matchesStaffBranch(u, branchId) &&
-          bookingRoles.has(u.role as UserRole),
+          BOOKING_STAFF_ROLES.has(u.role as UserRole),
       )
       .map((u) => applyHr(accessUserToStaff(u), local[u.id])),
   )
 }
 
-/** Active doctors for booking checkout, scoped to a branch when provided. */
-export function getActiveDoctorsForBooking(branchId?: string): Staff[] {
+function doctorsForBookingFromUsers(users: AccessUser[], branchId?: string): Staff[] {
+  const local = readLocalHr()
   if (!branchId) {
     return mergeStaffById(
-      getDirectoryStaff().filter((s) => s.status === 'active' && s.role === 'DOCTOR'),
+      users
+        .filter((u) => u.status === 'active' && u.role === 'DOCTOR' && isDirectoryEmployee(u))
+        .map((u) => applyHr(accessUserToStaff(u), local[u.id])),
     )
   }
-
-  const local = readLocalHr()
   return mergeStaffById(
-    getAccessUsers()
+    users
       .filter(
         (u) =>
           u.status === 'active' &&
@@ -435,4 +437,29 @@ export function getActiveDoctorsForBooking(branchId?: string): Staff[] {
       )
       .map((u) => applyHr(accessUserToStaff(u), local[u.id])),
   )
+}
+
+/**
+ * Active non-doctor staff for booking checkout (sync — local cache only).
+ * Prefer listActiveStaffForBooking so newly registered accounts appear.
+ */
+export function getActiveStaffForBooking(branchId?: string): Staff[] {
+  return staffForBookingFromUsers(getAccessUsers(), branchId)
+}
+
+/** Live directory — includes staff registered in Supabase (e.g. Pasig). */
+export async function listActiveStaffForBooking(branchId?: string): Promise<Staff[]> {
+  const users = await preloadAccessUsers()
+  return staffForBookingFromUsers(users, branchId)
+}
+
+/** Active doctors for booking checkout (sync — local cache only). */
+export function getActiveDoctorsForBooking(branchId?: string): Staff[] {
+  return doctorsForBookingFromUsers(getAccessUsers(), branchId)
+}
+
+/** Live doctors for booking checkout. */
+export async function listActiveDoctorsForBooking(branchId?: string): Promise<Staff[]> {
+  const users = await preloadAccessUsers()
+  return doctorsForBookingFromUsers(users, branchId)
 }

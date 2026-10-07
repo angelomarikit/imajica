@@ -5,11 +5,10 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { useAuth } from '@/contexts/AuthContext'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
-import { demoBranches } from '@/constants/demoData'
-import { getBranches } from '@/services/branchService'
+import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import {
   getClients,
-  registerClient,
+  registerClientAndSync,
   subscribeClients,
 } from '@/services/clientService'
 import type { Client } from '@/types'
@@ -60,11 +59,19 @@ export function SelectPatientModal({
 
   const scopedClients = useMemo(() => {
     if (!branchScoped) return clients
-    const branchId = forcedBranchId ?? user?.branchId
+    const rawBranchId = forcedBranchId ?? user?.branchId
+    const clinicId = resolveClinicBranchId(rawBranchId) || resolveClinicBranchId(user?.branchName) || rawBranchId
     const branchName = user?.branchName?.toLowerCase()
+    const nameToken = branchName?.split(',')[0]?.trim() || ''
     return clients.filter((c) => {
-      if (branchId && c.preferredBranchId === branchId) return true
+      const clientClinicId =
+        resolveClinicBranchId(c.preferredBranchId) ||
+        resolveClinicBranchId(c.preferredBranchName) ||
+        c.preferredBranchId
+      if (clinicId && clientClinicId === clinicId) return true
+      if (rawBranchId && c.preferredBranchId === rawBranchId) return true
       if (branchName && c.preferredBranchName?.toLowerCase() === branchName) return true
+      if (nameToken && c.preferredBranchName?.toLowerCase().includes(nameToken)) return true
       return false
     })
   }, [clients, branchScoped, forcedBranchId, user?.branchId, user?.branchName])
@@ -81,17 +88,21 @@ export function SelectPatientModal({
   }, [scopedClients, applied])
 
   function resolveBranch() {
-    const branchId = forcedBranchId ?? user?.branchId
-    if (branchId) {
-      const fromDb = getBranches().find((b) => b.id === branchId)
-      if (fromDb) return { id: fromDb.id, name: fromDb.name.replace(/ Branch$/, '') }
-      if (user?.branchName) return { id: branchId, name: user.branchName.replace(/ Branch$/, '') }
+    const rawId = forcedBranchId ?? user?.branchId
+    const clinicId =
+      resolveClinicBranchId(rawId) ||
+      resolveClinicBranchId(user?.branchName)
+    if (clinicId) {
+      const fromDb = getBranches().find((b) => b.id === clinicId)
+      return {
+        id: clinicId,
+        name: (fromDb?.name || user?.branchName || 'Clinic').replace(/ Branch$/, ''),
+      }
     }
-    const fallback = demoBranches[0]
-    return {
-      id: fallback?.id ?? 'br-pasig',
-      name: (fallback?.name ?? 'Pasig').replace(/ Branch$/, ''),
+    if (rawId && user?.branchName) {
+      return { id: rawId, name: user.branchName.replace(/ Branch$/, '') }
     }
+    throw new Error('No clinic branch assigned — cannot register patient')
   }
 
   function handleSearch(e?: FormEvent) {
@@ -99,7 +110,7 @@ export function SelectPatientModal({
     setApplied(query)
   }
 
-  function handleAddPatient(e: FormEvent) {
+  async function handleAddPatient(e: FormEvent) {
     e.preventDefault()
     if (!firstName.trim() || !lastName.trim()) {
       toast.error('First and last name are required')
@@ -109,10 +120,16 @@ export function SelectPatientModal({
       toast.error('Contact number is required')
       return
     }
-    const branch = resolveBranch()
+    let branch: { id: string; name: string }
+    try {
+      branch = resolveBranch()
+    } catch {
+      toast.error('Your account has no clinic branch — contact HQ')
+      return
+    }
     setSaving(true)
     try {
-      const client = registerClient({
+      const client = await registerClientAndSync({
         firstName,
         middleName,
         lastName,
@@ -141,6 +158,8 @@ export function SelectPatientModal({
       setAddress('')
       setEmergencyName('')
       setEmergencyPhone('')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save patient')
     } finally {
       setSaving(false)
     }

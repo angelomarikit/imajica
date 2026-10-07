@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { useAuth } from '@/contexts/AuthContext'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { useBranch } from '@/contexts/BranchContext'
 import { createAppointment, ensureBookingClient, toDateKey } from '@/services/appointmentService'
@@ -12,8 +13,10 @@ import { recordBookingCheckout } from '@/services/salesService'
 import {
   getActiveDoctorsForBooking,
   getActiveStaffForBooking,
+  listActiveDoctorsForBooking,
+  listActiveStaffForBooking,
 } from '@/services/staffDirectoryService'
-import type { Client, PaymentMethod } from '@/types'
+import type { Client, PaymentMethod, Staff } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import { isUuid } from '@/utils/uuid'
@@ -91,6 +94,7 @@ export function BookingCheckoutModal({
   onClose: () => void
   onPlaced: () => void
 }) {
+  const { user } = useAuth()
   const { selectedBranchId, selectedBranch } = useBranch()
   const forcedBranchId = useForcedBranchId()
 
@@ -107,15 +111,34 @@ export function BookingCheckoutModal({
     patient.preferredBranchName ||
     ''
 
-  const staffOptions = useMemo(() => {
-    if (!branchId) return []
-    return getActiveStaffForBooking(branchId)
-  }, [branchId])
+  const [staffOptions, setStaffOptions] = useState<Staff[]>(() =>
+    branchId ? getActiveStaffForBooking(branchId) : [],
+  )
+  const [doctorOptions, setDoctorOptions] = useState<Staff[]>(() =>
+    branchId ? getActiveDoctorsForBooking(branchId) : [],
+  )
 
-  const doctorOptions = useMemo(() => {
-    if (!branchId) return []
-    return getActiveDoctorsForBooking(branchId)
-  }, [branchId])
+  useEffect(() => {
+    if (!open || !branchId) {
+      setStaffOptions([])
+      setDoctorOptions([])
+      return
+    }
+    setStaffOptions(getActiveStaffForBooking(branchId))
+    setDoctorOptions(getActiveDoctorsForBooking(branchId))
+    let cancelled = false
+    void Promise.all([
+      listActiveStaffForBooking(branchId),
+      listActiveDoctorsForBooking(branchId),
+    ]).then(([staff, doctors]) => {
+      if (cancelled) return
+      setStaffOptions(staff)
+      setDoctorOptions(doctors)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [open, branchId])
 
   const referrers = useMemo(() => {
     let list = getClients().filter((c) => c.id !== patient.id && c.status !== 'inactive')
@@ -154,7 +177,7 @@ export function BookingCheckoutModal({
     setDoctorId('')
   }, [open, total, patient.id])
 
-  // Drop invalid staff selection when branch roster changes
+  // Drop invalid staff selection when branch roster changes; default to signed-in seller
   useEffect(() => {
     if (primaryStaffId && !staffOptions.some((s) => s.id === primaryStaffId)) {
       setPrimaryStaffId('')
@@ -162,7 +185,10 @@ export function BookingCheckoutModal({
     if (doctorId && !doctorOptions.some((d) => d.id === doctorId)) {
       setDoctorId('')
     }
-  }, [staffOptions, doctorOptions, primaryStaffId, doctorId])
+    if (!primaryStaffId && user?.id && staffOptions.some((s) => s.id === user.id)) {
+      setPrimaryStaffId(user.id)
+    }
+  }, [staffOptions, doctorOptions, primaryStaffId, doctorId, user?.id])
 
   const referrerMatches = useMemo(() => {
     const q = referrerQuery.trim().toLowerCase()

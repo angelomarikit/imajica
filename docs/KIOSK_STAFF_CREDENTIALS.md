@@ -23,7 +23,7 @@ Portal login (optional) uses the emails below.
 | 023 | Janice Aguirre | janice.aguirre@imajica.com | San Mateo, Rizal | Imajica123 |
 | 024 | Annie Barba | annie.barba@imajica.com | Pasig City | Imajica123 |
 | 025 | Chloe Renee Francisco | chloe.renee.francisco@imajica.com | Cainta, Rizal | Imajica123 |
-| 026 | Sapiya Lomodah | sapiya.lomodah@imajica.com | San Mateo, Rizal | Imajica123 |
+| 026 | Sapiya Lomodag | sapiya.lomodag@imajica.com | Pasig City | Imajica123 |
 | 027 | Ynyr Collene Bandoquillo | ynyr.collene.bandoquillo@imajica.com | San Mateo, Rizal | Imajica123 |
 
 ## How punching works

@@ -4,7 +4,7 @@ import {
   findClientProfileSeed,
   normalizeClientName,
 } from '@/constants/clientProfileSeed'
-import { getBranches } from '@/services/branchService'
+import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 
 const STORAGE_KEY = 'imajica_clients'
@@ -225,6 +225,11 @@ export type NewClientInput = {
 
 /** After local register — try match Marketing handoff by full name + phone */
 export function registerClient(input: NewClientInput & { marketingLeadId?: string }): Client {
+  const resolvedBranchId =
+    resolveClinicBranchId(input.branchId) ||
+    resolveClinicBranchId(input.branchName) ||
+    input.branchId
+  const branch = getBranches().find((b) => b.id === resolvedBranchId)
   const fullName = [input.firstName, input.middleName, input.lastName]
     .map((p) => p?.trim())
     .filter(Boolean)
@@ -240,8 +245,8 @@ export function registerClient(input: NewClientInput & { marketingLeadId?: strin
     address: input.address.trim(),
     occupation: input.occupation?.trim() || undefined,
     middleName: input.middleName?.trim() || undefined,
-    preferredBranchId: input.branchId,
-    preferredBranchName: input.branchName,
+    preferredBranchId: resolvedBranchId,
+    preferredBranchName: branch?.name || input.branchName,
     status: 'active',
     isVip: false,
     avatarUrl: input.avatarUrl,
@@ -267,6 +272,57 @@ export function registerClient(input: NewClientInput & { marketingLeadId?: strin
     )
     .catch(() => undefined)
   return saved
+}
+
+/**
+ * Register patient locally + sync to Supabase (UUID + preferred_branch_id)
+ * so Pasig / Cainta / San Mateo lists and Select Patient can find them.
+ */
+export async function registerClientAndSync(
+  input: NewClientInput & { marketingLeadId?: string },
+): Promise<Client> {
+  const local = registerClient(input)
+  if (!isSupabaseConfigured || !supabase) return local
+
+  try {
+    const { ensureBookingClient } = await import('@/services/appointmentService')
+    const remote = await ensureBookingClient({
+      clientId: local.id,
+      fullName: local.fullName,
+      email: local.email,
+      phone: local.phone,
+      branchId: local.preferredBranchId,
+    })
+
+    if (remote.id && remote.id !== local.id) {
+      deleteClient(local.id)
+    }
+
+    const clinicId =
+      resolveClinicBranchId(local.preferredBranchId) ||
+      resolveClinicBranchId(local.preferredBranchName) ||
+      local.preferredBranchId
+    const clinic = getBranches().find((b) => b.id === clinicId)
+    const synced: Client = {
+      ...local,
+      id: remote.id || local.id,
+      fullName: remote.fullName || local.fullName,
+      email: remote.email || local.email,
+      phone: remote.phone || local.phone,
+      preferredBranchId: clinicId,
+      preferredBranchName: clinic?.name || local.preferredBranchName,
+    }
+    const saved = saveClient(synced)
+    try {
+      await persistClientToSupabase(saved)
+    } catch (err) {
+      console.warn('[clients] profile sync after register', err)
+    }
+    return saved
+  } catch (err) {
+    console.warn('[clients] remote register failed — kept local row', err)
+    return local
+  }
 }
 
 /** Merge sales-import clients; never wipe contact details with empty sales rows. */

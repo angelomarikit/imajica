@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { getBranches } from '@/services/branchService'
-import { registerClient } from '@/services/clientService'
+import { registerClientAndSync } from '@/services/clientService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
@@ -78,7 +78,7 @@ export function NewClientPage() {
     reader.readAsDataURL(file)
   }
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!firstName.trim() || !lastName.trim()) {
       toast.error('First and last name are required')
@@ -99,7 +99,7 @@ export function NewClientPage() {
 
     setSaving(true)
     try {
-      const client = registerClient({
+      const client = await registerClientAndSync({
         firstName,
         lastName,
         email,
@@ -124,6 +124,8 @@ export function NewClientPage() {
           : `${client.fullName} registered (${client.code})`,
       )
       navigate(`/admin/clients/${client.id}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not register customer')
     } finally {
       setSaving(false)
     }

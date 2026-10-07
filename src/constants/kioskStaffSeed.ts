@@ -58,7 +58,7 @@ export const KIOSK_STAFF_SEED: KioskStaffSeed[] = [
   staff('Janice Aguirre', 'janice.aguirre', '023', BRANCH_IDS.sanMateo, 'San Mateo, Rizal', 9),
   staff('Annie Barba', 'annie.barba', '024', BRANCH_IDS.pasig, 'Pasig City', 10),
   staff('Chloe Renee Francisco', 'chloe.renee.francisco', '025', BRANCH_IDS.cainta, 'Cainta, Rizal', 11),
-  staff('Sapiya Lomodah', 'sapiya.lomodah', '026', BRANCH_IDS.sanMateo, 'San Mateo, Rizal', 12),
+  staff('Sapiya Lomodag', 'sapiya.lomodag', '026', BRANCH_IDS.pasig, 'Pasig City', 12),
   staff('Ynyr Collene Bandoquillo', 'ynyr.collene.bandoquillo', '027', BRANCH_IDS.sanMateo, 'San Mateo, Rizal', 13),
 ]
 

@@ -1,4 +1,4 @@
-import { getBranches } from '@/services/branchService'
+import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import { deleteClient, getClientById, getClients, registerClient, saveClient } from '@/services/clientService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import type { Appointment, AppointmentStatus } from '@/types'
@@ -308,7 +308,8 @@ function persistLocalBookingClient(input: {
   branchId: string
   existing?: ReturnType<typeof getClientById>
 }) {
-  const branch = getBranches().find((b) => b.id === input.branchId)
+  const clinicId = resolveClinicBranchId(input.branchId) || input.branchId
+  const branch = getBranches().find((b) => b.id === clinicId)
   const byName = getClients().find(
     (c) =>
       c.id !== input.id &&
@@ -327,7 +328,7 @@ function persistLocalBookingClient(input: {
     dateOfBirth: base?.dateOfBirth || '',
     gender: base?.gender || 'prefer_not_to_say',
     address: base?.address || '',
-    preferredBranchId: input.branchId || base?.preferredBranchId || '',
+    preferredBranchId: clinicId || base?.preferredBranchId || '',
     preferredBranchName: branch?.name || base?.preferredBranchName || '',
     status: 'active',
     isVip: base?.isVip ?? false,
@@ -368,7 +369,8 @@ async function ensureRemoteClient(input: {
   const fullName = input.fullName.trim()
   const email = input.email?.trim() || ''
   const phone = input.phone?.trim() || ''
-  const branchId = isUuid(input.branchId) ? input.branchId : null
+  const resolvedClinicId = resolveClinicBranchId(input.branchId) || input.branchId
+  const branchId = isUuid(resolvedClinicId) ? resolvedClinicId : null
   const clientId = isUuid(input.clientId) ? input.clientId! : null
 
   const mirror = (id: string, name: string, mail?: string, tel?: string) => {
@@ -377,7 +379,7 @@ async function ensureRemoteClient(input: {
       fullName: name,
       email: mail || email,
       phone: tel || phone,
-      branchId: input.branchId,
+      branchId: branchId || resolvedClinicId || input.branchId,
       existing: getClientById(id) || getClientById(input.clientId || ''),
     })
     return {

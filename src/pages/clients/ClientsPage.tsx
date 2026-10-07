@@ -30,6 +30,7 @@ import { subscribeAnalytics } from '@/services/analyticsService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { resolveClinicBranchId } from '@/services/branchService'
 import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
 function initials(name: string) {
@@ -97,15 +98,18 @@ export function ClientsPage() {
     if (!hqView && (branchScoped || forcedBranchId)) {
       const branchId = forcedBranchId ?? user?.branchId
       const branchName = user?.branchName?.toLowerCase()
+      const clinicId =
+        resolveClinicBranchId(branchId) || resolveClinicBranchId(user?.branchName) || branchId
+      const nameToken = branchName?.split(',')[0]?.trim() || ''
       list = list.filter((c) => {
+        const clientClinicId =
+          resolveClinicBranchId(c.preferredBranchId) ||
+          resolveClinicBranchId(c.preferredBranchName) ||
+          c.preferredBranchId
+        if (clinicId && clientClinicId === clinicId) return true
         if (branchId && c.preferredBranchId === branchId) return true
         if (branchName && c.preferredBranchName?.toLowerCase() === branchName) return true
-        if (
-          branchName &&
-          c.preferredBranchName?.toLowerCase().includes(branchName.split(',')[0] || '')
-        ) {
-          return true
-        }
+        if (nameToken && c.preferredBranchName?.toLowerCase().includes(nameToken)) return true
         return false
       })
     }
