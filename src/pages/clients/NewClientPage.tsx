@@ -4,11 +4,11 @@ import { Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { getBranches } from '@/services/branchService'
+import { getClinicBranches } from '@/services/branchService'
 import { registerClientAndSync } from '@/services/clientService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
-import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 
 const fieldLabel =
   'mb-1.5 block text-[11px] font-bold uppercase tracking-[0.12em] text-charcoal'
@@ -27,11 +27,20 @@ export function NewClientPage() {
   const handoffLeadId = searchParams.get('handoff') || undefined
   const fileRef = useRef<HTMLInputElement>(null)
   const forcedBranchId = useForcedBranchId()
+  const effectiveBranchId = useEffectiveBranchId()
   const branchOptions = useMemo(() => {
-    const all = getBranches().filter((b) => b.code !== 'HQ')
+    // Company-owned + franchise clinics (Dasma / Bacoor included)
+    const all = getClinicBranches()
     if (forcedBranchId) return all.filter((b) => b.id === forcedBranchId)
     return all
   }, [forcedBranchId])
+
+  const defaultBranchId =
+    searchParams.get('branchId') ||
+    forcedBranchId ||
+    (effectiveBranchId !== 'all' ? effectiveBranchId : '') ||
+    branchOptions[0]?.id ||
+    ''
 
   const prefillName = searchParams.get('name')?.trim() || ''
   const nameParts = useMemo(() => {
@@ -46,9 +55,7 @@ export function NewClientPage() {
   const [phone, setPhone] = useState(searchParams.get('phone') || '')
   const [dateOfBirth, setDateOfBirth] = useState('')
   const [gender, setGender] = useState<Client['gender'] | ''>('')
-  const [branchId, setBranchId] = useState(
-    searchParams.get('branchId') || forcedBranchId || branchOptions[0]?.id || '',
-  )
+  const [branchId, setBranchId] = useState(defaultBranchId)
   const [occupation, setOccupation] = useState('')
   const [address, setAddress] = useState('')
   const [emergencyContactName, setEmergencyContactName] = useState('')
@@ -296,6 +303,7 @@ export function NewClientPage() {
                   {branchOptions.map((b) => (
                     <option key={b.id} value={b.id}>
                       {b.name.replace(/ Branch$/, '')}
+                      {b.branchType === 'franchise' ? ' (Franchise)' : ''}
                     </option>
                   ))}
                 </select>

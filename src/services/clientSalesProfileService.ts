@@ -1,6 +1,7 @@
 import { PACKAGE_CATALOG_SEED } from '@/constants/packageCatalogSeed'
 import { PRODUCT_CATALOG_SEED } from '@/constants/productCatalogSeed'
 import { SERVICE_CATALOG_SEED } from '@/constants/serviceCatalogSeed'
+import { resolveClinicBranchId } from '@/services/branchService'
 import { compareClientsByRecentAvail, upsertClientsFromSalesImport } from '@/services/clientService'
 import type { Client, Sale } from '@/types'
 
@@ -10,6 +11,12 @@ const BRANCH_IDS: Record<string, string> = {
   'San Mateo, Rizal': '22222222-2222-2222-2222-222222222201',
   'Cainta, Rizal': '22222222-2222-2222-2222-222222222202',
   'Pasig City': '22222222-2222-2222-2222-222222222203',
+  'Lipa, Batangas': '22222222-2222-2222-2222-222222222204',
+  'Dasmariñas, Cavite': '22222222-2222-2222-2222-222222222205',
+  'Dasmarinas, Cavite': '22222222-2222-2222-2222-222222222205',
+  Dasma: '22222222-2222-2222-2222-222222222205',
+  'Bacoor, Cavite': '22222222-2222-2222-2222-222222222206',
+  Bacoor: '22222222-2222-2222-2222-222222222206',
 }
 
 export type CatalogMatch = {
@@ -220,7 +227,10 @@ export function buildClientsFromSales(sales: Sale[]): Client[] {
       dateOfBirth: '',
       gender: 'prefer_not_to_say',
       address: '',
-      preferredBranchId: BRANCH_IDS[preferredBranchName] || BRANCH_IDS['Pasig City']!,
+      preferredBranchId:
+        resolveClinicBranchId(preferredBranchName) ||
+        BRANCH_IDS[preferredBranchName] ||
+        BRANCH_IDS['Pasig City']!,
       preferredBranchName,
       status: 'active',
       isVip: false,

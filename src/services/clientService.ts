@@ -303,7 +303,7 @@ export function registerClient(input: NewClientInput & { marketingLeadId?: strin
 
 /**
  * Register patient locally + sync to Supabase (UUID + preferred_branch_id)
- * so Pasig / Cainta / San Mateo lists and Select Patient can find them.
+ * for all clinics including franchise (Dasma / Bacoor).
  */
 export async function registerClientAndSync(
   input: NewClientInput & { marketingLeadId?: string },
@@ -417,9 +417,8 @@ type RemoteClientRow = {
 }
 
 function mapRemoteClient(row: RemoteClientRow): Client {
-  const branch = row.preferred_branch_id
-    ? getBranches().find((b) => b.id === row.preferred_branch_id)
-    : undefined
+  const clinicId = resolveClinicBranchId(row.preferred_branch_id) || row.preferred_branch_id || ''
+  const branch = clinicId ? getBranches().find((b) => b.id === clinicId) : undefined
   const gender =
     row.gender === 'female' || row.gender === 'male' || row.gender === 'prefer_not_to_say'
       ? row.gender
@@ -435,7 +434,7 @@ function mapRemoteClient(row: RemoteClientRow): Client {
     address: row.address || undefined,
     occupation: row.occupation || undefined,
     middleName: row.middle_name || undefined,
-    preferredBranchId: row.preferred_branch_id || '',
+    preferredBranchId: clinicId,
     preferredBranchName: branch?.name || '',
     status: row.status === 'inactive' ? 'inactive' : 'active',
     isVip: Boolean(row.is_vip),

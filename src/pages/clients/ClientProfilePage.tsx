@@ -24,7 +24,7 @@ import { recomputeClientSalesProfile } from '@/services/clientSalesProfileServic
 import { getClientById, getClients, hydrateClientFromSupabase, persistClientToSupabase, preloadClientsFromSupabase, saveClient, subscribeClients } from '@/services/clientService'
 import { subscribeAnalytics } from '@/services/analyticsService'
 import { getSales, preloadSalesData } from '@/services/salesService'
-import { getBranches } from '@/services/branchService'
+import { getClinicBranches, resolveClinicBranchId } from '@/services/branchService'
 import type { Client } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -86,7 +86,7 @@ export function ClientProfilePage() {
   const [saving, setSaving] = useState(false)
 
   const branches = useMemo(() => {
-    const all = getBranches()
+    const all = getClinicBranches()
     if (forcedBranchId) return all.filter((b) => b.id === forcedBranchId)
     return all
   }, [forcedBranchId])
@@ -96,6 +96,12 @@ export function ClientProfilePage() {
     if (isHqRole(user?.role)) return true
     if (!isBranchOwner(user) && !forcedBranchId) return true
     const branchId = forcedBranchId ?? user?.branchId
+    const clinicId = resolveClinicBranchId(branchId) || resolveClinicBranchId(user?.branchName)
+    const clientClinicId =
+      resolveClinicBranchId(client.preferredBranchId) ||
+      resolveClinicBranchId(client.preferredBranchName) ||
+      client.preferredBranchId
+    if (clinicId && clientClinicId === clinicId) return true
     if (branchId && client.preferredBranchId === branchId) return true
     if (
       user?.branchName &&

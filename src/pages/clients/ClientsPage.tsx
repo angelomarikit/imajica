@@ -36,7 +36,7 @@ import { preloadSalesData, syncClientsFromSalesRegistry } from '@/services/sales
 import { subscribeAnalytics } from '@/services/analyticsService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
-import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { resolveClinicBranchId } from '@/services/branchService'
 import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
@@ -80,6 +80,7 @@ export function ClientsPage() {
   const importFileRef = useRef<HTMLInputElement>(null)
   const pendingImportRows = useRef<ReturnType<typeof parseMigrationCustomerSheet> | null>(null)
   const forcedBranchId = useForcedBranchId()
+  const effectiveBranchId = useEffectiveBranchId()
   const branchScoped = isBranchOwner(user) || Boolean(forcedBranchId)
   const hqView = isHqRole(user?.role)
 
@@ -114,9 +115,12 @@ export function ClientsPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     let list = clients
-    // Branch accounts: only customers assigned to their branch. HQ sees all.
-    if (!hqView && (branchScoped || forcedBranchId)) {
-      const branchId = forcedBranchId ?? user?.branchId
+    // Clinic managers: locked to their branch. HQ: honor header branch (incl. franchise).
+    const filterBranchId =
+      forcedBranchId ||
+      (hqView && effectiveBranchId !== 'all' ? effectiveBranchId : undefined)
+    if (filterBranchId || (!hqView && (branchScoped || forcedBranchId))) {
+      const branchId = filterBranchId ?? forcedBranchId ?? user?.branchId
       const branchName = user?.branchName?.toLowerCase()
       const clinicId =
         resolveClinicBranchId(branchId) || resolveClinicBranchId(user?.branchName) || branchId
@@ -128,8 +132,9 @@ export function ClientsPage() {
           c.preferredBranchId
         if (clinicId && clientClinicId === clinicId) return true
         if (branchId && c.preferredBranchId === branchId) return true
-        if (branchName && c.preferredBranchName?.toLowerCase() === branchName) return true
-        if (nameToken && c.preferredBranchName?.toLowerCase().includes(nameToken)) return true
+        if (!hqView && branchName && c.preferredBranchName?.toLowerCase() === branchName) return true
+        if (!hqView && nameToken && c.preferredBranchName?.toLowerCase().includes(nameToken))
+          return true
         return false
       })
     }
@@ -139,12 +144,22 @@ export function ClientsPage() {
           c.fullName.toLowerCase().includes(q) ||
           c.email.toLowerCase().includes(q) ||
           c.phone.toLowerCase().includes(q) ||
-          c.code.toLowerCase().includes(q),
+          c.code.toLowerCase().includes(q) ||
+          (c.preferredBranchName || '').toLowerCase().includes(q),
       )
     }
     // Always newest → oldest (latest booking/registration first)
     return [...list].sort(compareClientsByRecentAvail)
-  }, [clients, query, forcedBranchId, hqView, branchScoped, user?.branchId, user?.branchName])
+  }, [
+    clients,
+    query,
+    forcedBranchId,
+    effectiveBranchId,
+    hqView,
+    branchScoped,
+    user?.branchId,
+    user?.branchName,
+  ])
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const pageRows = useMemo(
@@ -355,6 +370,13 @@ export function ClientsPage() {
                 <h3 className="mt-4 text-center text-sm font-bold uppercase tracking-wide text-[#0f172a]">
                   {c.fullName}
                 </h3>
+                {c.preferredBranchName?.trim() ? (
+                  <p className="mt-1.5 flex justify-center">
+                    <span className="inline-flex rounded-full bg-[#073D2C]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#073D2C]">
+                      {c.preferredBranchName.replace(/ Branch$/i, '')}
+                    </span>
+                  </p>
+                ) : null}
                 <p className="mt-1 text-center text-xs text-slate-ui">
                   {c.email?.trim() && !c.email.toLowerCase().endsWith('@imajica.local')
                     ? c.email

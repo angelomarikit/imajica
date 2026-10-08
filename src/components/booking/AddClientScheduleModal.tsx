@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Button } from '@/components/ui/Button'
 import { createAppointment, toDateKey } from '@/services/appointmentService'
-import { getBranches } from '@/services/branchService'
+import { getClinicBranches } from '@/services/branchService'
 import type { AppointmentStatus } from '@/types'
 import { cn } from '@/utils/cn'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
@@ -46,7 +46,7 @@ export function AddClientScheduleModal({
 }) {
   const forcedBranchId = useForcedBranchId()
   const branches = useMemo(() => {
-    const all = getBranches().filter((b) => b.code !== 'HQ')
+    const all = getClinicBranches()
     if (forcedBranchId) return all.filter((b) => b.id === forcedBranchId)
     return all
   }, [forcedBranchId])

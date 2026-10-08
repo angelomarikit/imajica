@@ -151,22 +151,78 @@ export function getBranches(): Branch[] {
   return [...byId.values()].sort((a, b) => a.code.localeCompare(b.code))
 }
 
-/** Resolve a clinic branch UUID for Supabase writes (id, code, or name). */
+/** Active clinics only — company-owned + franchise (excludes warehouse / HQ sentinel). */
+export function getClinicBranches(): Branch[] {
+  return getBranches().filter(
+    (b) =>
+      b.status === 'active' &&
+      b.branchType !== 'warehouse' &&
+      b.code !== 'HQ' &&
+      b.id !== '00000000-0000-0000-0000-000000000001',
+  )
+}
+
+/** Short labels used in UI tags / imports → clinic UUID (franchise included). */
+const CLINIC_ALIASES: Record<string, string> = {
+  'san mateo': '22222222-2222-2222-2222-222222222201',
+  'san mateo rizal': '22222222-2222-2222-2222-222222222201',
+  br01: '22222222-2222-2222-2222-222222222201',
+  cainta: '22222222-2222-2222-2222-222222222202',
+  'cainta rizal': '22222222-2222-2222-2222-222222222202',
+  br02: '22222222-2222-2222-2222-222222222202',
+  pasig: '22222222-2222-2222-2222-222222222203',
+  'pasig city': '22222222-2222-2222-2222-222222222203',
+  br03: '22222222-2222-2222-2222-222222222203',
+  lipa: '22222222-2222-2222-2222-222222222204',
+  'lipa batangas': '22222222-2222-2222-2222-222222222204',
+  br04: '22222222-2222-2222-2222-222222222204',
+  dasma: '22222222-2222-2222-2222-222222222205',
+  dasmarinas: '22222222-2222-2222-2222-222222222205',
+  'dasmariñas': '22222222-2222-2222-2222-222222222205',
+  'dasmariñas cavite': '22222222-2222-2222-2222-222222222205',
+  'dasmarinas cavite': '22222222-2222-2222-2222-222222222205',
+  fr01: '22222222-2222-2222-2222-222222222205',
+  bacoor: '22222222-2222-2222-2222-222222222206',
+  'bacoor cavite': '22222222-2222-2222-2222-222222222206',
+  fr02: '22222222-2222-2222-2222-222222222206',
+}
+
+/** Resolve a clinic branch UUID for Supabase writes (id, code, alias, or name). */
 export function resolveClinicBranchId(
   branchIdOrName: string | null | undefined,
 ): string | null {
   if (!branchIdOrName) return null
   const raw = branchIdOrName.trim()
   if (!raw) return null
-  const branches = getBranches().filter((b) => b.branchType !== 'warehouse')
+  const branches = getClinicBranches()
   const byId = branches.find((b) => b.id === raw)
   if (byId) return byId.id
   const byCode = branches.find((b) => b.code.toLowerCase() === raw.toLowerCase())
   if (byCode) return byCode.id
-  const needle = raw.toLowerCase().replace(/,/g, ' ').replace(/\s+/g, ' ').trim()
+  const needle = raw
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/,/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const alias = CLINIC_ALIASES[needle]
+  if (alias) return alias
   const byName = branches.find((b) => {
-    const name = b.name.toLowerCase().replace(/,/g, ' ').replace(/\s+/g, ' ').trim()
-    return name === needle || name.includes(needle) || needle.includes(name.split(' ')[0]!)
+    const name = b.name
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/,/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const first = name.split(' ')[0]!
+    return (
+      name === needle ||
+      name.includes(needle) ||
+      needle.includes(name) ||
+      (first.length >= 4 && (needle.includes(first) || first.includes(needle)))
+    )
   })
   return byName?.id ?? null
 }

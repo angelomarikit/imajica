@@ -26,7 +26,17 @@ export function BranchProvider({ children }: { children: ReactNode }) {
   const [branches, setBranches] = useState<Branch[]>(() => getBranches())
 
   useEffect(() => {
-    const refresh = () => setBranches(getBranches())
+    // Header switcher: clinic locations only (company-owned + franchise). No warehouse.
+    const refresh = () =>
+      setBranches(
+        getBranches().filter(
+          (b) =>
+            b.status === 'active' &&
+            b.branchType !== 'warehouse' &&
+            b.code !== 'HQ' &&
+            b.id !== '00000000-0000-0000-0000-000000000001',
+        ),
+      )
     refresh()
     return subscribeBranches(refresh)
   }, [])

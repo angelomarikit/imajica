@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { useAuth } from '@/contexts/AuthContext'
-import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import {
   getClients,
@@ -30,6 +30,7 @@ export function SelectPatientModal({
 }) {
   const { user } = useAuth()
   const forcedBranchId = useForcedBranchId()
+  const effectiveBranchId = useEffectiveBranchId()
   const hqView = isHqRole(user?.role)
   const branchScoped = !hqView && (isBranchOwner(user) || Boolean(forcedBranchId))
   const [clients, setClients] = useState(() => getClients())
@@ -58,9 +59,13 @@ export function SelectPatientModal({
   }, [open])
 
   const scopedClients = useMemo(() => {
-    if (!branchScoped) return clients
-    const rawBranchId = forcedBranchId ?? user?.branchId
-    const clinicId = resolveClinicBranchId(rawBranchId) || resolveClinicBranchId(user?.branchName) || rawBranchId
+    const filterBranchId =
+      forcedBranchId ||
+      (hqView && effectiveBranchId !== 'all' ? effectiveBranchId : undefined)
+    if (!branchScoped && !filterBranchId) return clients
+    const rawBranchId = filterBranchId ?? forcedBranchId ?? user?.branchId
+    const clinicId =
+      resolveClinicBranchId(rawBranchId) || resolveClinicBranchId(user?.branchName) || rawBranchId
     const branchName = user?.branchName?.toLowerCase()
     const nameToken = branchName?.split(',')[0]?.trim() || ''
     return clients.filter((c) => {
@@ -70,11 +75,20 @@ export function SelectPatientModal({
         c.preferredBranchId
       if (clinicId && clientClinicId === clinicId) return true
       if (rawBranchId && c.preferredBranchId === rawBranchId) return true
-      if (branchName && c.preferredBranchName?.toLowerCase() === branchName) return true
-      if (nameToken && c.preferredBranchName?.toLowerCase().includes(nameToken)) return true
+      if (!hqView && branchName && c.preferredBranchName?.toLowerCase() === branchName) return true
+      if (!hqView && nameToken && c.preferredBranchName?.toLowerCase().includes(nameToken))
+        return true
       return false
     })
-  }, [clients, branchScoped, forcedBranchId, user?.branchId, user?.branchName])
+  }, [
+    clients,
+    branchScoped,
+    forcedBranchId,
+    effectiveBranchId,
+    hqView,
+    user?.branchId,
+    user?.branchName,
+  ])
 
   const matches = useMemo(() => {
     const q = applied.trim().toLowerCase()
@@ -88,10 +102,12 @@ export function SelectPatientModal({
   }, [scopedClients, applied])
 
   function resolveBranch() {
-    const rawId = forcedBranchId ?? user?.branchId
+    const rawId =
+      forcedBranchId ||
+      (hqView && effectiveBranchId !== 'all' ? effectiveBranchId : undefined) ||
+      user?.branchId
     const clinicId =
-      resolveClinicBranchId(rawId) ||
-      resolveClinicBranchId(user?.branchName)
+      resolveClinicBranchId(rawId) || resolveClinicBranchId(user?.branchName)
     if (clinicId) {
       const fromDb = getBranches().find((b) => b.id === clinicId)
       return {
