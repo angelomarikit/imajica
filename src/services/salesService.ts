@@ -374,12 +374,19 @@ export async function deleteExtraSalesByBooking(bookingKey: string): Promise<voi
   clearLocalBooking(bookingKey)
 }
 
+export type BookingPaymentSplit = {
+  paymentMethod: PaymentMethod
+  paymentAmount: number
+}
+
 /**
  * Persist one checkout cart as a single sale header + line items in Supabase,
  * and keep local/UI Sale rows for Today's Booking.
+ * Optional paymentSplits writes one payments row per processor (Split Payment).
  */
 export async function recordBookingCheckout(
   lines: Array<Omit<Sale, 'id'>>,
+  opts?: { paymentSplits?: BookingPaymentSplit[] },
 ): Promise<Sale[]> {
   if (!lines.length) return []
 
@@ -462,14 +469,31 @@ export async function recordBookingCheckout(
       throw new Error(itemError.message || 'Could not save sale items')
     }
 
-    const { error: payError } = await supabase.from('payments').insert({
-      sale_id: saleId,
-      provider: 'pos',
-      payment_method: head.paymentMethod,
-      payment_status: head.status === 'paid' ? 'paid' : 'pending',
-      payment_amount: totalAmount,
-      payment_date: createdAt,
-    })
+    const splits = (opts?.paymentSplits ?? [])
+      .filter((s) => s.paymentAmount > 0 && s.paymentMethod)
+      .map((s) => ({
+        sale_id: saleId,
+        provider: 'pos' as const,
+        payment_method: s.paymentMethod,
+        payment_status: head.status === 'paid' ? 'paid' : 'pending',
+        payment_amount: s.paymentAmount,
+        payment_date: createdAt,
+      }))
+    const paymentRows =
+      splits.length > 0
+        ? splits
+        : [
+            {
+              sale_id: saleId,
+              provider: 'pos' as const,
+              payment_method: head.paymentMethod,
+              payment_status: head.status === 'paid' ? 'paid' : 'pending',
+              payment_amount: totalAmount,
+              payment_date: createdAt,
+            },
+          ]
+
+    const { error: payError } = await supabase.from('payments').insert(paymentRows)
 
     if (payError) {
       // Sale + items already saved — warn but don't wipe the order

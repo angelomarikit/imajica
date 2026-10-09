@@ -177,6 +177,9 @@ export function BookingCheckoutModal({
   const [paymentType, setPaymentType] = useState<BookingPaymentType>('Full Payment')
   const [paymentMethod, setPaymentMethod] = useState<BookingPaymentMethodChoice | ''>('')
   const [paymentAmount, setPaymentAmount] = useState(String(total.toFixed(2)))
+  /** Second processor — shown when Payment Type is Split Payment */
+  const [paymentMethod2, setPaymentMethod2] = useState<BookingPaymentMethodChoice | ''>('')
+  const [paymentAmount2, setPaymentAmount2] = useState('')
   /** Sale / encode date (YYYY-MM-DD) — editable for migrated historical orders */
   const [encodeDate, setEncodeDate] = useState(() => toDateKey(new Date()))
   const [referrerQuery, setReferrerQuery] = useState('')
@@ -186,12 +189,16 @@ export function BookingCheckoutModal({
   const [doctorId, setDoctorId] = useState('')
   const [saving, setSaving] = useState(false)
 
+  const isSplitPayment = paymentType === 'Split Payment'
+
   useEffect(() => {
     if (!open) return
     setLeadSource('Walk-in')
     setPaymentType('Full Payment')
     setPaymentMethod('')
     setPaymentAmount(String(total.toFixed(2)))
+    setPaymentMethod2('')
+    setPaymentAmount2('')
     setEncodeDate(toDateKey(new Date()))
     setReferrerQuery('')
     setReferredById('')
@@ -199,6 +206,21 @@ export function BookingCheckoutModal({
     setPrimaryStaffId('')
     setDoctorId('')
   }, [open, total, patient.id])
+
+  function handlePaymentTypeChange(next: BookingPaymentType) {
+    setPaymentType(next)
+    if (next === 'Split Payment') {
+      const half = Math.round((total / 2) * 100) / 100
+      const rest = Math.round((total - half) * 100) / 100
+      setPaymentAmount(String(half.toFixed(2)))
+      setPaymentAmount2(String(rest.toFixed(2)))
+      if (!paymentMethod2) setPaymentMethod2('')
+    } else {
+      setPaymentMethod2('')
+      setPaymentAmount2('')
+      setPaymentAmount(String(total.toFixed(2)))
+    }
+  }
 
   // Drop invalid staff selection when branch roster changes; default to signed-in seller
   useEffect(() => {
@@ -234,6 +256,16 @@ export function BookingCheckoutModal({
       toast.error('Select a payment method')
       return
     }
+    if (isSplitPayment) {
+      if (!paymentMethod2) {
+        toast.error('Select the second payment method')
+        return
+      }
+      if (paymentMethod2 === paymentMethod) {
+        toast.error('Choose two different payment processors for split payment')
+        return
+      }
+    }
     if (!primaryStaffId) {
       toast.error('Select staff for this order')
       return
@@ -262,12 +294,39 @@ export function BookingCheckoutModal({
       toast.error('Invalid date of encode')
       return
     }
-    const amount = Math.max(0, Number(paymentAmount) || total)
+
+    const amount1 = Math.max(0, Number(paymentAmount) || 0)
+    const amount2 = isSplitPayment ? Math.max(0, Number(paymentAmount2) || 0) : 0
+    if (isSplitPayment) {
+      if (amount1 <= 0 || amount2 <= 0) {
+        toast.error('Enter amounts for both payment processors')
+        return
+      }
+      const splitSum = Math.round((amount1 + amount2) * 100) / 100
+      const due = Math.round(total * 100) / 100
+      if (Math.abs(splitSum - due) > 0.05) {
+        toast.error(
+          `Split amounts must add up to ${formatPesoExact(due)} (currently ${formatPesoExact(splitSum)})`,
+        )
+        return
+      }
+    }
+
+    const amount = isSplitPayment ? amount1 + amount2 : Math.max(0, amount1 || total)
     const pointsDiscount = usePoints ? Math.min(patient.rewardPoints ?? 0, amount) : 0
     const paidAmount = Math.max(0, amount - pointsDiscount)
     const createdAt = start.toISOString()
     const bookingRef = invoiceId
     const durationMinutes = 60
+    const paymentLabel = (m: BookingPaymentMethodChoice) =>
+      PAYMENT_METHODS.find((x) => x.value === m)?.label ?? m
+    const paymentSplits =
+      isSplitPayment && paymentMethod2
+        ? [
+            { paymentMethod: mapPaymentMethod(paymentMethod), paymentAmount: amount1 },
+            { paymentMethod: mapPaymentMethod(paymentMethod2), paymentAmount: amount2 },
+          ]
+        : [{ paymentMethod: mapPaymentMethod(paymentMethod), paymentAmount: paidAmount }]
 
     const branches = getBranches()
     const resolvedId =
@@ -333,14 +392,16 @@ export function BookingCheckoutModal({
           isFirstClientSale: wasFirstVisit,
           totalAmount: lineTotal || line.unitPrice * line.quantity,
           paymentMethod: mapPaymentMethod(paymentMethod),
-          status: (paymentType === 'Full Payment' ? 'paid' : 'pending') as 'paid' | 'pending',
+          status: (paymentType === 'Full Payment' || paymentType === 'Split Payment'
+            ? 'paid'
+            : 'pending') as 'paid' | 'pending',
           createdAt,
           referredByClientId: referredById || undefined,
           referredByName: selectedReferrer?.fullName,
         }
       })
 
-      await recordBookingCheckout(saleLines)
+      await recordBookingCheckout(saleLines, { paymentSplits })
 
       try {
         await createAppointment({
@@ -363,7 +424,9 @@ export function BookingCheckoutModal({
           notes: [
             doctor ? `Doctor: ${doctor.fullName}` : null,
             selectedReferrer ? `Referred by: ${selectedReferrer.fullName}` : null,
-            `Payment: ${paymentType} / ${PAYMENT_METHODS.find((m) => m.value === paymentMethod)?.label}`,
+            isSplitPayment && paymentMethod2
+              ? `Payment: Split · ${paymentLabel(paymentMethod)} ${formatPesoExact(amount1)} + ${paymentLabel(paymentMethod2)} ${formatPesoExact(amount2)}`
+              : `Payment: ${paymentType} / ${paymentLabel(paymentMethod)}`,
             discount > 0 ? `Discount: ${formatPesoExact(discount)}` : null,
           ]
             .filter(Boolean)
@@ -531,7 +594,7 @@ export function BookingCheckoutModal({
                 <select
                   className={fieldControl}
                   value={paymentType}
-                  onChange={(e) => setPaymentType(e.target.value as BookingPaymentType)}
+                  onChange={(e) => handlePaymentTypeChange(e.target.value as BookingPaymentType)}
                 >
                   {PAYMENT_TYPES.map((t) => (
                     <option key={t} value={t}>
@@ -541,7 +604,9 @@ export function BookingCheckoutModal({
                 </select>
               </label>
               <label className="block">
-                <span className={fieldLabel}>Payment Method</span>
+                <span className={fieldLabel}>
+                  {isSplitPayment ? 'Payment Method 1' : 'Payment Method'}
+                </span>
                 <select
                   className={cn(fieldControl, !paymentMethod && 'text-slate-ui/70')}
                   value={paymentMethod}
@@ -559,14 +624,66 @@ export function BookingCheckoutModal({
                 </select>
               </label>
               <label className="block">
-                <span className={fieldLabel}>Payment Amount</span>
+                <span className={fieldLabel}>
+                  {isSplitPayment ? 'Payment Amount 1' : 'Payment Amount'}
+                </span>
                 <input
                   className={fieldControl}
                   value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    setPaymentAmount(next)
+                    if (isSplitPayment) {
+                      const a1 = Math.max(0, Number(next) || 0)
+                      const rest = Math.round((total - a1) * 100) / 100
+                      setPaymentAmount2(String(Math.max(0, rest).toFixed(2)))
+                    }
+                  }}
                   inputMode="decimal"
                 />
               </label>
+              {isSplitPayment ? (
+                <>
+                  <label className="block">
+                    <span className={fieldLabel}>Payment Method 2</span>
+                    <select
+                      className={cn(fieldControl, !paymentMethod2 && 'text-slate-ui/70')}
+                      value={paymentMethod2}
+                      onChange={(e) =>
+                        setPaymentMethod2(e.target.value as BookingPaymentMethodChoice | '')
+                      }
+                      required
+                    >
+                      <option value="">Select Payment Method</option>
+                      {PAYMENT_METHODS.map((m) => (
+                        <option key={m.value} value={m.value} disabled={m.value === paymentMethod}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className={fieldLabel}>Payment Amount 2</span>
+                    <input
+                      className={fieldControl}
+                      value={paymentAmount2}
+                      onChange={(e) => {
+                        const next = e.target.value
+                        setPaymentAmount2(next)
+                        const a2 = Math.max(0, Number(next) || 0)
+                        const rest = Math.round((total - a2) * 100) / 100
+                        setPaymentAmount(String(Math.max(0, rest).toFixed(2)))
+                      }}
+                      inputMode="decimal"
+                      required
+                    />
+                  </label>
+                  <p className="sm:col-span-2 text-[11px] text-slate-ui">
+                    Split must total {formatPesoExact(total)}. Each row is saved as its own payment
+                    processor.
+                  </p>
+                </>
+              ) : null}
               <label className="block sm:col-span-2">
                 <span className={fieldLabel}>Date of Encode</span>
                 <input
