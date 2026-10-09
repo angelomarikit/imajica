@@ -67,6 +67,26 @@ function timeLabelFromDate(d: Date) {
   return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
 }
 
+/** Build local Date from YYYY-MM-DD encode date (keeps current clock time). */
+function dateFromEncodeKey(dateKey: string): Date {
+  const now = new Date()
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey.trim())
+  if (!match) return now
+  const y = Number(match[1])
+  const m = Number(match[2])
+  const d = Number(match[3])
+  if (!y || !m || !d) return now
+  return new Date(
+    y,
+    m - 1,
+    d,
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+    now.getMilliseconds(),
+  )
+}
+
 function mapPaymentMethod(choice: BookingPaymentMethodChoice): PaymentMethod {
   return choice
 }
@@ -157,6 +177,8 @@ export function BookingCheckoutModal({
   const [paymentType, setPaymentType] = useState<BookingPaymentType>('Full Payment')
   const [paymentMethod, setPaymentMethod] = useState<BookingPaymentMethodChoice | ''>('')
   const [paymentAmount, setPaymentAmount] = useState(String(total.toFixed(2)))
+  /** Sale / encode date (YYYY-MM-DD) — editable for migrated historical orders */
+  const [encodeDate, setEncodeDate] = useState(() => toDateKey(new Date()))
   const [referrerQuery, setReferrerQuery] = useState('')
   const [referredById, setReferredById] = useState('')
   const [usePoints, setUsePoints] = useState(false)
@@ -170,6 +192,7 @@ export function BookingCheckoutModal({
     setPaymentType('Full Payment')
     setPaymentMethod('')
     setPaymentAmount(String(total.toFixed(2)))
+    setEncodeDate(toDateKey(new Date()))
     setReferrerQuery('')
     setReferredById('')
     setUsePoints(false)
@@ -230,11 +253,19 @@ export function BookingCheckoutModal({
       return
     }
     const doctor = doctorOptions.find((d) => d.id === doctorId)
-    const start = new Date()
+    if (!encodeDate.trim()) {
+      toast.error('Select the date of encode')
+      return
+    }
+    const start = dateFromEncodeKey(encodeDate)
+    if (Number.isNaN(start.getTime())) {
+      toast.error('Invalid date of encode')
+      return
+    }
     const amount = Math.max(0, Number(paymentAmount) || total)
     const pointsDiscount = usePoints ? Math.min(patient.rewardPoints ?? 0, amount) : 0
     const paidAmount = Math.max(0, amount - pointsDiscount)
-    const createdAt = new Date().toISOString()
+    const createdAt = start.toISOString()
     const bookingRef = invoiceId
     const durationMinutes = 60
 
@@ -535,6 +566,20 @@ export function BookingCheckoutModal({
                   onChange={(e) => setPaymentAmount(e.target.value)}
                   inputMode="decimal"
                 />
+              </label>
+              <label className="block sm:col-span-2">
+                <span className={fieldLabel}>Date of Encode</span>
+                <input
+                  type="date"
+                  className={fieldControl}
+                  value={encodeDate}
+                  max={toDateKey(new Date())}
+                  onChange={(e) => setEncodeDate(e.target.value)}
+                  required
+                />
+                <p className="mt-1 text-[11px] text-slate-ui">
+                  Defaults to today. Change this when recording past sales from the old system.
+                </p>
               </label>
             </div>
           </section>
