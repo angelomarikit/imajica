@@ -52,13 +52,20 @@ export type ClientProductPurchase = {
 export type ClientInstallmentBalance = {
   id: string
   bookingId: string
+  /** booking_ref / invoice used to group installment payments together */
+  groupRef: string
   itemName: string
+  itemType?: Sale['itemType']
+  clientId: string
+  branchId: string
+  branchName: string
+  staffId?: string
+  staffName?: string
   totalAmount: number
   paidAmount: number
   remainingAmount: number
   nextPayment: string
   status: 'pending' | 'paid'
-  branchName: string
 }
 
 export type ClientSessionHistoryRow = {
@@ -349,17 +356,24 @@ export function getInstallmentBalances(
     const totalAmount = cat?.price ?? Math.max(paymentSum, paidAmount)
     // For live checkout: first payment is the amount paid now; remaining = contract - collected
     const remainingAmount = Math.max(0, Math.round((totalAmount - paymentSum) * 100) / 100)
-    const shortId = (first.bookingRef || first.invoiceNumber || first.id).replace(/\D/g, '')
+    const groupRef = first.bookingRef || first.invoiceNumber || first.id
+    const shortId = groupRef.replace(/\D/g, '')
     out.push({
       id: k,
-      bookingId: shortId.length >= 4 ? shortId.slice(-4) : (first.bookingRef || first.invoiceNumber).slice(-6),
+      bookingId: shortId.length >= 4 ? shortId.slice(-4) : groupRef.slice(-6),
+      groupRef,
       itemName: first.treatmentOrPackage,
+      itemType: first.itemType,
+      clientId: first.clientId,
+      branchId: first.branchId,
+      branchName: first.branchName,
+      staffId: first.staffId,
+      staffName: first.staffName,
       totalAmount,
       paidAmount: paymentSum,
       remainingAmount,
       nextPayment: remainingAmount > 0 ? 'Pending' : '—',
       status: remainingAmount > 0 ? 'pending' : 'paid',
-      branchName: first.branchName,
     })
   }
   return out.sort((a, b) => b.totalAmount - a.totalAmount)
