@@ -11,6 +11,7 @@ import {
   type CheckoutCartLine,
 } from '@/components/booking/BookingCheckoutModal'
 import { EnterQuantityModal } from '@/components/booking/EnterQuantityModal'
+import { PatientInstallmentsModal } from '@/components/booking/PatientInstallmentsModal'
 import { SelectPatientModal } from '@/components/booking/SelectPatientModal'
 import { TodaysBookingPanel } from '@/components/booking/TodaysBookingPanel'
 import { Badge } from '@/components/ui/Badge'
@@ -52,6 +53,7 @@ export function BookingPage() {
     (effectiveBranchId !== 'all' ? effectiveBranchId : undefined)
   const [patient, setPatient] = useState<Client | null>(null)
   const [patientOpen, setPatientOpen] = useState(false)
+  const [installmentsOpen, setInstallmentsOpen] = useState(false)
   const [qtyItem, setQtyItem] = useState<CatalogItem | null>(null)
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [tab, setTab] = useState<TabId>('services')
@@ -256,6 +258,13 @@ export function BookingPage() {
           onPlaced={handleOrderPlaced}
         />
       ) : null}
+      {patient ? (
+        <PatientInstallmentsModal
+          open={installmentsOpen}
+          patient={patient}
+          onClose={() => setInstallmentsOpen(false)}
+        />
+      ) : null}
 
       {/* Top status bar */}
       <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
@@ -304,7 +313,18 @@ export function BookingPage() {
           <Button variant="secondary" disabled={!patient}>
             Sessions
           </Button>
-          <Button variant="secondary" disabled={!patient}>
+          <Button
+            variant="secondary"
+            disabled={!patient}
+            onClick={() => {
+              if (!patient) {
+                toast.error('Please select a patient first')
+                setPatientOpen(true)
+                return
+              }
+              setInstallmentsOpen(true)
+            }}
+          >
             Installments
           </Button>
         </div>
