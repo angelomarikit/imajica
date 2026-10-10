@@ -249,18 +249,25 @@ function mergeRemoteSaleLines(mapped: Sale[]) {
 }
 
 /** PostgREST max-rows is typically 1000 — page until exhausted (do not rely on .limit alone). */
-async function fetchRemoteLiveSales(): Promise<Sale[] | null> {
+async function fetchRemoteLiveSales(options?: {
+  branchId?: string
+}): Promise<Sale[] | null> {
   if (!isSupabaseConfigured || !supabase) return []
 
   const pageSize = 1000
   const all: RemoteSaleRow[] = []
   for (let from = 0; from < 50000; from += pageSize) {
     const to = from + pageSize - 1
-    const { data, error } = await supabase
+    let query = supabase
       .from('sales')
       .select(REMOTE_SALES_LIST_SELECT)
       .order('created_at', { ascending: false })
       .range(from, to)
+    if (options?.branchId) {
+      query = query.eq('branch_id', options.branchId)
+    }
+
+    const { data, error } = await query
 
     if (error) {
       console.error('[sales] remote fetch failed', error.message)
@@ -271,6 +278,21 @@ async function fetchRemoteLiveSales(): Promise<Sale[] | null> {
     if (data.length < pageSize) break
   }
   return mapRemoteSales(all)
+}
+
+/**
+ * Pull one clinic's sales into memory first (fast path for Bacoor / Dasma customer lists).
+ * Merges into the cache — does not wipe other branches.
+ */
+export async function ensureBranchRemoteSales(branchId: string): Promise<number> {
+  if (!isSupabaseConfigured || !branchId) return 0
+  const remote = await fetchRemoteLiveSales({ branchId })
+  if (remote == null || remote.length === 0) return 0
+  mergeRemoteSaleLines(remote)
+  loaded = true
+  syncClientsFromSalesRegistry()
+  emitChange()
+  return remote.length
 }
 
 async function lookupClientIdByName(clientName?: string): Promise<string | null> {

@@ -18,6 +18,7 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { useAuth } from '@/contexts/AuthContext'
+import { normalizeClientName } from '@/constants/clientProfileSeed'
 import {
   compareClientsByRecentAvail,
   applyKnownClientProfiles,
@@ -32,7 +33,14 @@ import {
   planCustomerMigrationImport,
   type MigrationImportSummary,
 } from '@/services/customerMigrationImportService'
-import { preloadSalesData, syncClientsFromSalesRegistry } from '@/services/salesService'
+import { recomputeClientSalesProfile } from '@/services/clientSalesProfileService'
+import {
+  ensureBranchRemoteSales,
+  getSales,
+  isSalesDataLoaded,
+  preloadSalesData,
+  syncClientsFromSalesRegistry,
+} from '@/services/salesService'
 import { subscribeAnalytics } from '@/services/analyticsService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
@@ -77,6 +85,8 @@ export function ClientsPage() {
   const [page, setPage] = useState(1)
   const [importing, setImporting] = useState(false)
   const [importPlan, setImportPlan] = useState<MigrationImportSummary | null>(null)
+  const [salesTick, setSalesTick] = useState(0)
+  const [salesReady, setSalesReady] = useState(() => isSalesDataLoaded())
   const importFileRef = useRef<HTMLInputElement>(null)
   const pendingImportRows = useRef<ReturnType<typeof parseMigrationCustomerSheet> | null>(null)
   const forcedBranchId = useForcedBranchId()
@@ -88,15 +98,27 @@ export function ClientsPage() {
     const refresh = () => {
       setClients(getClients())
       setLoading(false)
+      setSalesReady(isSalesDataLoaded())
+      setSalesTick((n) => n + 1)
     }
     setLoading(true)
     applyKnownClientProfiles()
     // 1) Supabase registry first (migrated profiles)
-    // 2) Sales stats layered on top — contact fields preserved
+    // 2) Branch sales first (fast Sessions counts), then full org sales
     void (async () => {
       try {
         await preloadClientsFromSupabase()
         refresh()
+        const branchForSales =
+          forcedBranchId ||
+          (!hqView ? resolveClinicBranchId(user?.branchId) || user?.branchId : undefined) ||
+          (hqView && effectiveBranchId !== 'all'
+            ? resolveClinicBranchId(effectiveBranchId) || effectiveBranchId
+            : undefined)
+        if (branchForSales) {
+          await ensureBranchRemoteSales(branchForSales)
+          refresh()
+        }
         await preloadSalesData()
         syncClientsFromSalesRegistry()
         applyKnownClientProfiles()
@@ -110,7 +132,7 @@ export function ClientsPage() {
       unsubClients()
       unsubSales()
     }
-  }, [])
+  }, [forcedBranchId, effectiveBranchId, hqView, user?.branchId])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -167,6 +189,37 @@ export function ClientsPage() {
     [filtered, page],
   )
   const pageNumbers = useMemo(() => paginationItems(page, pageCount), [page, pageCount])
+
+  /** Live session totals from sales (not stale client.sessionsCount from before sales finish loading). */
+  const sessionsByClient = useMemo(() => {
+    void salesTick
+    const map = new Map<string, number>()
+    const byId = new Map<string, { name: string; rows: ReturnType<typeof getSales> }>()
+    for (const s of getSales()) {
+      if (!s.clientId) continue
+      let bucket = byId.get(s.clientId)
+      if (!bucket) {
+        bucket = { name: s.clientName, rows: [] }
+        byId.set(s.clientId, bucket)
+      }
+      bucket.rows.push(s)
+    }
+    for (const [id, { name, rows }] of byId) {
+      const n = recomputeClientSalesProfile(id, rows, name).sessionsCount
+      map.set(id, n)
+      const nameKey = normalizeClientName(name)
+      if (nameKey) map.set(`n:${nameKey}`, Math.max(map.get(`n:${nameKey}`) ?? 0, n))
+    }
+    return map
+  }, [salesTick])
+
+  function sessionsLabel(c: Client): string {
+    if (!salesReady) return '…'
+    const live =
+      sessionsByClient.get(c.id) ??
+      sessionsByClient.get(`n:${normalizeClientName(c.fullName)}`)
+    return String(live ?? c.sessionsCount ?? 0)
+  }
 
   useEffect(() => {
     if (page > pageCount) setPage(pageCount)
@@ -400,7 +453,7 @@ export function ClientsPage() {
                     <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[11px] font-bold text-[#C5A059]">
                       #
                     </span>
-                    <span>Sessions: {c.sessionsCount ?? 0}</span>
+                    <span>Sessions: {sessionsLabel(c)}</span>
                   </li>
                 </ul>
 
