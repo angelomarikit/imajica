@@ -76,8 +76,8 @@ export function PatientInstallmentsModal({
     setPaying(null)
     void (async () => {
       try {
-        await preloadSalesData()
-        await ensureClientRemoteSales(patient.id)
+        await ensureClientRemoteSales(patient.id, patient.fullName)
+        void preloadSalesData()
       } catch {
         /* ignore */
       } finally {

@@ -135,9 +135,18 @@ export function ClientProfilePage() {
     if (tab !== 'services') return
     let cancelled = false
     void (async () => {
-      await preloadSalesData()
-      if (id) await ensureClientRemoteSales(id)
-      if (!cancelled) setSalesTick((n) => n + 1)
+      // Load THIS client's sales first (fast) — do not wait on the full org dump
+      if (id) {
+        const result = await ensureClientRemoteSales(id, client?.fullName)
+        if (!cancelled && result.resolvedClientId && result.resolvedClientId !== id) {
+          const synced = getClientById(result.resolvedClientId)
+          if (synced) setClient(synced)
+        }
+        if (!cancelled) setSalesTick((n) => n + 1)
+      }
+      void preloadSalesData().then(() => {
+        if (!cancelled) setSalesTick((n) => n + 1)
+      })
     })()
     const unsubSales = subscribeAnalytics(() => {
       if (!cancelled) setSalesTick((n) => n + 1)
@@ -146,7 +155,7 @@ export function ClientProfilePage() {
       cancelled = true
       unsubSales()
     }
-  }, [tab, id])
+  }, [tab, id, client?.fullName])
 
   if (client && !canViewClient) {
     return <Navigate to="/admin/clients" replace />

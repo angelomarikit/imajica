@@ -1,5 +1,6 @@
 import type { PaymentMethod, Sale } from '@/types'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { getBranches } from '@/services/branchService'
 import {
   buildClientsFromSales,
   recomputeClientSalesProfile,
@@ -138,11 +139,19 @@ function oneName(
   return (row?.[key] as string | undefined) || ''
 }
 
+function branchNameFor(branchId: string, nested?: RemoteSaleRow['branches']): string {
+  const fromJoin = oneName(nested, 'name')
+  if (fromJoin) return fromJoin
+  return getBranches().find((b) => b.id === branchId)?.name || 'Branch'
+}
+
 function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
   const out: Sale[] = []
   for (const row of rows) {
-    const clientName = oneName(row.clients, 'full_name') || 'Client'
-    const branchName = oneName(row.branches, 'name') || 'Branch'
+    const fromJoin = oneName(row.clients, 'full_name')
+    const fromLocal = row.client_id ? getClientById(row.client_id)?.fullName : undefined
+    const clientName = fromJoin || fromLocal || 'Client'
+    const branchName = branchNameFor(row.branch_id, row.branches)
     const paymentMethod = (row.payments?.[0]?.payment_method || 'cash') as PaymentMethod
     const items = row.sale_items?.length
       ? row.sale_items
@@ -155,6 +164,8 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
             line_total: Number(row.total_amount),
             item_type: 'service',
             sku: null,
+            sessions_total: null,
+            sessions_completed: null,
           },
         ]
 
@@ -205,7 +216,16 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
   return out
 }
 
-const REMOTE_SALES_SELECT = `
+/** Lightweight list select — sale_items only (branch names resolved locally). */
+const REMOTE_SALES_LIST_SELECT = `
+      id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
+      invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
+      contract_amount,
+      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed )
+    `
+
+/** Richer select for a single client profile (names + payments). */
+const REMOTE_SALES_CLIENT_SELECT = `
       id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
       invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
       contract_amount,
@@ -214,6 +234,14 @@ const REMOTE_SALES_SELECT = `
       clients!client_id ( full_name ),
       branches!branch_id ( name )
     `
+
+function mergeRemoteSaleLines(mapped: Sale[]) {
+  if (!mapped.length) return
+  const byId = new Map(remoteLiveSales.map((s) => [s.id, s]))
+  for (const row of mapped) byId.set(row.id, row)
+  remoteLiveSales = [...byId.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  emitChange()
+}
 
 /** PostgREST max-rows is typically 1000 — page until exhausted (do not rely on .limit alone). */
 async function fetchRemoteLiveSales(): Promise<Sale[] | null> {
@@ -225,7 +253,7 @@ async function fetchRemoteLiveSales(): Promise<Sale[] | null> {
     const to = from + pageSize - 1
     const { data, error } = await supabase
       .from('sales')
-      .select(REMOTE_SALES_SELECT)
+      .select(REMOTE_SALES_LIST_SELECT)
       .order('created_at', { ascending: false })
       .range(from, to)
 
@@ -240,29 +268,92 @@ async function fetchRemoteLiveSales(): Promise<Sale[] | null> {
   return mapRemoteSales(all)
 }
 
-/** Ensure one client's Supabase sales are in the in-memory registry (profile tabs). */
-export async function ensureClientRemoteSales(clientId: string): Promise<void> {
-  if (!isSupabaseConfigured || !supabase || !clientId || !isUuid(clientId)) return
+async function lookupClientIdByName(clientName?: string): Promise<string | null> {
+  if (!supabase || !clientName?.trim()) return null
+  const { data } = await supabase
+    .from('clients')
+    .select('id, full_name')
+    .ilike('full_name', clientName.trim())
+    .limit(8)
+  const needle = clientName.trim().toLowerCase()
+  const match = (data as { id: string; full_name: string }[] | null)?.find(
+    (r) => r.full_name.trim().toLowerCase() === needle,
+  )
+  return match?.id ?? null
+}
 
+async function fetchSalesRowsForClientId(clientId: string): Promise<Sale[]> {
+  if (!supabase) return []
   const { data, error } = await supabase
     .from('sales')
-    .select(REMOTE_SALES_SELECT)
+    .select(REMOTE_SALES_CLIENT_SELECT)
     .eq('client_id', clientId)
     .order('created_at', { ascending: false })
     .limit(1000)
 
   if (error) {
     console.error('[sales] client fetch failed', error.message)
-    return
+    return []
+  }
+  return mapRemoteSales((data as RemoteSaleRow[] | null) ?? [])
+}
+
+/** Ensure one client's Supabase sales are in the in-memory registry (profile tabs). */
+export async function ensureClientRemoteSales(
+  clientId: string,
+  clientName?: string,
+): Promise<{ count: number; resolvedClientId: string | null }> {
+  if (!isSupabaseConfigured || !supabase || !clientId) {
+    return { count: 0, resolvedClientId: null }
   }
 
-  const mapped = mapRemoteSales((data as RemoteSaleRow[] | null) ?? [])
-  if (!mapped.length) return
+  let resolvedId = isUuid(clientId) ? clientId : await lookupClientIdByName(clientName)
+  if (!resolvedId) return { count: 0, resolvedClientId: null }
 
-  const byId = new Map(remoteLiveSales.map((s) => [s.id, s]))
-  for (const row of mapped) byId.set(row.id, row)
-  remoteLiveSales = [...byId.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  emitChange()
+  let mapped = await fetchSalesRowsForClientId(resolvedId)
+  // UUID on the profile may not match sales.client_id — retry by name
+  if (!mapped.length && clientName) {
+    const byName = await lookupClientIdByName(clientName)
+    if (byName && byName !== resolvedId) {
+      resolvedId = byName
+      mapped = await fetchSalesRowsForClientId(resolvedId)
+    }
+  }
+  if (!mapped.length) return { count: 0, resolvedClientId: resolvedId }
+
+  // Keep DB client_id so a later full remote refresh still matches this profile
+  const named = mapped.map((s) => ({
+    ...s,
+    clientId: resolvedId,
+    clientName:
+      clientName && (s.clientName === 'Client' || !s.clientName) ? clientName : s.clientName,
+  }))
+  mergeRemoteSaleLines(named)
+
+  // Point local registry at the sales client_id when the URL/local id differed
+  if (resolvedId !== clientId) {
+    const local = getClientById(clientId) || getClients().find(
+      (c) =>
+        !!clientName &&
+        c.fullName.trim().toLowerCase() === clientName.trim().toLowerCase(),
+    )
+    if (local) {
+      saveClient({ ...local, id: resolvedId })
+    }
+  }
+
+  return { count: named.length, resolvedClientId: resolvedId }
+}
+
+/**
+ * Apply a remote sales snapshot. Never replace a non-empty cache with [] —
+ * an unauthenticated / pre-login fetch returns empty and would wipe profile lines.
+ */
+function applyRemoteSalesSnapshot(remote: Sale[] | null): boolean {
+  if (remote == null) return false
+  if (remote.length === 0 && remoteLiveSales.length > 0) return false
+  remoteLiveSales = remote
+  return true
 }
 
 /** Load XLSX-derived sales JSON + remote booking sales once. */
@@ -271,8 +362,7 @@ export async function preloadSalesData(): Promise<void> {
     // Refresh remote on each call after first load so re-login picks up DB rows
     if (isSupabaseConfigured) {
       const remote = await fetchRemoteLiveSales()
-      if (remote) {
-        remoteLiveSales = remote
+      if (applyRemoteSalesSnapshot(remote)) {
         syncClientsFromSalesRegistry()
         emitChange()
       }
@@ -299,7 +389,7 @@ export async function preloadSalesData(): Promise<void> {
 
     try {
       const remote = await fetchRemoteLiveSales()
-      if (remote) remoteLiveSales = remote
+      applyRemoteSalesSnapshot(remote)
     } catch (err) {
       console.error('[sales] remote preload failed', err)
     } finally {
@@ -310,6 +400,19 @@ export async function preloadSalesData(): Promise<void> {
   })()
 
   return loadPromise
+}
+
+/** Re-fetch remote sales after login (bootstrap often runs before a JWT exists). */
+export async function refreshRemoteSalesAfterAuth(): Promise<void> {
+  if (!isSupabaseConfigured) return
+  // Allow a full remote refresh even if an empty pre-auth load already finished
+  const remote = await fetchRemoteLiveSales()
+  if (remote == null) return
+  if (remote.length === 0) return
+  remoteLiveSales = remote
+  loaded = true
+  syncClientsFromSalesRegistry()
+  emitChange()
 }
 
 export function isSalesDataLoaded(): boolean {

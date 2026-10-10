@@ -137,8 +137,8 @@ function AdminIndexRedirect() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <SalesDataBootstrap />
       <AuthProvider>
+        <SalesDataBootstrap />
         <BranchProvider>
           <BrowserRouter>
             <Routes>
