@@ -140,7 +140,7 @@ function oneName(
 }
 
 function branchNameFor(branchId: string, nested?: RemoteSaleRow['branches']): string {
-  const fromJoin = oneName(nested, 'name')
+  const fromJoin = oneName(nested ?? null, 'name')
   if (fromJoin) return fromJoin
   return getBranches().find((b) => b.id === branchId)?.name || 'Branch'
 }
