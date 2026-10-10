@@ -216,12 +216,17 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
   return out
 }
 
-/** Lightweight list select — sale_items only (branch names resolved locally). */
+/**
+ * Org-wide list select. Include client/branch names so franchise migration lines
+ * (Bacoor / Dasma) attach to Customer Registry even when localStorage ids differ.
+ */
 const REMOTE_SALES_LIST_SELECT = `
       id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
       invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
       contract_amount,
-      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed )
+      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ),
+      clients!client_id ( full_name ),
+      branches!branch_id ( name )
     `
 
 /** Richer select for a single client profile (names + payments). */
@@ -411,6 +416,7 @@ export async function refreshRemoteSalesAfterAuth(): Promise<void> {
   if (remote.length === 0) return
   remoteLiveSales = remote
   loaded = true
+  // Re-attach session / installment stats onto Customer Registry rows
   syncClientsFromSalesRegistry()
   emitChange()
 }

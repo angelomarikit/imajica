@@ -214,14 +214,16 @@ export function buildClientsFromSales(sales: Sale[]): Client[] {
     }
     const lastPurchaseAt = latest.createdAt
     const lastSaleId = latest.id
-    // Session slots from service/package lines (catalog sessions, one entitlement per item)
+    // Prefer imported sessions_total; else catalog sessions (one entitlement per item)
     const entitlementSessions = new Map<string, number>()
     for (const r of rows) {
       if (r.itemType !== 'service' && r.itemType !== 'package') continue
       const ek = entitlementKey(r)
       if (entitlementSessions.has(ek)) continue
       const cat = matchCatalog(r.treatmentOrPackage, r.itemType, r.branchName)
-      entitlementSessions.set(ek, cat?.sessions ?? 1)
+      const fromImport =
+        r.sessionsTotal != null && Number.isFinite(r.sessionsTotal) ? Number(r.sessionsTotal) : null
+      entitlementSessions.set(ek, Math.max(1, fromImport ?? cat?.sessions ?? 1))
     }
     const sessionsCount = [...entitlementSessions.values()].reduce((a, b) => a + b, 0)
 
