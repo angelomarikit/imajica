@@ -10,6 +10,7 @@ import {
 } from '@/services/clientSalesProfileService'
 import {
   recordBookingCheckout,
+  ensureClientRemoteSales,
   getSales,
   preloadSalesData,
   subscribeSalesData,
@@ -73,12 +74,17 @@ export function PatientInstallmentsModal({
     if (!open) return
     setLoading(true)
     setPaying(null)
-    void preloadSalesData()
-      .catch(() => undefined)
-      .finally(() => {
+    void (async () => {
+      try {
+        await preloadSalesData()
+        await ensureClientRemoteSales(patient.id)
+      } catch {
+        /* ignore */
+      } finally {
         setSalesTick((n) => n + 1)
         setLoading(false)
-      })
+      }
+    })()
     const unsub = subscribeSalesData(() => setSalesTick((n) => n + 1))
     return unsub
   }, [open, patient.id])

@@ -436,6 +436,11 @@ export interface Sale {
   createdAt: string
   /** Import grouping key (customer + item + branch + episode date) */
   episodeKey?: string
+  /** Installment contract total (profile remaining = contract − collected) */
+  contractAmount?: number
+  /** Availed Services: entitlement / completed sessions from import or package */
+  sessionsTotal?: number
+  sessionsCompleted?: number
 }
 
 export type AnalyticsSaleType = 'service' | 'package' | 'product'

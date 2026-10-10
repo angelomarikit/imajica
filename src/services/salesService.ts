@@ -110,6 +110,7 @@ type RemoteSaleRow = {
   lead_source: string | null
   referred_by_name: string | null
   referred_by_client_id: string | null
+  contract_amount: number | null
   sale_items:
     | Array<{
         id: string
@@ -119,6 +120,8 @@ type RemoteSaleRow = {
         line_total: number
         item_type: string
         sku: string | null
+        sessions_total: number | null
+        sessions_completed: number | null
       }>
     | null
   payments: Array<{ payment_method: string; payment_status: string }> | null
@@ -184,35 +187,82 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
         status: (row.status as Sale['status']) || 'pending',
         createdAt: row.created_at,
         episodeKey: 'live-booking',
+        contractAmount:
+          row.contract_amount != null && Number.isFinite(Number(row.contract_amount))
+            ? Number(row.contract_amount)
+            : undefined,
+        sessionsTotal:
+          item.sessions_total != null && Number.isFinite(Number(item.sessions_total))
+            ? Number(item.sessions_total)
+            : undefined,
+        sessionsCompleted:
+          item.sessions_completed != null && Number.isFinite(Number(item.sessions_completed))
+            ? Number(item.sessions_completed)
+            : undefined,
       })
     })
   }
   return out
 }
 
-async function fetchRemoteLiveSales(): Promise<Sale[] | null> {
-  if (!isSupabaseConfigured || !supabase) return []
-
-  const { data, error } = await supabase
-    .from('sales')
-    .select(
-      `
+const REMOTE_SALES_SELECT = `
       id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
       invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
-      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku ),
+      contract_amount,
+      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ),
       payments ( payment_method, payment_status ),
       clients!client_id ( full_name ),
       branches!branch_id ( name )
-    `,
-    )
+    `
+
+/** PostgREST max-rows is typically 1000 — page until exhausted (do not rely on .limit alone). */
+async function fetchRemoteLiveSales(): Promise<Sale[] | null> {
+  if (!isSupabaseConfigured || !supabase) return []
+
+  const pageSize = 1000
+  const all: RemoteSaleRow[] = []
+  for (let from = 0; from < 50000; from += pageSize) {
+    const to = from + pageSize - 1
+    const { data, error } = await supabase
+      .from('sales')
+      .select(REMOTE_SALES_SELECT)
+      .order('created_at', { ascending: false })
+      .range(from, to)
+
+    if (error) {
+      console.error('[sales] remote fetch failed', error.message)
+      return null
+    }
+    if (!data?.length) break
+    all.push(...(data as RemoteSaleRow[]))
+    if (data.length < pageSize) break
+  }
+  return mapRemoteSales(all)
+}
+
+/** Ensure one client's Supabase sales are in the in-memory registry (profile tabs). */
+export async function ensureClientRemoteSales(clientId: string): Promise<void> {
+  if (!isSupabaseConfigured || !supabase || !clientId || !isUuid(clientId)) return
+
+  const { data, error } = await supabase
+    .from('sales')
+    .select(REMOTE_SALES_SELECT)
+    .eq('client_id', clientId)
     .order('created_at', { ascending: false })
-    .limit(2500)
+    .limit(1000)
 
   if (error) {
-    console.error('[sales] remote fetch failed', error.message)
-    return null
+    console.error('[sales] client fetch failed', error.message)
+    return
   }
-  return mapRemoteSales((data as RemoteSaleRow[] | null) ?? [])
+
+  const mapped = mapRemoteSales((data as RemoteSaleRow[] | null) ?? [])
+  if (!mapped.length) return
+
+  const byId = new Map(remoteLiveSales.map((s) => [s.id, s]))
+  for (const row of mapped) byId.set(row.id, row)
+  remoteLiveSales = [...byId.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  emitChange()
 }
 
 /** Load XLSX-derived sales JSON + remote booking sales once. */

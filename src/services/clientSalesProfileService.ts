@@ -287,10 +287,24 @@ export function getAvailedServices(
     group.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     const first = group[0]!
     const cat = matchCatalog(first.treatmentOrPackage, first.itemType, first.branchName)
-    // Packages/services: catalog sessions × quantity from checkout line
+    // Prefer imported session counts; else catalog sessions × quantity
     const qty = Math.max(1, first.quantity ?? 1)
-    const totalSessions = Math.max(1, (cat?.sessions ?? 1) * qty)
-    const hasPending = group.some((g) => g.status === 'pending' || isInstallmentPayment(g.paymentType))
+    const totalSessions = Math.max(
+      1,
+      first.sessionsTotal ?? (cat?.sessions ?? 1) * qty,
+    )
+    const completed = Math.max(
+      0,
+      Math.min(totalSessions, first.sessionsCompleted ?? 0),
+    )
+    const remaining = Math.max(0, totalSessions - completed)
+    const hasPending =
+      remaining > 0 ||
+      group.some((g) => g.status === 'pending' || isInstallmentPayment(g.paymentType))
+    const lastFromImport = group
+      .map((g) => g.createdAt.slice(0, 10))
+      .sort()
+      .at(-1)
     out.push({
       id: k,
       saleDate: first.createdAt.slice(0, 10),
@@ -298,10 +312,10 @@ export function getAvailedServices(
       name: first.treatmentOrPackage,
       type: first.itemType === 'package' ? 'Package' : 'Service',
       totalSessions,
-      completed: 0,
-      remaining: totalSessions,
-      lastSession: 'N/A',
-      status: hasPending ? 'Active' : 'Paid',
+      completed,
+      remaining,
+      lastSession: lastFromImport || 'N/A',
+      status: remaining > 0 || hasPending ? 'Active' : 'Paid',
       branchName: first.branchName,
     })
   }
@@ -353,8 +367,12 @@ export function getInstallmentBalances(
     // Pending installment lines still count as paid-toward if status is pending but money was collected as downpayment
     const collectedAmount = group.reduce((sum, g) => sum + g.totalAmount, 0)
     const paymentSum = collectedAmount
-    const totalAmount = cat?.price ?? Math.max(paymentSum, paidAmount)
-    // For live checkout: first payment is the amount paid now; remaining = contract - collected
+    const contractFromImport = group
+      .map((g) => g.contractAmount)
+      .find((n) => n != null && Number.isFinite(n) && n > 0)
+    const totalAmount =
+      contractFromImport ?? cat?.price ?? Math.max(paymentSum, paidAmount)
+    // For live checkout / imports: remaining = contract − collected
     const remainingAmount = Math.max(0, Math.round((totalAmount - paymentSum) * 100) / 100)
     const groupRef = first.bookingRef || first.invoiceNumber || first.id
     const shortId = groupRef.replace(/\D/g, '')

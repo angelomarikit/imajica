@@ -23,7 +23,7 @@ import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { recomputeClientSalesProfile } from '@/services/clientSalesProfileService'
 import { getClientById, getClients, hydrateClientFromSupabase, persistClientToSupabase, preloadClientsFromSupabase, saveClient, subscribeClients } from '@/services/clientService'
 import { subscribeAnalytics } from '@/services/analyticsService'
-import { getSales, preloadSalesData } from '@/services/salesService'
+import { ensureClientRemoteSales, getSales, preloadSalesData } from '@/services/salesService'
 import { getClinicBranches, resolveClinicBranchId } from '@/services/branchService'
 import type { Client } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
@@ -134,9 +134,11 @@ export function ClientProfilePage() {
   useEffect(() => {
     if (tab !== 'services') return
     let cancelled = false
-    void preloadSalesData().then(() => {
+    void (async () => {
+      await preloadSalesData()
+      if (id) await ensureClientRemoteSales(id)
       if (!cancelled) setSalesTick((n) => n + 1)
-    })
+    })()
     const unsubSales = subscribeAnalytics(() => {
       if (!cancelled) setSalesTick((n) => n + 1)
     })
@@ -144,7 +146,7 @@ export function ClientProfilePage() {
       cancelled = true
       unsubSales()
     }
-  }, [tab])
+  }, [tab, id])
 
   if (client && !canViewClient) {
     return <Navigate to="/admin/clients" replace />
