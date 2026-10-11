@@ -472,7 +472,7 @@ function buildFranchiseOwnerNavSections(handoffUnread = 0): NavSection[] {
   },
   {
     category: 'Sales',
-    items: [{ to: '/admin/payments', label: 'Franchise Sale', icon: Wallet }],
+    items: [{ to: '/admin/payments', label: 'Franchise Sales', icon: Wallet }],
   },
   {
     category: 'Catalog',

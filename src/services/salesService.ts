@@ -334,6 +334,25 @@ async function fetchPaymentsBySaleIds(
   return out
 }
 
+async function fetchClientNamesByIds(clientIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (!supabase || !clientIds.length) return out
+  const unique = [...new Set(clientIds.filter(Boolean))]
+  const chunkSize = 200
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize)
+    const { data, error } = await supabase.from('clients').select('id, full_name').in('id', chunk)
+    if (error) {
+      console.warn('[sales] clients batch failed', error.message)
+      continue
+    }
+    for (const row of (data ?? []) as Array<{ id: string; full_name: string }>) {
+      if (row.full_name) out.set(row.id, row.full_name)
+    }
+  }
+  return out
+}
+
 function mergeRemoteSaleLines(mapped: Sale[]) {
   if (!mapped.length) return
   const byId = new Map(remoteLiveSales.map((s) => [s.id, s]))
@@ -381,16 +400,22 @@ async function fetchRemoteLiveSales(options?: {
   if (!headers.length) return []
 
   const saleIds = headers.map((h) => h.id)
-  const [itemsBySale, paysBySale] = await Promise.all([
+  const clientIds = headers
+    .map((h) => h.client_id)
+    .filter((id): id is string => Boolean(id))
+  const [itemsBySale, paysBySale, clientNames] = await Promise.all([
     fetchSaleItemsBySaleIds(saleIds),
     fetchPaymentsBySaleIds(saleIds),
+    fetchClientNamesByIds(clientIds),
   ])
 
   const all: RemoteSaleRow[] = headers.map((h) => ({
     ...h,
     sale_items: itemsBySale.get(h.id) ?? null,
     payments: paysBySale.get(h.id) ?? null,
-    clients: null,
+    clients: h.client_id && clientNames.has(h.client_id)
+      ? { full_name: clientNames.get(h.client_id)! }
+      : null,
     branches: null,
   }))
   return mapRemoteSales(all)

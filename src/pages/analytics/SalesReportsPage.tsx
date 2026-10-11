@@ -47,12 +47,26 @@ function typeBadge(type: AnalyticsSaleType | undefined) {
   return <Badge variant="success">Service</Badge>
 }
 
+function manilaDate(d = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d)
+}
+
+function defaultBranchSalesRange() {
+  const to = manilaDate()
+  return { from: `${to.slice(0, 8)}01`, to }
+}
+
 export function SalesReportsPage() {
   const { user } = useAuth()
   const forcedBranchId = useForcedBranchId()
   const franchiseOwner = isFranchiseBranchOwner(user)
   const isHq = isHqRole(user?.role)
-  const range = defaultAnalyticsRange()
+  const range = franchiseOwner ? defaultBranchSalesRange() : defaultAnalyticsRange()
   const [sales, setSales] = useState(() => getAnalyticsSales())
   const [dataReady, setDataReady] = useState(() => isSalesDataLoaded() && getAnalyticsSales().length > 0)
   const [fromDraft, setFromDraft] = useState(range.from)
@@ -67,7 +81,9 @@ export function SalesReportsPage() {
 
   useEffect(() => {
     let cancelled = false
-    void preloadSalesData().then(() => {
+    void preloadSalesData(
+      forcedBranchId ? { branchId: forcedBranchId, skipImported: true } : undefined,
+    ).then(() => {
       if (!cancelled) {
         setSales(getAnalyticsSales())
         setDataReady(true)
@@ -79,12 +95,16 @@ export function SalesReportsPage() {
         setDataReady(true)
       }
     })
-  }, [])
+  }, [forcedBranchId])
 
   const scopedSales = useMemo(() => {
-    if (!forcedBranchId) return sales
-    return sales.filter((s) => s.branchId === forcedBranchId)
-  }, [sales, forcedBranchId])
+    const base = forcedBranchId
+      ? sales.filter((s) => s.branchId === forcedBranchId)
+      : sales
+    // Clinic managers: ops sales only (migration installments stay on profiles)
+    if (!franchiseOwner) return base
+    return base.filter((s) => (s.leadSource || '').trim().toLowerCase() !== 'migration')
+  }, [sales, forcedBranchId, franchiseOwner])
 
   const summary = useMemo(() => salesSummary(scopedSales, from, to), [scopedSales, from, to])
 
