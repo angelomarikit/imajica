@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FileSpreadsheet, Filter, Search } from 'lucide-react'
 import { toast } from 'sonner'
-import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -9,7 +8,6 @@ import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   defaultAnalyticsRange,
   exportCsv,
-  filterSalesByDate,
   salesSummary,
 } from '@/services/analyticsService'
 import {
@@ -25,6 +23,9 @@ import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
 type TypeFilter = 'all' | AnalyticsSaleType
 
+const inputClass =
+  'rounded-[6px] border border-border bg-white px-2.5 py-1.5 text-sm text-[#073D2C] outline-none focus:border-[#073D2C]/
+
 /** Manila calendar YYYY-MM-DD */
 function manilaDate(d = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -37,8 +38,7 @@ function manilaDate(d = new Date()): string {
 
 function defaultFranchiseRange() {
   const to = manilaDate()
-  const from = `${to.slice(0, 8)}01`
-  return { from, to }
+  return { from: `${to.slice(0, 8)}01`, to }
 }
 
 function formatShortDate(iso: string) {
@@ -139,11 +139,6 @@ export function PaymentsPage() {
     setPage(1)
   }
 
-  function applySearch() {
-    setQuery(queryDraft.trim())
-    setPage(1)
-  }
-
   function handleExport() {
     exportCsv(
       `imajica-franchise-sales-${from}-${to}.csv`,
@@ -173,34 +168,27 @@ export function PaymentsPage() {
     toast.success('Exported franchise sales')
   }
 
-  const title = franchiseOwner ? 'Franchise Sales' : 'Payments'
-  const description = franchiseOwner
-    ? `Live clinic sales for ${user?.branchName ?? 'your branch'} (migration installments stay on client profiles).`
-    : 'Review booking payments and clinic sales invoices.'
-
   return (
-    <div className="space-y-5">
-      <AdminPageBanner
-        eyebrow="Sales"
-        title={title}
-        description={description}
-        stat={{ value: summary.bookings, label: 'Total Bookings' }}
-      />
+    <div className="space-y-4">
+      <h1 className="font-display text-2xl text-[#073D2C] sm:text-[1.75rem]">
+        {franchiseOwner ? 'Franchise Sales' : 'Payments'}
+      </h1>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <KpiCard label="Total Sales" value={formatPesoExact(summary.grossSales)} />
         <KpiCard label="Product Sales" value={formatPesoExact(summary.productSales)} />
         <KpiCard label="Service Sales" value={formatPesoExact(summary.serviceSales)} />
         <KpiCard
-          label="Booking Sales (Services + Packages)"
+          label="Booking Sales"
+          hint="(Services + Packages)"
           value={formatPesoExact(summary.serviceSales)}
         />
         <KpiCard label="Total Bookings" value={String(summary.bookings)} />
       </div>
 
       <Card className="p-4 sm:p-5">
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="text-xs text-slate-ui">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <label className="inline-flex items-center gap-1.5 text-sm text-slate-ui">
             Show
             <select
               value={pageSize}
@@ -208,71 +196,78 @@ export function PaymentsPage() {
                 setPageSize(Number(e.target.value))
                 setPage(1)
               }}
-              className="ml-1 rounded-[8px] border border-border bg-white px-2 py-2 text-sm text-[#073D2C]"
+              className={inputClass}
             >
               {[10, 25, 50, 100].map((n) => (
                 <option key={n} value={n}>
                   {n}
                 </option>
               ))}
-            </select>{' '}
+            </select>
             entries
           </label>
 
-          <label className="text-xs text-slate-ui">
-            From
-            <input
-              type="date"
-              value={fromDraft}
-              onChange={(e) => setFromDraft(e.target.value)}
-              className="mt-1 block rounded-[8px] border border-border bg-white px-3 py-2 text-sm text-[#073D2C]"
-            />
-          </label>
-          <label className="text-xs text-slate-ui">
-            To
-            <input
-              type="date"
-              value={toDraft}
-              onChange={(e) => setToDraft(e.target.value)}
-              className="mt-1 block rounded-[8px] border border-border bg-white px-3 py-2 text-sm text-[#073D2C]"
-            />
-          </label>
-          <Button type="button" variant="secondary" onClick={applyFilter} className="gap-1.5">
-            <Filter className="h-3.5 w-3.5" />
-            Filter
-          </Button>
-
-          <label className="text-xs text-slate-ui">
-            Sales
-            <select
-              value={typeFilter}
-              onChange={(e) => {
-                setTypeFilter(e.target.value as TypeFilter)
-                setPage(1)
-              }}
-              className="mt-1 block rounded-[8px] border border-border bg-white px-3 py-2 text-sm text-[#073D2C]"
-            >
-              <option value="all">All Sales</option>
-              <option value="service">Services</option>
-              <option value="package">Packages</option>
-              <option value="product">Products</option>
-            </select>
-          </label>
-
-          <Button type="button" onClick={handleExport} className="gap-1.5">
-            <FileSpreadsheet className="h-3.5 w-3.5" />
-            Export
-          </Button>
-
-          <div className="relative min-w-[200px] flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-ui" />
-            <input
-              value={queryDraft}
-              onChange={(e) => setQueryDraft(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && applySearch()}
-              placeholder="Search sales..."
-              className="w-full rounded-[8px] border border-border bg-white py-2 pl-9 pr-3 text-sm"
-            />
+          <div className="flex flex-col items-stretch gap-2 sm:items-end">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                value={fromDraft}
+                onChange={(e) => setFromDraft(e.target.value)}
+                className={inputClass}
+                aria-label="From date"
+              />
+              <span className="text-sm text-slate-ui">to</span>
+              <input
+                type="date"
+                value={toDraft}
+                onChange={(e) => setToDraft(e.target.value)}
+                className={inputClass}
+                aria-label="To date"
+              />
+              <button
+                type="button"
+                onClick={applyFilter}
+                className="inline-flex items-center gap-1.5 rounded-[6px] border border-border bg-[#eef1f4] px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-[#e4e8ec]"
+              >
+                <Filter className="h-3.5 w-3.5" />
+                Filter
+              </button>
+              <select
+                value={typeFilter}
+                onChange={(e) => {
+                  setTypeFilter(e.target.value as TypeFilter)
+                  setPage(1)
+                }}
+                className={inputClass}
+                aria-label="Sales type"
+              >
+                <option value="all">All Sales</option>
+                <option value="service">Services</option>
+                <option value="package">Packages</option>
+                <option value="product">Products</option>
+              </select>
+              <button
+                type="button"
+                onClick={handleExport}
+                className="inline-flex items-center gap-1.5 rounded-[6px] bg-[#073D2C] px-3 py-1.5 text-sm font-medium text-white transition hover:bg-[#0a4d38]"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5" />
+                Export
+              </button>
+            </div>
+            <div className="relative w-full sm:w-64">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-ui" />
+              <input
+                value={queryDraft}
+                onChange={(e) => {
+                  setQueryDraft(e.target.value)
+                  setQuery(e.target.value.trim())
+                  setPage(1)
+                }}
+                placeholder="Search sales..."
+                className={cn(inputClass, 'w-full py-1.5 pl-8 pr-2.5')}
+              />
+            </div>
           </div>
         </div>
 
@@ -295,7 +290,7 @@ export function PaymentsPage() {
               {loading ? (
                 <tr>
                   <td colSpan={9} className="px-2 py-8 text-center text-slate-ui">
-                    Loading franchise sales…
+                    Loading sales…
                   </td>
                 </tr>
               ) : pageRows.length === 0 ? (
@@ -315,12 +310,9 @@ export function PaymentsPage() {
           <span>
             Showing {(safePage - 1) * pageSize + (pageRows.length ? 1 : 0)}–
             {Math.min(safePage * pageSize, filteredRows.length)} of {filteredRows.length}
-            {filterSalesByDate(opsSales, from, to).length !== filteredRows.length
-              ? ` (filtered)`
-              : ''}
           </span>
           <div className="flex flex-wrap items-center gap-1">
-            {Array.from({ length: Math.min(pageCount, 12) }, (_, i) => i + 1).map((n) => (
+            {Array.from({ length: Math.min(pageCount, 7) }, (_, i) => i + 1).map((n) => (
               <button
                 key={n}
                 type="button"
@@ -335,7 +327,7 @@ export function PaymentsPage() {
                 {n}
               </button>
             ))}
-            {pageCount > 12 ? (
+            {pageCount > 7 ? (
               <Button
                 type="button"
                 variant="secondary"
@@ -353,11 +345,20 @@ export function PaymentsPage() {
   )
 }
 
-function KpiCard({ label, value }: { label: string; value: string }) {
+function KpiCard({
+  label,
+  value,
+  hint,
+}: {
+  label: string
+  value: string
+  hint?: string
+}) {
   return (
-    <Card className="p-4">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-ui">{label}</p>
-      <p className="mt-2 font-metric text-xl font-semibold tracking-tight text-[#073D2C] sm:text-2xl">
+    <Card className="border border-border/80 bg-white p-4 shadow-none">
+      <p className="text-sm text-slate-500">{label}</p>
+      {hint ? <p className="text-xs text-slate-400">{hint}</p> : null}
+      <p className="mt-2 font-metric text-xl font-semibold tracking-tight text-slate-900 sm:text-[1.35rem]">
         {value}
       </p>
     </Card>
