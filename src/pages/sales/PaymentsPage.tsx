@@ -5,16 +5,8 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
-import {
-  defaultAnalyticsRange,
-  exportCsv,
-  salesSummary,
-} from '@/services/analyticsService'
-import {
-  getSales,
-  preloadSalesData,
-  subscribeSalesData,
-} from '@/services/salesService'
+import { exportCsv, salesSummary } from '@/services/analyticsService'
+import { fetchOpsSalesForRange } from '@/services/salesService'
 import type { AnalyticsSaleType, Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -24,7 +16,7 @@ import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 type TypeFilter = 'all' | AnalyticsSaleType
 
 const inputClass =
-  'rounded-[6px] border border-border bg-white px-2.5 py-1.5 text-sm text-[#073D2C] outline-none focus:border-[#073D2C]/
+  'rounded-[6px] border border-border bg-white px-2.5 py-1.5 text-sm text-[#073D2C] outline-none focus:border-[#073D2C]'
 
 /** Manila calendar YYYY-MM-DD */
 function manilaDate(d = new Date()): string {
@@ -49,10 +41,6 @@ function formatShortDate(iso: string) {
   })
 }
 
-function isMigrationSale(s: Sale) {
-  return (s.leadSource || '').trim().toLowerCase() === 'migration'
-}
-
 function typeBadge(type: AnalyticsSaleType | undefined) {
   if (type === 'product') return <Badge variant="neutral">Product</Badge>
   if (type === 'package') return <Badge variant="purple">Package</Badge>
@@ -69,9 +57,9 @@ export function PaymentsPage() {
   const { user } = useAuth()
   const forcedBranchId = useForcedBranchId()
   const franchiseOwner = isFranchiseBranchOwner(user)
-  const initialRange = franchiseOwner ? defaultFranchiseRange() : defaultAnalyticsRange()
+  const initialRange = defaultFranchiseRange()
 
-  const [salesTick, setSalesTick] = useState(0)
+  const [rows, setRows] = useState<Sale[]>([])
   const [loading, setLoading] = useState(true)
   const [fromDraft, setFromDraft] = useState(initialRange.from)
   const [toDraft, setToDraft] = useState(initialRange.to)
@@ -86,32 +74,30 @@ export function PaymentsPage() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    void preloadSalesData(
-      forcedBranchId ? { branchId: forcedBranchId, skipImported: true } : undefined,
-    ).finally(() => {
-      if (!cancelled) {
-        setSalesTick((n) => n + 1)
-        setLoading(false)
-      }
+    void fetchOpsSalesForRange({
+      branchId: forcedBranchId,
+      from,
+      to,
     })
-    return subscribeSalesData(() => {
-      if (!cancelled) {
-        setSalesTick((n) => n + 1)
-        setLoading(false)
-      }
-    })
-  }, [forcedBranchId])
+      .then((data) => {
+        if (!cancelled) setRows(data)
+      })
+      .catch((err) => {
+        console.error('[franchise-sales] load failed', err)
+        if (!cancelled) {
+          setRows([])
+          toast.error('Could not load franchise sales')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [forcedBranchId, from, to])
 
-  const opsSales = useMemo(() => {
-    void salesTick
-    return getSales().filter((s) => {
-      if (isMigrationSale(s)) return false
-      if (forcedBranchId && s.branchId !== forcedBranchId) return false
-      return true
-    })
-  }, [forcedBranchId, salesTick])
-
-  const summary = useMemo(() => salesSummary(opsSales, from, to), [opsSales, from, to])
+  const summary = useMemo(() => salesSummary(rows, from, to), [rows, from, to])
 
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase()

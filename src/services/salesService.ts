@@ -361,6 +361,32 @@ function mergeRemoteSaleLines(mapped: Sale[]) {
   emitChange()
 }
 
+type SaleHeaderRow = Omit<RemoteSaleRow, 'sale_items' | 'payments' | 'clients' | 'branches'>
+
+async function hydrateSaleHeaders(headers: SaleHeaderRow[]): Promise<Sale[]> {
+  if (!headers.length) return []
+  const saleIds = headers.map((h) => h.id)
+  const clientIds = headers
+    .map((h) => h.client_id)
+    .filter((id): id is string => Boolean(id))
+  const [itemsBySale, paysBySale, clientNames] = await Promise.all([
+    fetchSaleItemsBySaleIds(saleIds),
+    fetchPaymentsBySaleIds(saleIds),
+    fetchClientNamesByIds(clientIds),
+  ])
+  const all: RemoteSaleRow[] = headers.map((h) => ({
+    ...h,
+    sale_items: itemsBySale.get(h.id) ?? null,
+    payments: paysBySale.get(h.id) ?? null,
+    clients:
+      h.client_id && clientNames.has(h.client_id)
+        ? { full_name: clientNames.get(h.client_id)! }
+        : null,
+    branches: null,
+  }))
+  return mapRemoteSales(all)
+}
+
 /** PostgREST max-rows is typically 1000 — page until exhausted (do not rely on .limit alone). */
 async function fetchRemoteLiveSales(options?: {
   branchId?: string
@@ -370,7 +396,7 @@ async function fetchRemoteLiveSales(options?: {
   if (!isSupabaseConfigured || !supabase) return []
 
   const pageSize = 1000
-  const headers: Array<Omit<RemoteSaleRow, 'sale_items' | 'payments' | 'clients' | 'branches'>> = []
+  const headers: SaleHeaderRow[] = []
   for (let from = 0; from < 50000; from += pageSize) {
     const to = from + pageSize - 1
     let query = supabase
@@ -389,36 +415,62 @@ async function fetchRemoteLiveSales(options?: {
       return null
     }
     if (!data?.length) break
-    headers.push(
-      ...(data as unknown as Array<
-        Omit<RemoteSaleRow, 'sale_items' | 'payments' | 'clients' | 'branches'>
-      >),
-    )
+    headers.push(...(data as unknown as SaleHeaderRow[]))
     if (data.length < pageSize) break
   }
 
-  if (!headers.length) return []
+  return hydrateSaleHeaders(headers)
+}
 
-  const saleIds = headers.map((h) => h.id)
-  const clientIds = headers
-    .map((h) => h.client_id)
-    .filter((id): id is string => Boolean(id))
-  const [itemsBySale, paysBySale, clientNames] = await Promise.all([
-    fetchSaleItemsBySaleIds(saleIds),
-    fetchPaymentsBySaleIds(saleIds),
-    fetchClientNamesByIds(clientIds),
-  ])
+/**
+ * Fast Franchise Sales path: date-scoped ops rows only (skips Migration history).
+ * Bacoor has ~3k migration rows — loading those for this page was causing multi-minute waits.
+ */
+export async function fetchOpsSalesForRange(options: {
+  branchId?: string
+  from: string
+  to: string
+}): Promise<Sale[]> {
+  if (!isSupabaseConfigured || !supabase) return []
+  const fromDay = options.from.slice(0, 10)
+  const toDay = options.to.slice(0, 10)
+  if (!fromDay || !toDay) return []
 
-  const all: RemoteSaleRow[] = headers.map((h) => ({
-    ...h,
-    sale_items: itemsBySale.get(h.id) ?? null,
-    payments: paysBySale.get(h.id) ?? null,
-    clients: h.client_id && clientNames.has(h.client_id)
-      ? { full_name: clientNames.get(h.client_id)! }
-      : null,
-    branches: null,
-  }))
-  return mapRemoteSales(all)
+  // Inclusive end date → next calendar day (UTC date string compare on timestamptz)
+  const toExclusive = (() => {
+    const d = new Date(`${toDay}T00:00:00+08:00`)
+    d.setDate(d.getDate() + 1)
+    return d.toISOString()
+  })()
+  const fromInclusive = `${fromDay}T00:00:00+08:00`
+
+  const pageSize = 500
+  const headers: SaleHeaderRow[] = []
+  for (let from = 0; from < 10000; from += pageSize) {
+    const to = from + pageSize - 1
+    let query = supabase
+      .from('sales')
+      .select(REMOTE_SALES_HEADER_SELECT)
+      .gte('created_at', fromInclusive)
+      .lt('created_at', toExclusive)
+      .or('lead_source.is.null,lead_source.neq.Migration')
+      .order('created_at', { ascending: false })
+      .range(from, to)
+    if (options.branchId) {
+      query = query.eq('branch_id', options.branchId)
+    }
+
+    const { data, error } = await query
+    if (error) {
+      console.error('[sales] ops range fetch failed', error.message)
+      return []
+    }
+    if (!data?.length) break
+    headers.push(...(data as unknown as SaleHeaderRow[]))
+    if (data.length < pageSize) break
+  }
+
+  return hydrateSaleHeaders(headers)
 }
 
 /**
