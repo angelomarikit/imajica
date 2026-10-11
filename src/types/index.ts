@@ -432,6 +432,8 @@ export interface Sale {
   referredByName?: string
   totalAmount: number
   paymentMethod: PaymentMethod
+  /** All processors on the sale (split checkout); UI joins these for display */
+  paymentMethods?: PaymentMethod[]
   status: PaymentStatus
   createdAt: string
   /** Import grouping key (customer + item + branch + episode date) */

@@ -145,6 +145,46 @@ function branchNameFor(branchId: string, nested?: RemoteSaleRow['branches']): st
   return getBranches().find((b) => b.id === branchId)?.name || 'Branch'
 }
 
+/** Normalize DB / UI payment_method strings to the app PaymentMethod union. */
+function normalizePaymentMethod(raw: string | null | undefined): PaymentMethod | null {
+  const key = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+  if (!key) return null
+  const aliases: Record<string, PaymentMethod> = {
+    cash: 'cash',
+    credit_card: 'credit_card',
+    creditcard: 'credit_card',
+    card: 'credit_card',
+    debit_card: 'debit_card',
+    debitcard: 'debit_card',
+    qr_ph: 'qr_ph',
+    qrph: 'qr_ph',
+    qr: 'qr_ph',
+    owners_account: 'owners_account',
+    ownersaccount: 'owners_account',
+    paymongo: 'paymongo',
+    bank_transfer: 'bank_transfer',
+    banktransfer: 'bank_transfer',
+    gcash: 'gcash',
+    paymaya: 'paymaya',
+    other: 'other',
+  }
+  return aliases[key] ?? null
+}
+
+function paymentMethodsFromPayments(
+  payments: Array<{ payment_method: string }> | null | undefined,
+): PaymentMethod[] {
+  const out: PaymentMethod[] = []
+  for (const p of payments ?? []) {
+    const method = normalizePaymentMethod(p.payment_method)
+    if (method && !out.includes(method)) out.push(method)
+  }
+  return out
+}
+
 function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
   const out: Sale[] = []
   for (const row of rows) {
@@ -152,7 +192,9 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
     const fromLocal = row.client_id ? getClientById(row.client_id)?.fullName : undefined
     const clientName = fromJoin || fromLocal || 'Client'
     const branchName = branchNameFor(row.branch_id, row.branches)
-    const paymentMethod = (row.payments?.[0]?.payment_method || 'cash') as PaymentMethod
+    const paymentMethods = paymentMethodsFromPayments(row.payments)
+    // Only default to cash when the sale truly has no payment rows (legacy / import gaps)
+    const paymentMethod = paymentMethods[0] ?? ('cash' as PaymentMethod)
     const items = row.sale_items?.length
       ? row.sale_items
       : [
@@ -195,6 +237,7 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
         referredByName: row.referred_by_name || undefined,
         totalAmount: Number(item.line_total),
         paymentMethod,
+        paymentMethods: paymentMethods.length ? paymentMethods : undefined,
         status: (row.status as Sale['status']) || 'pending',
         createdAt: row.created_at,
         episodeKey: 'live-booking',
@@ -225,6 +268,7 @@ const REMOTE_SALES_LIST_SELECT = `
       invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
       contract_amount,
       sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ),
+      payments ( payment_method, payment_status ),
       clients!client_id ( full_name ),
       branches!branch_id ( name )
     `
@@ -677,9 +721,23 @@ export async function recordBookingCheckout(
     const { error: payError } = await supabase.from('payments').insert(paymentRows)
 
     if (payError) {
-      // Sale + items already saved — warn but don't wipe the order
+      // Sale + items already saved — warn but don't wipe the order / cause a duplicate retry
       console.error('[sales] payment row failed', payError.message)
     }
+
+    const splitMethods = [
+      ...new Set(
+        (opts?.paymentSplits ?? [])
+          .map((s) => normalizePaymentMethod(s.paymentMethod) || s.paymentMethod)
+          .filter(Boolean),
+      ),
+    ] as PaymentMethod[]
+    const methodsForSale =
+      splitMethods.length > 0
+        ? splitMethods
+        : head.paymentMethod
+          ? [head.paymentMethod]
+          : undefined
 
     persisted = (insertedItems ?? itemRows).map((item, index) => {
       const line = lines[index]!
@@ -696,6 +754,8 @@ export async function recordBookingCheckout(
         createdAt,
         episodeKey: 'live-booking' as const,
         itemType,
+        paymentMethod: methodsForSale?.[0] || line.paymentMethod,
+        paymentMethods: methodsForSale,
       }
     })
 
@@ -776,7 +836,8 @@ function paymentTypeShort(raw?: string): string {
   return 'Full'
 }
 
-function paymentMethodLabel(method: Sale['paymentMethod']): string {
+function paymentMethodLabel(method: Sale['paymentMethod'] | string): string {
+  const normalized = normalizePaymentMethod(method) || method
   const map: Record<string, string> = {
     cash: 'CASH',
     credit_card: 'CREDIT CARD',
@@ -789,7 +850,18 @@ function paymentMethodLabel(method: Sale['paymentMethod']): string {
     bank_transfer: 'BANK TRANSFER',
     other: 'OTHER',
   }
-  return map[method] || method.toUpperCase().replace(/_/g, ' ')
+  return map[normalized] || String(normalized).toUpperCase().replace(/_/g, ' ')
+}
+
+function paymentMethodsDisplay(sale: Sale): string {
+  const methods =
+    sale.paymentMethods && sale.paymentMethods.length > 0
+      ? sale.paymentMethods
+      : sale.paymentMethod
+        ? [sale.paymentMethod]
+        : []
+  if (!methods.length) return 'CASH'
+  return methods.map((m) => paymentMethodLabel(m)).join(' + ')
 }
 
 function formatServiceLine(sale: Sale): string {
@@ -859,7 +931,7 @@ export function getBookingRows(opts?: {
       status: paid ? 'Paid' : head.status === 'pending' ? 'Pending' : head.status,
       payment,
       paymentType: paymentTypeShort(head.paymentType),
-      paymentMethod: paymentMethodLabel(head.paymentMethod),
+      paymentMethod: paymentMethodsDisplay(head),
       branchId: head.branchId,
       branchName: head.branchName,
       saleIds: sorted.map((l) => l.id),
