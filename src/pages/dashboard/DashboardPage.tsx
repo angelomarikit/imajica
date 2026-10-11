@@ -39,6 +39,10 @@ import {
 } from '@/services/cashDrawerService'
 import { getExpenses, subscribeExpenses } from '@/services/expenseService'
 import {
+  fetchBranchDashboardSalesSummary,
+  type BranchDashboardSalesSummary,
+} from '@/services/dashboardSalesSummaryService'
+import {
   getBookingRows,
   ensureBranchRemoteSales,
   getSales,
@@ -521,6 +525,8 @@ function BranchOpsDashboard() {
   const [deductOpen, setDeductOpen] = useState(false)
   const [deductAmount, setDeductAmount] = useState('')
   const [deductSaving, setDeductSaving] = useState(false)
+  /** Server aggregates — source of truth for clinic dashboard cards (fast; includes migration + live). */
+  const [rpcSummary, setRpcSummary] = useState<BranchDashboardSalesSummary | null>(null)
 
   useEffect(() => {
     const refreshSales = () => setSales(getSales())
@@ -529,11 +535,10 @@ function BranchOpsDashboard() {
     const refreshAppts = () => {
       void listAppointments().then(setAppointments)
     }
+    // Cards use SQL summary; line-item preload stays in background for booking/breakdown views
     void (async () => {
-      // Clinic managers: pull this branch from Supabase first so cards are not stuck at ₱0
       if (scopeBranchId) {
-        await ensureBranchRemoteSales(scopeBranchId)
-        refreshSales()
+        void ensureBranchRemoteSales(scopeBranchId).then(refreshSales)
       }
       await preloadSalesData(
         scopeBranchId ? { branchId: scopeBranchId, skipImported: true } : undefined,
@@ -554,6 +559,25 @@ function BranchOpsDashboard() {
     ]
     return () => unsubs.forEach((u) => u())
   }, [scopeBranchId])
+
+  useEffect(() => {
+    if (!scopeBranchId) {
+      setRpcSummary(null)
+      return
+    }
+    let cancelled = false
+    void fetchBranchDashboardSalesSummary({
+      branchId: scopeBranchId,
+      from: rangeFrom,
+      to: rangeTo,
+      today: todayDateKey(),
+    }).then((summary) => {
+      if (!cancelled) setRpcSummary(summary)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [scopeBranchId, rangeFrom, rangeTo])
 
   const branchLabel = useMemo(() => {
     if (forcedBranchId || branchOwner) return user?.branchName ?? 'My Branch'
@@ -588,9 +612,27 @@ function BranchOpsDashboard() {
     return expenses.filter((e) => !e.branchId || e.branchId === scopeBranchId)
   }, [expenses, scopeBranchId])
 
-  // If current month has no sales yet (common with Sep import data), snap once to latest sale month.
+  // If current month has no sales yet, snap once to latest sale month (RPC or in-memory).
   useEffect(() => {
-    if (rangeBootstrapped || !scopedSales.length) return
+    if (rangeBootstrapped) return
+    if (rpcSummary && scopeBranchId) {
+      if (rpcSummary.rangeCount > 0 || rpcSummary.rangeSales > 0) {
+        setRangeBootstrapped(true)
+        return
+      }
+      if (rpcSummary.latestSaleDate) {
+        const bounds = monthBounds(new Date(`${rpcSummary.latestSaleDate}T12:00:00`))
+        setRangeFrom(bounds.from)
+        setRangeTo(bounds.to)
+        setFromDraft(bounds.from)
+        setToDraft(bounds.to)
+        setRangeBootstrapped(true)
+        return
+      }
+      setRangeBootstrapped(true)
+      return
+    }
+    if (!scopedSales.length) return
     const hasInRange = scopedSales.some((s) =>
       inDateRange(saleDateKey(s), rangeFrom, rangeTo),
     )
@@ -612,24 +654,37 @@ function BranchOpsDashboard() {
     setFromDraft(bounds.from)
     setToDraft(bounds.to)
     setRangeBootstrapped(true)
-  }, [scopedSales, rangeFrom, rangeTo, rangeBootstrapped])
+  }, [scopedSales, rangeFrom, rangeTo, rangeBootstrapped, rpcSummary, scopeBranchId])
 
   const metrics = useMemo(() => {
     const rangeSales = scopedSales.filter((s) => inDateRange(saleDateKey(s), rangeFrom, rangeTo))
     const todaySales = scopedSales.filter((s) => saleDateKey(s) === todayKey)
-    const periodSalesTotal = rangeSales.reduce((n, s) => n + (s.totalAmount || 0), 0)
-    const dailySales = todaySales.reduce((n, s) => n + (s.totalAmount || 0), 0)
+    const useRpc = Boolean(scopeBranchId && rpcSummary)
+    const periodSalesTotal = useRpc
+      ? rpcSummary!.rangeSales
+      : rangeSales.reduce((n, s) => n + (s.totalAmount || 0), 0)
+    const dailySales = useRpc
+      ? rpcSummary!.todaySales
+      : todaySales.reduce((n, s) => n + (s.totalAmount || 0), 0)
 
     // Full calendar month of the selected range end (not just the filtered days).
     let monthKey = rangeTo.slice(0, 7)
     let monthSalesLines = scopedSales.filter((s) => saleDateKey(s).startsWith(monthKey))
-    let monthlySales = monthSalesLines.reduce((n, s) => n + (s.totalAmount || 0), 0)
-    let monthlyLabel = new Date(`${monthKey}-01T12:00:00`).toLocaleDateString('en-US', {
-      month: 'long',
-      year: 'numeric',
-    })
+    let monthlySales = useRpc
+      ? rpcSummary!.monthSales
+      : monthSalesLines.reduce((n, s) => n + (s.totalAmount || 0), 0)
+    let monthlyLabel = useRpc
+      ? rpcSummary!.monthLabel ||
+        new Date(`${monthKey}-01T12:00:00`).toLocaleDateString('en-US', {
+          month: 'long',
+          year: 'numeric',
+        })
+      : new Date(`${monthKey}-01T12:00:00`).toLocaleDateString('en-US', {
+          month: 'long',
+          year: 'numeric',
+        })
     // If that month is empty but branch has older data, fall back to latest month with sales.
-    if (monthlySales === 0 && scopedSales.length) {
+    if (!useRpc && monthlySales === 0 && scopedSales.length) {
       const latestMonth = scopedSales.reduce((latest, s) => {
         const m = saleDateKey(s).slice(0, 7)
         return m > latest ? m : latest
@@ -656,9 +711,11 @@ function BranchOpsDashboard() {
     const periodBookingRows = bookingRows.filter((r) =>
       inDateRange(todayDateKey(new Date(r.dateIso)), rangeFrom, rangeTo),
     )
-    const completedBookings = periodBookingRows.filter(
-      (r) => r.status === 'Paid' || r.status === 'paid' || r.status === 'completed',
-    ).length
+    const completedBookings = useRpc
+      ? rpcSummary!.bookings
+      : periodBookingRows.filter(
+          (r) => r.status === 'Paid' || r.status === 'paid' || r.status === 'completed',
+        ).length
     const rangeAppts = scopedAppts.filter((a) =>
       inDateRange(toDateKey(new Date(a.startAt)), rangeFrom, rangeTo),
     )
@@ -669,18 +726,23 @@ function BranchOpsDashboard() {
     for (const s of rangeSales) {
       if (s.clientId) patientIds.add(s.clientId)
     }
-    const patientsInRange = patientIds.size || rangeAppts.length
+    const patientsInRange = useRpc
+      ? rpcSummary!.patients
+      : patientIds.size || rangeAppts.length
     const commissions = periodSalesTotal * COMMISSION_RATE
     /** Clinic manager 1% follows the same calendar range as staff / range sales. */
     const managerCommission = periodSalesTotal * BRANCH_MANAGER_COMMISSION_RATE
     const isSingleDay = rangeFrom === rangeTo
     const includesToday = inDateRange(todayKey, rangeFrom, rangeTo)
+    const paymentsCount = useRpc
+      ? rpcSummary!.rangeCount
+      : rangeSales.length || rangeAppts.length
 
     return {
       completedBookings: completedBookings || periodBookingRows.length,
       todayPatients: patientsInRange,
-      totalAppointments: Math.max(rangeAppts.length, periodBookingRows.length),
-      todayPaymentsCount: rangeSales.length || rangeAppts.length,
+      totalAppointments: Math.max(rangeAppts.length, periodBookingRows.length, useRpc ? rpcSummary!.bookings : 0),
+      todayPaymentsCount: paymentsCount,
       paymentSummary: periodSalesTotal,
       /** Always calendar-today sales for this branch/scope */
       todaySales: dailySales,
@@ -700,7 +762,16 @@ function BranchOpsDashboard() {
       includesToday,
       daySpan: daysInclusive(rangeFrom, rangeTo),
     }
-  }, [scopedSales, scopedAppts, scopedExpenses, scopeBranchId, todayKey, rangeFrom, rangeTo])
+  }, [
+    scopedSales,
+    scopedAppts,
+    scopedExpenses,
+    scopeBranchId,
+    todayKey,
+    rangeFrom,
+    rangeTo,
+    rpcSummary,
+  ])
 
   /** Per-clinic breakdown for HQ All Branches view — respects selected date range. */
   const salesByBranch = useMemo(() => {
@@ -801,9 +872,12 @@ function BranchOpsDashboard() {
     const beginning = readConfirmedCash(cashScope, yKey) ?? 0
     const manualDeducted = readManualCashDeducted(cashScope, todayKey)
     // Cash drawer is always today's ops — not the selected reporting range.
-    const todaySalesTotal = scopedSales
-      .filter((s) => saleDateKey(s) === todayKey)
-      .reduce((n, s) => n + (s.totalAmount || 0), 0)
+    const todaySalesTotal =
+      scopeBranchId && rpcSummary
+        ? rpcSummary.todaySales
+        : scopedSales
+            .filter((s) => saleDateKey(s) === todayKey)
+            .reduce((n, s) => n + (s.totalAmount || 0), 0)
     // Only expenses marked "Deduct cash" reduce the drawer (reporting expenses do not).
     const expenseCashOut = scopedExpenses
       .filter(
@@ -824,7 +898,7 @@ function BranchOpsDashboard() {
       manualDeducted,
       confirmedToday,
     }
-  }, [cashScope, todayKey, scopedSales, scopedExpenses, cashTick])
+  }, [cashScope, todayKey, scopedSales, scopedExpenses, cashTick, scopeBranchId, rpcSummary])
 
   const customerBirthdays = useMemo(() => {
     const todayList: BirthdayCard[] = []
