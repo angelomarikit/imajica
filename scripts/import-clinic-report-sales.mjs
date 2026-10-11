@@ -3,20 +3,33 @@
  * (lead_source = Clinic Report). Migration rows are left untouched.
  *
  * Usage:
- *   node scripts/import-clinic-report-sales.mjs [path-to-xlsx]
+ *   node scripts/import-clinic-report-sales.mjs [path-to-xlsx] [--from=YYYY-MM-DD] [--branch=Bacoor]
+ *
+ * Env:
+ *   REPLACE_CLINIC_REPORT=1  — delete existing Clinic Report sales before import
+ *     (optionally scoped by --branch). Requires service role or run delete via SQL.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomUUID } from 'node:crypto'
 import XLSX from 'xlsx'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULT_XLSX = path.join(
   process.env.USERPROFILE || '',
   'Downloads',
-  'Bacoor__Cavite_Report_20261001_to_20261011.xlsx',
+  'bacoor_data_til_april.xlsx',
 )
+
+function parseArgs(argv) {
+  const out = { file: null, from: null, branchFilter: null }
+  for (const a of argv) {
+    if (a.startsWith('--from=')) out.from = a.slice('--from='.length).trim()
+    else if (a.startsWith('--branch=')) out.branchFilter = a.slice('--branch='.length).trim().toLowerCase()
+    else if (!a.startsWith('--')) out.file = a
+  }
+  return out
+}
 
 const BRANCH_IDS = {
   'San Mateo, Rizal': '22222222-2222-2222-2222-222222222201',
@@ -134,7 +147,10 @@ if (!url || !key) {
   process.exit(1)
 }
 
-const xlsxPath = process.argv[2] || DEFAULT_XLSX
+const args = parseArgs(process.argv.slice(2))
+const xlsxPath = args.file || DEFAULT_XLSX
+const fromDate = args.from || null
+const branchFilter = args.branchFilter
 if (!fs.existsSync(xlsxPath)) {
   console.error('File not found:', xlsxPath)
   process.exit(1)
@@ -148,6 +164,7 @@ const rows = []
 let skipped = 0
 let excelTotal = 0
 const byBranch = {}
+const paymentTypeDist = {}
 
 for (let i = 0; i < rawRows.length; i++) {
   const r = rawRows[i]
@@ -161,21 +178,32 @@ for (let i = 0; i < rawRows.length; i++) {
     skipped++
     continue
   }
+  if (fromDate && parsed.dateKey < fromDate) {
+    skipped++
+    continue
+  }
+  if (branchFilter && !branchName.toLowerCase().includes(branchFilter)) {
+    skipped++
+    continue
+  }
   excelTotal += amount
   byBranch[branchName] = (byBranch[branchName] || 0) + amount
+  const paymentType = mapPaymentType(r.Payment, r.Status)
+  paymentTypeDist[paymentType] = (paymentTypeDist[paymentType] || 0) + 1
   const prefix = branchName.toLowerCase().includes('bacoor')
-    ? 'RPT-BAC'
+    ? 'OPS-BAC'
     : branchName.toLowerCase().includes('dasma')
-      ? 'RPT-DAS'
-      : 'RPT'
-  const invoice = `${prefix}-${parsed.dateKey.replace(/-/g, '')}-${String(i + 1).padStart(4, '0')}`
+      ? 'OPS-DAS'
+      : 'OPS'
+  // Stable invoice: date + name + item + amount + row (avoids collisions across re-imports)
+  const invoice = `${prefix}-${parsed.dateKey.replace(/-/g, '')}-${nameKey(customer).slice(0, 12)}-${nameKey(itemName).slice(0, 10)}-${String(Math.round(amount * 100))}-${String(i + 1).padStart(4, '0')}`
   rows.push({
     phone_key: null,
     full_name: customer,
     branch_id: branchId,
-    invoice_number: invoice,
-    booking_ref: invoice,
-    payment_type: mapPaymentType(r.Payment, r.Status),
+    invoice_number: invoice.slice(0, 120),
+    booking_ref: invoice.slice(0, 120),
+    payment_type: paymentType,
     status: mapStatus(r.Status),
     total_amount: amount,
     contract_amount: null,
@@ -198,11 +226,14 @@ console.log(
   JSON.stringify(
     {
       file: xlsxPath,
+      fromDate,
+      branchFilter,
       excelRows: rawRows.length,
       prepared: rows.length,
       skipped,
       excelTotal: Math.round(excelTotal * 100) / 100,
       byBranch,
+      paymentTypeDist,
     },
     null,
     2,

@@ -30,7 +30,10 @@ function manilaDate(d = new Date()): string {
 
 function defaultFranchiseRange() {
   const to = manilaDate()
-  return { from: `${to.slice(0, 8)}01`, to }
+  // Ops Excel source of truth starts Apr 2026 — show month-to-date within that era.
+  const monthStart = `${to.slice(0, 8)}01`
+  const opsStart = '2026-04-01'
+  return { from: monthStart < opsStart ? opsStart : monthStart, to }
 }
 
 function formatShortDate(iso: string) {

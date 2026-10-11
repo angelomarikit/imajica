@@ -1,0 +1,12 @@
+-- Ops sales source of truth: clinic Excel "Sales Data" imports
+-- (lead_source = 'Clinic Report'), aligned to existing clients by name+branch.
+--
+-- 2026-10-12: replaced the short Oct 1–11 Bacoor/Dasma report with
+-- bacoor_data_til_april.xlsx rows from 2026-04-01 onward (908 sales).
+-- Migration lead_source rows are intentionally left untouched (profile history).
+--
+-- Re-import:
+--   node scripts/import-clinic-report-sales.mjs "<xlsx>" --from=2026-04-01
+--
+-- Pending Status → payment_type Installment Payment; Split Payment kept as-is.
+select 1;
