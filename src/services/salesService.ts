@@ -262,36 +262,34 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
 /**
  * Org-wide list select. Include client/branch names so franchise migration lines
  * (Bacoor / Dasma) attach to Customer Registry even when localStorage ids differ.
+ * Typed as `string` so supabase-js does not try to parse the embed syntax at compile time.
  */
-const REMOTE_SALES_LIST_SELECT = `
-      id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
-      invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
-      contract_amount,
-      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ),
-      payments ( payment_method, payment_status ),
-      clients!client_id ( full_name ),
-      branches!branch_id ( name )
-    `
+const REMOTE_SALES_LIST_SELECT: string =
+  'id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at, ' +
+  'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
+  'contract_amount, ' +
+  'sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ), ' +
+  'payments ( payment_method, payment_status ), ' +
+  'clients!client_id ( full_name ), ' +
+  'branches!branch_id ( name )'
 
 /** Fallback when nested client/branch embeds fail under RLS (clinic managers still get amounts). */
-const REMOTE_SALES_LIST_SELECT_LEAN = `
-      id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
-      invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
-      contract_amount,
-      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ),
-      payments ( payment_method, payment_status )
-    `
+const REMOTE_SALES_LIST_SELECT_LEAN: string =
+  'id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at, ' +
+  'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
+  'contract_amount, ' +
+  'sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ), ' +
+  'payments ( payment_method, payment_status )'
 
 /** Richer select for a single client profile (names + payments). */
-const REMOTE_SALES_CLIENT_SELECT = `
-      id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
-      invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
-      contract_amount,
-      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ),
-      payments ( payment_method, payment_status ),
-      clients!client_id ( full_name ),
-      branches!branch_id ( name )
-    `
+const REMOTE_SALES_CLIENT_SELECT: string =
+  'id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at, ' +
+  'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
+  'contract_amount, ' +
+  'sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ), ' +
+  'payments ( payment_method, payment_status ), ' +
+  'clients!client_id ( full_name ), ' +
+  'branches!branch_id ( name )'
 
 function mergeRemoteSaleLines(mapped: Sale[]) {
   if (!mapped.length) return
@@ -335,7 +333,7 @@ async function fetchRemoteLiveSales(options?: {
       return null
     }
     if (!data?.length) break
-    all.push(...(data as RemoteSaleRow[]))
+    all.push(...(data as unknown as RemoteSaleRow[]))
     if (data.length < pageSize) break
   }
   return mapRemoteSales(all)
@@ -383,7 +381,7 @@ async function fetchSalesRowsForClientId(clientId: string): Promise<Sale[]> {
     console.error('[sales] client fetch failed', error.message)
     return []
   }
-  return mapRemoteSales((data as RemoteSaleRow[] | null) ?? [])
+  return mapRemoteSales((data as unknown as RemoteSaleRow[] | null) ?? [])
 }
 
 /** Ensure one client's Supabase sales are in the in-memory registry (profile tabs). */
