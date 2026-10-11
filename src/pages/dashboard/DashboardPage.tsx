@@ -40,6 +40,7 @@ import {
 import { getExpenses, subscribeExpenses } from '@/services/expenseService'
 import {
   getBookingRows,
+  ensureBranchRemoteSales,
   getSales,
   preloadSalesData,
   subscribeSalesData,
@@ -528,7 +529,17 @@ function BranchOpsDashboard() {
     const refreshAppts = () => {
       void listAppointments().then(setAppointments)
     }
-    void preloadSalesData().then(refreshSales)
+    void (async () => {
+      // Clinic managers: pull this branch from Supabase first so cards are not stuck at ₱0
+      if (scopeBranchId) {
+        await ensureBranchRemoteSales(scopeBranchId)
+        refreshSales()
+      }
+      await preloadSalesData(
+        scopeBranchId ? { branchId: scopeBranchId, skipImported: true } : undefined,
+      )
+      refreshSales()
+    })()
     void preloadClientsFromSupabase().then(refreshClients)
     refreshSales()
     refreshClients()
@@ -542,7 +553,7 @@ function BranchOpsDashboard() {
       subscribeCashDrawer(() => setCashTick((n) => n + 1)),
     ]
     return () => unsubs.forEach((u) => u())
-  }, [])
+  }, [scopeBranchId])
 
   const branchLabel = useMemo(() => {
     if (forcedBranchId || branchOwner) return user?.branchName ?? 'My Branch'

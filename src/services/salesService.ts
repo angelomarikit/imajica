@@ -273,6 +273,15 @@ const REMOTE_SALES_LIST_SELECT = `
       branches!branch_id ( name )
     `
 
+/** Fallback when nested client/branch embeds fail under RLS (clinic managers still get amounts). */
+const REMOTE_SALES_LIST_SELECT_LEAN = `
+      id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
+      invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id,
+      contract_amount,
+      sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ),
+      payments ( payment_method, payment_status )
+    `
+
 /** Richer select for a single client profile (names + payments). */
 const REMOTE_SALES_CLIENT_SELECT = `
       id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at,
@@ -295,16 +304,19 @@ function mergeRemoteSaleLines(mapped: Sale[]) {
 /** PostgREST max-rows is typically 1000 — page until exhausted (do not rely on .limit alone). */
 async function fetchRemoteLiveSales(options?: {
   branchId?: string
+  /** Prefer lean select (no client/branch embeds) — more reliable for clinic managers. */
+  lean?: boolean
 }): Promise<Sale[] | null> {
   if (!isSupabaseConfigured || !supabase) return []
 
+  const select = options?.lean ? REMOTE_SALES_LIST_SELECT_LEAN : REMOTE_SALES_LIST_SELECT
   const pageSize = 1000
   const all: RemoteSaleRow[] = []
   for (let from = 0; from < 50000; from += pageSize) {
     const to = from + pageSize - 1
     let query = supabase
       .from('sales')
-      .select(REMOTE_SALES_LIST_SELECT)
+      .select(select)
       .order('created_at', { ascending: false })
       .range(from, to)
     if (options?.branchId) {
@@ -314,6 +326,11 @@ async function fetchRemoteLiveSales(options?: {
     const { data, error } = await query
 
     if (error) {
+      // Nested embeds often fail under branch RLS — retry lean once at the start
+      if (!options?.lean && from === 0) {
+        console.warn('[sales] rich fetch failed, retrying lean select', error.message)
+        return fetchRemoteLiveSales({ ...options, lean: true })
+      }
       console.error('[sales] remote fetch failed', error.message)
       return null
     }
@@ -428,59 +445,92 @@ function applyRemoteSalesSnapshot(remote: Sale[] | null): boolean {
 }
 
 /** Load XLSX-derived sales JSON + remote booking sales once. */
-export async function preloadSalesData(): Promise<void> {
+export async function preloadSalesData(options?: {
+  /** Clinic managers: load this branch from Supabase first (skip HQ JSON dump). */
+  branchId?: string
+  skipImported?: boolean
+}): Promise<void> {
+  const branchId = options?.branchId?.trim() || undefined
+  const skipImported = Boolean(options?.skipImported || branchId)
+
   if (loaded) {
     // Refresh remote on each call after first load so re-login picks up DB rows
     if (isSupabaseConfigured) {
-      const remote = await fetchRemoteLiveSales()
-      if (applyRemoteSalesSnapshot(remote)) {
-        syncClientsFromSalesRegistry()
-        emitChange()
+      if (branchId) {
+        await ensureBranchRemoteSales(branchId)
+      } else {
+        const remote = await fetchRemoteLiveSales()
+        if (applyRemoteSalesSnapshot(remote)) {
+          syncClientsFromSalesRegistry()
+          emitChange()
+        }
       }
     } else {
       syncClientsFromSalesRegistry()
     }
     return
   }
-  if (loadPromise) return loadPromise
+  if (loadPromise) {
+    await loadPromise
+    if (branchId && isSupabaseConfigured) {
+      await ensureBranchRemoteSales(branchId)
+    }
+    return
+  }
 
   loadPromise = (async () => {
+    // Remote first so clinic dashboards are not blocked by the large HQ import JSON
     try {
-      const res = await fetch('/data/sales-transactions.json')
-      if (res.ok) {
-        const data = (await res.json()) as Sale[]
-        if (Array.isArray(data)) applyImported(data)
+      const remote = await fetchRemoteLiveSales(branchId ? { branchId, lean: true } : undefined)
+      if (branchId) {
+        if (remote?.length) mergeRemoteSaleLines(remote)
       } else {
-        console.error('[sales] failed to fetch sales-transactions.json', res.status)
+        applyRemoteSalesSnapshot(remote)
       }
     } catch (err) {
-      console.error('[sales] preload failed', err)
-      importedSales = []
+      console.error('[sales] remote preload failed', err)
     }
 
-    try {
-      const remote = await fetchRemoteLiveSales()
-      applyRemoteSalesSnapshot(remote)
-    } catch (err) {
-      console.error('[sales] remote preload failed', err)
-    } finally {
-      loaded = true
-      syncClientsFromSalesRegistry()
-      emitChange()
+    if (!skipImported) {
+      try {
+        const res = await fetch('/data/sales-transactions.json')
+        if (res.ok) {
+          const data = (await res.json()) as Sale[]
+          if (Array.isArray(data)) applyImported(data)
+        } else {
+          console.error('[sales] failed to fetch sales-transactions.json', res.status)
+        }
+      } catch (err) {
+        console.error('[sales] preload failed', err)
+        importedSales = []
+      }
     }
+
+    loaded = true
+    syncClientsFromSalesRegistry()
+    emitChange()
   })()
 
   return loadPromise
 }
 
 /** Re-fetch remote sales after login (bootstrap often runs before a JWT exists). */
-export async function refreshRemoteSalesAfterAuth(): Promise<void> {
+export async function refreshRemoteSalesAfterAuth(branchId?: string): Promise<void> {
   if (!isSupabaseConfigured) return
+  // Clinic managers: pull only their branch (fast + avoids empty HQ-scoped cache)
+  if (branchId) {
+    const n = await ensureBranchRemoteSales(branchId)
+    if (n > 0) return
+  }
   // Allow a full remote refresh even if an empty pre-auth load already finished
-  const remote = await fetchRemoteLiveSales()
+  const remote = await fetchRemoteLiveSales(branchId ? { branchId, lean: true } : undefined)
   if (remote == null) return
   if (remote.length === 0) return
-  remoteLiveSales = remote
+  if (branchId) {
+    mergeRemoteSaleLines(remote)
+  } else {
+    remoteLiveSales = remote
+  }
   loaded = true
   // Re-attach session / installment stats onto Customer Registry rows
   syncClientsFromSalesRegistry()
