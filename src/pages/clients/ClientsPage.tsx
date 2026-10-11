@@ -46,10 +46,6 @@ import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBra
 import { resolveClinicBranchId } from '@/services/branchService'
 import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
-function isInstallmentSaleType(paymentType?: string) {
-  const p = (paymentType || '').toLowerCase()
-  return p.includes('installment') || p.includes('split') || p.includes('partial')
-}
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -227,41 +223,12 @@ export function ClientsPage() {
     return map
   }, [salesTick])
 
-  /** Clients with open / tagged installment sales (for tracking badge). */
-  const installmentByClient = useMemo(() => {
-    void salesTick
-    const map = new Map<string, string>()
-    for (const s of getSales()) {
-      if (!isInstallmentSaleType(s.paymentType)) continue
-      const label = (s.paymentType || 'Installment').trim()
-      if (s.clientId) {
-        const prev = map.get(s.clientId)
-        if (!prev || label.toLowerCase().includes('down')) map.set(s.clientId, label)
-      }
-      const nk = normalizeClientName(s.clientName)
-      if (nk) {
-        const key = `n:${nk}`
-        const prev = map.get(key)
-        if (!prev || label.toLowerCase().includes('down')) map.set(key, label)
-      }
-    }
-    return map
-  }, [salesTick])
-
   function sessionsLabel(c: Client): string {
     if (!salesReady) return '…'
     const live =
       sessionsByClient.get(c.id) ??
       sessionsByClient.get(`n:${normalizeClientName(c.fullName)}`)
     return String(live ?? c.sessionsCount ?? c.totalVisits ?? 0)
-  }
-
-  function installmentLabel(c: Client): string | null {
-    return (
-      installmentByClient.get(c.id) ??
-      installmentByClient.get(`n:${normalizeClientName(c.fullName)}`) ??
-      null
-    )
   }
 
   useEffect(() => {
@@ -466,18 +433,13 @@ export function ClientsPage() {
                 <h3 className="mt-4 text-center text-sm font-bold uppercase tracking-wide text-[#0f172a]">
                   {c.fullName}
                 </h3>
-                <p className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5">
-                  {c.preferredBranchName?.trim() ? (
+                {c.preferredBranchName?.trim() ? (
+                  <p className="mt-1.5 flex justify-center">
                     <span className="inline-flex rounded-full bg-[#073D2C]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#073D2C]">
                       {c.preferredBranchName.replace(/ Branch$/i, '')}
                     </span>
-                  ) : null}
-                  {installmentLabel(c) ? (
-                    <span className="inline-flex rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200">
-                      {installmentLabel(c)}
-                    </span>
-                  ) : null}
-                </p>
+                  </p>
+                ) : null}
                 <p className="mt-1 text-center text-xs text-slate-ui">
                   {c.email?.trim() && !c.email.toLowerCase().endsWith('@imajica.local')
                     ? c.email
