@@ -5,22 +5,18 @@ import { preloadSalesData, refreshRemoteSalesAfterAuth } from '@/services/salesS
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { isBranchScopedStaff } from '@/utils/franchiseAccess'
 
-/** Loads imported sales JSON + catalog price overrides; refreshes remote sales after auth. */
+/** Loads catalog overrides + remote sales after a real staff session exists. */
 export function SalesDataBootstrap() {
   const { user } = useAuth()
-  const bootedJson = useRef(false)
+  const bootedOverrides = useRef(false)
 
   useEffect(() => {
-    if (bootedJson.current) return
-    bootedJson.current = true
-    // Clinic managers skip the HQ sales JSON — their branch is loaded after auth below
-    const branchId = isBranchScopedStaff(user) ? user?.branchId : undefined
-    void preloadSalesData(branchId ? { branchId, skipImported: true } : undefined)
+    if (bootedOverrides.current) return
+    bootedOverrides.current = true
     void preloadCatalogPriceOverrides()
-  }, [user])
+  }, [])
 
-  // SalesDataBootstrap used to run outside AuthProvider — empty RLS result wiped remote sales.
-  // After a real staff session exists, pull the clinic (or org) remote set.
+  // Wait for auth — a pre-login empty fetch used to leave clinic dashboards at ₱0.
   useEffect(() => {
     if (!user || user.role === 'CLIENT') return
     let cancelled = false
@@ -31,6 +27,8 @@ export function SalesDataBootstrap() {
       }
       const branchId = isBranchScopedStaff(user) ? user.branchId : undefined
       await refreshRemoteSalesAfterAuth(branchId)
+      if (cancelled) return
+      await preloadSalesData(branchId ? { branchId, skipImported: true } : undefined)
     })()
     return () => {
       cancelled = true

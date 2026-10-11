@@ -260,28 +260,16 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
 }
 
 /**
- * Org-wide list select. Include client/branch names so franchise migration lines
- * (Bacoor / Dasma) attach to Customer Registry even when localStorage ids differ.
- * Typed as `string` so supabase-js does not try to parse the embed syntax at compile time.
+ * Header-only select. Nested sale_items/payments embeds time out under branch RLS
+ * (Postgres 57014) for franchise clinics with thousands of migration rows.
+ * Items + payments are loaded in separate batched queries below.
  */
-const REMOTE_SALES_LIST_SELECT: string =
+const REMOTE_SALES_HEADER_SELECT: string =
   'id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at, ' +
   'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
-  'contract_amount, ' +
-  'sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ), ' +
-  'payments ( payment_method, payment_status ), ' +
-  'clients!client_id ( full_name ), ' +
-  'branches!branch_id ( name )'
+  'contract_amount'
 
-/** Fallback when nested client/branch embeds fail under RLS (clinic managers still get amounts). */
-const REMOTE_SALES_LIST_SELECT_LEAN: string =
-  'id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at, ' +
-  'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
-  'contract_amount, ' +
-  'sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ), ' +
-  'payments ( payment_method, payment_status )'
-
-/** Richer select for a single client profile (names + payments). */
+/** Single-client profile fetch can still use embeds (small result set). */
 const REMOTE_SALES_CLIENT_SELECT: string =
   'id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at, ' +
   'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
@@ -290,6 +278,61 @@ const REMOTE_SALES_CLIENT_SELECT: string =
   'payments ( payment_method, payment_status ), ' +
   'clients!client_id ( full_name ), ' +
   'branches!branch_id ( name )'
+
+type RemoteSaleItem = NonNullable<RemoteSaleRow['sale_items']>[number]
+type RemotePayment = NonNullable<RemoteSaleRow['payments']>[number]
+
+async function fetchSaleItemsBySaleIds(
+  saleIds: string[],
+): Promise<Map<string, RemoteSaleItem[]>> {
+  const out = new Map<string, RemoteSaleItem[]>()
+  if (!supabase || !saleIds.length) return out
+  const chunkSize = 200
+  for (let i = 0; i < saleIds.length; i += chunkSize) {
+    const chunk = saleIds.slice(i, i + chunkSize)
+    const { data, error } = await supabase
+      .from('sale_items')
+      .select(
+        'id, sale_id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed',
+      )
+      .in('sale_id', chunk)
+    if (error) {
+      console.warn('[sales] sale_items batch failed', error.message)
+      continue
+    }
+    for (const row of (data ?? []) as Array<RemoteSaleItem & { sale_id: string }>) {
+      const list = out.get(row.sale_id) ?? []
+      list.push(row)
+      out.set(row.sale_id, list)
+    }
+  }
+  return out
+}
+
+async function fetchPaymentsBySaleIds(
+  saleIds: string[],
+): Promise<Map<string, RemotePayment[]>> {
+  const out = new Map<string, RemotePayment[]>()
+  if (!supabase || !saleIds.length) return out
+  const chunkSize = 200
+  for (let i = 0; i < saleIds.length; i += chunkSize) {
+    const chunk = saleIds.slice(i, i + chunkSize)
+    const { data, error } = await supabase
+      .from('payments')
+      .select('sale_id, payment_method, payment_status')
+      .in('sale_id', chunk)
+    if (error) {
+      console.warn('[sales] payments batch failed', error.message)
+      continue
+    }
+    for (const row of (data ?? []) as Array<RemotePayment & { sale_id: string }>) {
+      const list = out.get(row.sale_id) ?? []
+      list.push({ payment_method: row.payment_method, payment_status: row.payment_status })
+      out.set(row.sale_id, list)
+    }
+  }
+  return out
+}
 
 function mergeRemoteSaleLines(mapped: Sale[]) {
   if (!mapped.length) return
@@ -302,19 +345,18 @@ function mergeRemoteSaleLines(mapped: Sale[]) {
 /** PostgREST max-rows is typically 1000 — page until exhausted (do not rely on .limit alone). */
 async function fetchRemoteLiveSales(options?: {
   branchId?: string
-  /** Prefer lean select (no client/branch embeds) — more reliable for clinic managers. */
+  /** @deprecated Kept for callers; embeds are no longer used for list fetches. */
   lean?: boolean
 }): Promise<Sale[] | null> {
   if (!isSupabaseConfigured || !supabase) return []
 
-  const select = options?.lean ? REMOTE_SALES_LIST_SELECT_LEAN : REMOTE_SALES_LIST_SELECT
   const pageSize = 1000
-  const all: RemoteSaleRow[] = []
+  const headers: Array<Omit<RemoteSaleRow, 'sale_items' | 'payments' | 'clients' | 'branches'>> = []
   for (let from = 0; from < 50000; from += pageSize) {
     const to = from + pageSize - 1
     let query = supabase
       .from('sales')
-      .select(select)
+      .select(REMOTE_SALES_HEADER_SELECT)
       .order('created_at', { ascending: false })
       .range(from, to)
     if (options?.branchId) {
@@ -324,18 +366,33 @@ async function fetchRemoteLiveSales(options?: {
     const { data, error } = await query
 
     if (error) {
-      // Nested embeds often fail under branch RLS — retry lean once at the start
-      if (!options?.lean && from === 0) {
-        console.warn('[sales] rich fetch failed, retrying lean select', error.message)
-        return fetchRemoteLiveSales({ ...options, lean: true })
-      }
       console.error('[sales] remote fetch failed', error.message)
       return null
     }
     if (!data?.length) break
-    all.push(...(data as unknown as RemoteSaleRow[]))
+    headers.push(
+      ...(data as unknown as Array<
+        Omit<RemoteSaleRow, 'sale_items' | 'payments' | 'clients' | 'branches'>
+      >),
+    )
     if (data.length < pageSize) break
   }
+
+  if (!headers.length) return []
+
+  const saleIds = headers.map((h) => h.id)
+  const [itemsBySale, paysBySale] = await Promise.all([
+    fetchSaleItemsBySaleIds(saleIds),
+    fetchPaymentsBySaleIds(saleIds),
+  ])
+
+  const all: RemoteSaleRow[] = headers.map((h) => ({
+    ...h,
+    sale_items: itemsBySale.get(h.id) ?? null,
+    payments: paysBySale.get(h.id) ?? null,
+    clients: null,
+    branches: null,
+  }))
   return mapRemoteSales(all)
 }
 
@@ -377,11 +434,38 @@ async function fetchSalesRowsForClientId(clientId: string): Promise<Sale[]> {
     .order('created_at', { ascending: false })
     .limit(1000)
 
-  if (error) {
-    console.error('[sales] client fetch failed', error.message)
+  if (!error) {
+    return mapRemoteSales((data as unknown as RemoteSaleRow[] | null) ?? [])
+  }
+
+  console.warn('[sales] client embed fetch failed, using header path', error.message)
+  const { data: headers, error: hErr } = await supabase
+    .from('sales')
+    .select(REMOTE_SALES_HEADER_SELECT)
+    .eq('client_id', clientId)
+    .order('created_at', { ascending: false })
+    .limit(1000)
+  if (hErr || !headers?.length) {
+    console.error('[sales] client fetch failed', hErr?.message || error.message)
     return []
   }
-  return mapRemoteSales((data as unknown as RemoteSaleRow[] | null) ?? [])
+  const ids = (headers as unknown as Array<{ id: string }>).map((h) => h.id)
+  const [itemsBySale, paysBySale] = await Promise.all([
+    fetchSaleItemsBySaleIds(ids),
+    fetchPaymentsBySaleIds(ids),
+  ])
+  const rows: RemoteSaleRow[] = (
+    headers as unknown as Array<
+      Omit<RemoteSaleRow, 'sale_items' | 'payments' | 'clients' | 'branches'>
+    >
+  ).map((h) => ({
+    ...h,
+    sale_items: itemsBySale.get(h.id) ?? null,
+    payments: paysBySale.get(h.id) ?? null,
+    clients: null,
+    branches: null,
+  }))
+  return mapRemoteSales(rows)
 }
 
 /** Ensure one client's Supabase sales are in the in-memory registry (profile tabs). */
