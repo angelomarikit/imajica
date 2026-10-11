@@ -5,9 +5,8 @@
  * Usage:
  *   node scripts/import-clinic-report-sales.mjs [path-to-xlsx] [--from=YYYY-MM-DD] [--branch=Bacoor]
  *
- * Env:
- *   REPLACE_CLINIC_REPORT=1  — delete existing Clinic Report sales before import
- *     (optionally scoped by --branch). Requires service role or run delete via SQL.
+ * IMPORTANT: Imports are additive. Never delete prior Clinic Report uploads —
+ * each Excel layer completes the ops timeline (e.g. Apr–Sep file + Oct file).
  */
 import fs from 'node:fs'
 import path from 'node:path'
