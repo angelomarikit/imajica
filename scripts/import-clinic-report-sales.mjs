@@ -108,18 +108,18 @@ function mapPaymentMethod(payment) {
 
 /**
  * Preserve installment tags for sales tracking.
- * Some Excel exports flatten Payment to "Full Payment" even when Status is Pending
- * (installment / downpayment in the clinic ops UI) — use Status as a fallback.
+ * Excel often flattens Payment to "Full Payment"; ops UI uses Installment /
+ * Installment (Downpayment). Prefer Payment text; Pending → Installment Payment.
  */
 function mapPaymentType(payment, status) {
   const raw = String(payment || '')
     .trim()
-    .replace(/\s+Payment\s+Payment$/i, ' Payment')
+    .replace(/\s+/g, ' ')
+    .replace(/(?:\s*Payment)+$/i, '')
+    .trim()
   const p = raw.toLowerCase()
   if (p.includes('installment') && p.includes('down')) return 'Installment (Downpayment)'
-  if (p.includes('installment')) {
-    return /payment/i.test(raw) ? 'Installment Payment' : 'Installment'
-  }
+  if (p.includes('installment')) return 'Installment Payment'
   if (p.includes('split')) return 'Split Payment'
   if (p.includes('partial')) return 'Partial'
   if (String(status || '').toLowerCase() === 'pending') return 'Installment Payment'

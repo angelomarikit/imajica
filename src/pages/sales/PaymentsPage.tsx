@@ -47,10 +47,14 @@ function typeBadge(type: AnalyticsSaleType | undefined) {
   return <Badge variant="success">Service</Badge>
 }
 
+/** Display payment type without Intracode-style “Payment Payment” doubling. */
 function paymentLabel(sale: Sale) {
-  const raw = (sale.paymentType || 'Full Payment').trim()
-  if (/payment$/i.test(raw)) return raw
-  return `${raw} Payment`
+  const raw = (sale.paymentType || 'Full Payment').trim().replace(/\s+/g, ' ')
+  if (/installment\s*\(\s*downpayment\s*\)/i.test(raw)) return 'Installment (Downpayment)'
+  if (/installment/i.test(raw)) return 'Installment Payment'
+  if (/split/i.test(raw)) return 'Split Payment'
+  if (/partial/i.test(raw)) return 'Partial'
+  return 'Full Payment'
 }
 
 export function PaymentsPage() {
