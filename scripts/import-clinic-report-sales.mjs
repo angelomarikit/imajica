@@ -106,11 +106,23 @@ function mapPaymentMethod(payment) {
   return 'cash'
 }
 
-function mapPaymentType(payment) {
-  const p = String(payment || '').toLowerCase()
-  if (p.includes('installment')) return 'Installment'
+/**
+ * Preserve installment tags for sales tracking.
+ * Some Excel exports flatten Payment to "Full Payment" even when Status is Pending
+ * (installment / downpayment in the clinic ops UI) — use Status as a fallback.
+ */
+function mapPaymentType(payment, status) {
+  const raw = String(payment || '')
+    .trim()
+    .replace(/\s+Payment\s+Payment$/i, ' Payment')
+  const p = raw.toLowerCase()
+  if (p.includes('installment') && p.includes('down')) return 'Installment (Downpayment)'
+  if (p.includes('installment')) {
+    return /payment/i.test(raw) ? 'Installment Payment' : 'Installment'
+  }
   if (p.includes('split')) return 'Split Payment'
   if (p.includes('partial')) return 'Partial'
+  if (String(status || '').toLowerCase() === 'pending') return 'Installment Payment'
   return 'Full Payment'
 }
 
@@ -163,7 +175,7 @@ for (let i = 0; i < rawRows.length; i++) {
     branch_id: branchId,
     invoice_number: invoice,
     booking_ref: invoice,
-    payment_type: mapPaymentType(r.Payment),
+    payment_type: mapPaymentType(r.Payment, r.Status),
     status: mapStatus(r.Status),
     total_amount: amount,
     contract_amount: null,
@@ -244,5 +256,33 @@ for (let i = 0; i < rows.length; i += BATCH) {
   })
 }
 
-console.log(JSON.stringify({ inserted, rpcSkipped, errorCount: errors.length, errors }, null, 2))
+// Patch payment_type on already-imported Clinic Report invoices (RPC skips duplicates).
+let patched = 0
+for (const row of rows) {
+  const res = await fetch(
+    `${url}/rest/v1/sales?invoice_number=eq.${encodeURIComponent(row.invoice_number)}&lead_source=eq.Clinic%20Report`,
+    {
+      method: 'PATCH',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        payment_type: row.payment_type,
+        status: row.status,
+      }),
+    },
+  )
+  if (res.ok) patched += 1
+}
+
+console.log(
+  JSON.stringify(
+    { inserted, rpcSkipped, patchedPaymentTypes: patched, errorCount: errors.length, errors },
+    null,
+    2,
+  ),
+)
 if (errors.length) process.exit(1)

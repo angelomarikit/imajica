@@ -23,7 +23,7 @@ import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { recomputeClientSalesProfile } from '@/services/clientSalesProfileService'
 import { getClientById, getClients, hydrateClientFromSupabase, persistClientToSupabase, preloadClientsFromSupabase, saveClient, subscribeClients } from '@/services/clientService'
 import { subscribeAnalytics } from '@/services/analyticsService'
-import { ensureClientRemoteSales, getSales, preloadSalesData } from '@/services/salesService'
+import { ensureClientRemoteSales, getSales } from '@/services/salesService'
 import { getClinicBranches, resolveClinicBranchId } from '@/services/branchService'
 import type { Client } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
@@ -135,7 +135,7 @@ export function ClientProfilePage() {
     if (tab !== 'services') return
     let cancelled = false
     void (async () => {
-      // Load THIS client's sales first (fast) — do not wait on the full org dump
+      // Per-client only (includes Migration history for this profile — no branch dump)
       if (id) {
         const result = await ensureClientRemoteSales(id, client?.fullName)
         if (!cancelled && result.resolvedClientId && result.resolvedClientId !== id) {
@@ -144,9 +144,6 @@ export function ClientProfilePage() {
         }
         if (!cancelled) setSalesTick((n) => n + 1)
       }
-      void preloadSalesData().then(() => {
-        if (!cancelled) setSalesTick((n) => n + 1)
-      })
     })()
     const unsubSales = subscribeAnalytics(() => {
       if (!cancelled) setSalesTick((n) => n + 1)

@@ -473,9 +473,51 @@ export async function fetchOpsSalesForRange(options: {
   return hydrateSaleHeaders(headers)
 }
 
+/** Manila calendar YYYY-MM-DD */
+function manilaDateKey(d = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d)
+}
+
+/**
+ * Lean clinic ops load (excludes Migration). Use on Franchise Sales / Customer List
+ * instead of pulling thousands of migration installment headers.
+ */
+export async function ensureBranchOpsSales(options?: {
+  branchId?: string
+  /** Inclusive from date YYYY-MM-DD (default: first day of current Manila month) */
+  from?: string
+  /** Inclusive to date YYYY-MM-DD (default: today Manila) */
+  to?: string
+  /** When true, also upsert client stubs from these sales into the registry */
+  syncClients?: boolean
+}): Promise<Sale[]> {
+  const to = options?.to || manilaDateKey()
+  const from = options?.from || `${to.slice(0, 8)}01`
+  const rows = await fetchOpsSalesForRange({
+    branchId: options?.branchId,
+    from,
+    to,
+  })
+  if (rows.length) {
+    mergeRemoteSaleLines(rows)
+    loaded = true
+    if (options?.syncClients !== false) {
+      syncClientsFromSalesRegistry()
+    }
+    emitChange()
+  }
+  return rows
+}
+
 /**
  * Pull one clinic's sales into memory first (fast path for Bacoor / Dasma customer lists).
  * Merges into the cache — does not wipe other branches.
+ * Prefer {@link ensureBranchOpsSales} for list pages — full branch includes Migration history.
  */
 export async function ensureBranchRemoteSales(branchId: string): Promise<number> {
   if (!isSupabaseConfigured || !branchId) return 0
@@ -676,12 +718,15 @@ export async function preloadSalesData(options?: {
 /** Re-fetch remote sales after login (bootstrap often runs before a JWT exists). */
 export async function refreshRemoteSalesAfterAuth(branchId?: string): Promise<void> {
   if (!isSupabaseConfigured) return
-  // Clinic managers: pull only their branch (fast + avoids empty HQ-scoped cache)
+  // Clinic managers: ops-only (skip ~3k Migration rows). Profiles still load
+  // per-client Migration history via ensureClientRemoteSales.
   if (branchId) {
-    const n = await ensureBranchRemoteSales(branchId)
-    if (n > 0) return
+    const to = manilaDateKey()
+    const from = `${to.slice(0, 4)}-01-01`
+    const ops = await ensureBranchOpsSales({ branchId, from, to, syncClients: true })
+    if (ops.length > 0) return
   }
-  // Allow a full remote refresh even if an empty pre-auth load already finished
+  // HQ / org-wide: allow a full remote refresh even if an empty pre-auth load finished
   const remote = await fetchRemoteLiveSales(branchId ? { branchId, lean: true } : undefined)
   if (remote == null) return
   if (remote.length === 0) return

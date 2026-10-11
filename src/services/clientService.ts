@@ -457,15 +457,19 @@ function mapRemoteClient(row: RemoteClientRow): Client {
  * Fills empty phone/email/gender/DOB/address that sales-only rows lack.
  * Remote rows are additive — never deletes local-only customers.
  */
-export async function preloadClientsFromSupabase(): Promise<number> {
+export async function preloadClientsFromSupabase(options?: {
+  /** Clinic managers: only pull customers for this branch (faster). */
+  branchId?: string
+}): Promise<number> {
   if (!isSupabaseConfigured || !supabase) return 0
 
+  const branchId = options?.branchId?.trim() || undefined
   // Paginate so HQ always gets the full migrated set (not just first page)
   const pageSize = 1000
   const all: RemoteClientRow[] = []
   for (let from = 0; from < 20000; from += pageSize) {
     const to = from + pageSize - 1
-    const { data, error } = await supabase
+    let query = supabase
       .from('clients')
       .select(
         `
@@ -478,6 +482,11 @@ export async function preloadClientsFromSupabase(): Promise<number> {
       )
       .order('updated_at', { ascending: false })
       .range(from, to)
+    if (branchId) {
+      query = query.eq('preferred_branch_id', branchId)
+    }
+
+    const { data, error } = await query
 
     if (error) {
       if (!/does not exist|schema cache|column/i.test(error.message)) {

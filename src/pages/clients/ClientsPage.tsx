@@ -35,11 +35,9 @@ import {
 } from '@/services/customerMigrationImportService'
 import { recomputeClientSalesProfile } from '@/services/clientSalesProfileService'
 import {
-  ensureBranchRemoteSales,
+  ensureBranchOpsSales,
   getSales,
   isSalesDataLoaded,
-  preloadSalesData,
-  syncClientsFromSalesRegistry,
 } from '@/services/salesService'
 import { subscribeAnalytics } from '@/services/analyticsService'
 import type { Client } from '@/types'
@@ -47,6 +45,11 @@ import { cn } from '@/utils/cn'
 import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { resolveClinicBranchId } from '@/services/branchService'
 import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
+
+function isInstallmentSaleType(paymentType?: string) {
+  const p = (paymentType || '').toLowerCase()
+  return p.includes('installment') || p.includes('split') || p.includes('partial')
+}
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -103,25 +106,36 @@ export function ClientsPage() {
     }
     setLoading(true)
     applyKnownClientProfiles()
-    // 1) Supabase registry first (migrated profiles)
-    // 2) Branch sales first (fast Sessions counts), then full org sales
+    // Lean path (same idea as Franchise Sales):
+    // 1) Branch-scoped client profiles from Supabase
+    // 2) Ops sales only (skip Migration dump) for installment tags / recent activity
     void (async () => {
       try {
-        await preloadClientsFromSupabase()
-        refresh()
-        const branchForSales =
+        const branchForClients =
           forcedBranchId ||
           (!hqView ? resolveClinicBranchId(user?.branchId) || user?.branchId : undefined) ||
           (hqView && effectiveBranchId !== 'all'
             ? resolveClinicBranchId(effectiveBranchId) || effectiveBranchId
             : undefined)
-        if (branchForSales) {
-          await ensureBranchRemoteSales(branchForSales)
-          refresh()
+        await preloadClientsFromSupabase(
+          branchForClients ? { branchId: branchForClients } : undefined,
+        )
+        refresh()
+        if (branchForClients) {
+          const to = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Manila',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }).format(new Date())
+          await ensureBranchOpsSales({
+            branchId: branchForClients,
+            from: `${to.slice(0, 4)}-01-01`,
+            to,
+            syncClients: true,
+          })
+          applyKnownClientProfiles()
         }
-        await preloadSalesData()
-        syncClientsFromSalesRegistry()
-        applyKnownClientProfiles()
       } finally {
         refresh()
       }
@@ -190,7 +204,7 @@ export function ClientsPage() {
   )
   const pageNumbers = useMemo(() => paginationItems(page, pageCount), [page, pageCount])
 
-  /** Live session totals from sales (not stale client.sessionsCount from before sales finish loading). */
+  /** Live session totals from ops sales cache (Migration history loads on profile). */
   const sessionsByClient = useMemo(() => {
     void salesTick
     const map = new Map<string, number>()
@@ -213,12 +227,41 @@ export function ClientsPage() {
     return map
   }, [salesTick])
 
+  /** Clients with open / tagged installment sales (for tracking badge). */
+  const installmentByClient = useMemo(() => {
+    void salesTick
+    const map = new Map<string, string>()
+    for (const s of getSales()) {
+      if (!isInstallmentSaleType(s.paymentType)) continue
+      const label = (s.paymentType || 'Installment').trim()
+      if (s.clientId) {
+        const prev = map.get(s.clientId)
+        if (!prev || label.toLowerCase().includes('down')) map.set(s.clientId, label)
+      }
+      const nk = normalizeClientName(s.clientName)
+      if (nk) {
+        const key = `n:${nk}`
+        const prev = map.get(key)
+        if (!prev || label.toLowerCase().includes('down')) map.set(key, label)
+      }
+    }
+    return map
+  }, [salesTick])
+
   function sessionsLabel(c: Client): string {
     if (!salesReady) return '…'
     const live =
       sessionsByClient.get(c.id) ??
       sessionsByClient.get(`n:${normalizeClientName(c.fullName)}`)
-    return String(live ?? c.sessionsCount ?? 0)
+    return String(live ?? c.sessionsCount ?? c.totalVisits ?? 0)
+  }
+
+  function installmentLabel(c: Client): string | null {
+    return (
+      installmentByClient.get(c.id) ??
+      installmentByClient.get(`n:${normalizeClientName(c.fullName)}`) ??
+      null
+    )
   }
 
   useEffect(() => {
@@ -406,7 +449,7 @@ export function ClientsPage() {
         </div>
 
         {loading && clients.length === 0 ? (
-          <p className="py-12 text-center text-sm text-slate-ui">Loading customers from sales…</p>
+          <p className="py-12 text-center text-sm text-slate-ui">Loading customers…</p>
         ) : filtered.length === 0 ? (
           <p className="py-12 text-center text-sm text-slate-ui">No customers match your search.</p>
         ) : (
@@ -423,13 +466,18 @@ export function ClientsPage() {
                 <h3 className="mt-4 text-center text-sm font-bold uppercase tracking-wide text-[#0f172a]">
                   {c.fullName}
                 </h3>
-                {c.preferredBranchName?.trim() ? (
-                  <p className="mt-1.5 flex justify-center">
+                <p className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5">
+                  {c.preferredBranchName?.trim() ? (
                     <span className="inline-flex rounded-full bg-[#073D2C]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#073D2C]">
                       {c.preferredBranchName.replace(/ Branch$/i, '')}
                     </span>
-                  </p>
-                ) : null}
+                  ) : null}
+                  {installmentLabel(c) ? (
+                    <span className="inline-flex rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200">
+                      {installmentLabel(c)}
+                    </span>
+                  ) : null}
+                </p>
                 <p className="mt-1 text-center text-xs text-slate-ui">
                   {c.email?.trim() && !c.email.toLowerCase().endsWith('@imajica.local')
                     ? c.email

@@ -17,6 +17,7 @@ export function SalesDataBootstrap() {
   }, [])
 
   // Wait for auth — a pre-login empty fetch used to leave clinic dashboards at ₱0.
+  // Clinic staff: ops-only refresh (excludes Migration dump). HQ keeps fuller preload.
   useEffect(() => {
     if (!user || user.role === 'CLIENT') return
     let cancelled = false
@@ -28,7 +29,9 @@ export function SalesDataBootstrap() {
       const branchId = isBranchScopedStaff(user) ? user.branchId : undefined
       await refreshRemoteSalesAfterAuth(branchId)
       if (cancelled) return
-      await preloadSalesData(branchId ? { branchId, skipImported: true } : undefined)
+      if (!branchId) {
+        await preloadSalesData()
+      }
     })()
     return () => {
       cancelled = true
