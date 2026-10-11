@@ -112,6 +112,34 @@ function isInstallmentPayment(paymentType?: string) {
   return p.includes('installment') || p.includes('split') || p.includes('partial')
 }
 
+/** Money-only installment / balance rows — belong under Installment Balances, not Availed Services. */
+function isMoneyOnlyInstallment(s: Sale) {
+  return (
+    isInstallmentPayment(s.paymentType) &&
+    (s.sessionsTotal == null || !Number.isFinite(Number(s.sessionsTotal)) || Number(s.sessionsTotal) <= 0)
+  )
+}
+
+function sessionsFromSale(s: Sale, cat: CatalogMatch | null): { total: number; completed: number } {
+  const qty = Math.max(1, s.quantity ?? 1)
+  const total = Math.max(
+    1,
+    s.sessionsTotal != null && Number.isFinite(Number(s.sessionsTotal))
+      ? Number(s.sessionsTotal)
+      : (cat?.sessions ?? 1) * qty,
+  )
+  const completed = Math.max(
+    0,
+    Math.min(
+      total,
+      s.sessionsCompleted != null && Number.isFinite(Number(s.sessionsCompleted))
+        ? Number(s.sessionsCompleted)
+        : 0,
+    ),
+  )
+  return { total, completed }
+}
+
 const catalogMatchCache = new Map<string, CatalogMatch | null>()
 
 export function matchCatalog(name: string, itemType: Sale['itemType'], branchName: string): CatalogMatch | null {
@@ -214,16 +242,15 @@ export function buildClientsFromSales(sales: Sale[]): Client[] {
     }
     const lastPurchaseAt = latest.createdAt
     const lastSaleId = latest.id
-    // Prefer imported sessions_total; else catalog sessions (one entitlement per item)
+    // Sum sessions across every service/package purchase (same item bought N times = N entitlements)
     const entitlementSessions = new Map<string, number>()
     for (const r of rows) {
       if (r.itemType !== 'service' && r.itemType !== 'package') continue
+      if (isMoneyOnlyInstallment(r)) continue
       const ek = entitlementKey(r)
-      if (entitlementSessions.has(ek)) continue
       const cat = matchCatalog(r.treatmentOrPackage, r.itemType, r.branchName)
-      const fromImport =
-        r.sessionsTotal != null && Number.isFinite(r.sessionsTotal) ? Number(r.sessionsTotal) : null
-      entitlementSessions.set(ek, Math.max(1, fromImport ?? cat?.sessions ?? 1))
+      const { total } = sessionsFromSale(r, cat)
+      entitlementSessions.set(ek, (entitlementSessions.get(ek) || 0) + total)
     }
     const sessionsCount = [...entitlementSessions.values()].reduce((a, b) => a + b, 0)
 
@@ -274,9 +301,12 @@ export function getAvailedServices(
   sales: Sale[],
   clientName?: string,
 ): ClientAvailedLine[] {
-  const rows = getClientSales(clientId, sales, clientName).filter(
-    (s) => s.itemType === 'service' || s.itemType === 'package',
-  )
+  const rows = getClientSales(clientId, sales, clientName).filter((s) => {
+    if (s.itemType !== 'service' && s.itemType !== 'package') return false
+    // Franchise Excel installments are money rows; sessions live on Availed_Services imports
+    if (isMoneyOnlyInstallment(s)) return false
+    return true
+  })
   const groups = new Map<string, Sale[]>()
   for (const s of rows) {
     const k = entitlementKey(s)
@@ -289,16 +319,16 @@ export function getAvailedServices(
     group.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     const first = group[0]!
     const cat = matchCatalog(first.treatmentOrPackage, first.itemType, first.branchName)
-    // Prefer imported session counts; else catalog sessions × quantity
-    const qty = Math.max(1, first.quantity ?? 1)
-    const totalSessions = Math.max(
-      1,
-      first.sessionsTotal ?? (cat?.sessions ?? 1) * qty,
-    )
-    const completed = Math.max(
-      0,
-      Math.min(totalSessions, first.sessionsCompleted ?? 0),
-    )
+    // Sum every purchase of the same service/package (Excel often has one row per visit/invoice)
+    let totalSessions = 0
+    let completed = 0
+    for (const g of group) {
+      const part = sessionsFromSale(g, matchCatalog(g.treatmentOrPackage, g.itemType, g.branchName) || cat)
+      totalSessions += part.total
+      completed += part.completed
+    }
+    totalSessions = Math.max(1, totalSessions)
+    completed = Math.max(0, Math.min(totalSessions, completed))
     const remaining = Math.max(0, totalSessions - completed)
     const hasPending =
       remaining > 0 ||
