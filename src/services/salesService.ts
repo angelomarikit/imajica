@@ -720,10 +720,10 @@ export async function refreshRemoteSalesAfterAuth(branchId?: string): Promise<vo
   if (!isSupabaseConfigured) return
   // Clinic managers: ops-only (skip ~3k Migration rows). Profiles still load
   // per-client Migration history via ensureClientRemoteSales.
-  // Ops source of truth starts Apr 2026 (clinic Excel imports).
+  // Ops Clinic Report layers start Sep 2025 (stacked Excel imports).
   if (branchId) {
     const to = manilaDateKey()
-    const from = to >= '2026-04-01' ? '2026-04-01' : `${to.slice(0, 4)}-01-01`
+    const from = '2025-09-01'
     const ops = await ensureBranchOpsSales({ branchId, from, to, syncClients: true })
     if (ops.length > 0) return
   }

@@ -1,9 +1,10 @@
 -- Ops sales: clinic Excel "Sales Data" imports (lead_source = 'Clinic Report').
 -- Additive only — stack files to complete the timeline (do not delete prior uploads).
 --
--- Layers:
---   1) bacoor_data_til_april.xlsx from 2026-04-01 (Apr–Sep)
---   2) Bacoor__Cavite_Report_20261001_to_20261011.xlsx (Oct 1–11)
+-- Layers (additive, date-sorted on import):
+--   1) sept2025_march2026.xlsx — Bacoor only (Sep 2025–Mar 2026)
+--   2) bacoor_data_til_april.xlsx from 2026-04-01 (Apr–Sep 2026)
+--   3) Bacoor__Cavite_Report_20261001_to_20261011.xlsx (Oct 1–11 2026)
 -- Migration lead_source rows stay on profiles only.
 --
 --   node scripts/import-clinic-report-sales.mjs "<xlsx>" [--from=YYYY-MM-DD]

@@ -157,7 +157,17 @@ if (!fs.existsSync(xlsxPath)) {
 
 const wb = XLSX.readFile(xlsxPath)
 const sheetName = wb.SheetNames.includes('Sales Data') ? 'Sales Data' : wb.SheetNames[0]
-const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' })
+const rawRowsUnsorted = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' })
+// Excel exports are often unsorted — order by calendar date then original row for stable invoices.
+const rawRows = rawRowsUnsorted
+  .map((r, originalIndex) => ({ r, originalIndex }))
+  .sort((a, b) => {
+    const da = parseDisplayDate(a.r.Date)?.dateKey || '9999-99-99'
+    const db = parseDisplayDate(b.r.Date)?.dateKey || '9999-99-99'
+    if (da !== db) return da.localeCompare(db)
+    return a.originalIndex - b.originalIndex
+  })
+  .map(({ r }) => r)
 
 const rows = []
 let skipped = 0

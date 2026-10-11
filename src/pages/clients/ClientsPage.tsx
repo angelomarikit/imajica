@@ -130,7 +130,7 @@ export function ClientsPage() {
           }).format(new Date())
           await ensureBranchOpsSales({
             branchId: branchForClients,
-            from: to >= '2026-04-01' ? '2026-04-01' : `${to.slice(0, 4)}-01-01`,
+            from: '2025-09-01',
             to,
             syncClients: true,
           })
