@@ -38,14 +38,17 @@ import {
 import { listMyAttendance, subscribeAttendance } from '@/services/attendanceService'
 import {
   BRANCH_SALES_MILESTONE,
+  CLINIC_MANAGER_COMMISSION_RATE,
   STAFF_SALES_COMMISSION_RATE,
 } from '@/constants/payrollIncentives'
 import {
   computeBranchMilestoneSplit,
+  computeClinicManagerCommission,
   listEmployeeTaggedBookings,
   resolveEmployeeMatchNames,
   saleDateKey,
 } from '@/services/staffCommissionService'
+import { isBranchOwner } from '@/utils/franchiseAccess'
 import {
   ATTENDANCE_INCENTIVE_AMOUNT,
   computeMonthlyAttendanceIncentive,
@@ -134,6 +137,7 @@ type ProductSoldRow = {
 
 export function MyCommissionSalesPage() {
   const { user } = useAuth()
+  const clinicManager = isBranchOwner(user)
   const initialRange = defaultMonthRange()
   const rate = STAFF_COMMISSION_RATE
   const ownerName = user?.fullName?.trim() || 'Your account'
@@ -231,6 +235,19 @@ export function MyCommissionSalesPage() {
       pendingCount: filteredBookings.filter((r) => r.status === 'Pending').length,
     }
   }, [filteredBookings, product, rate])
+
+  /** Clinic manager 1% on whole-clinic paid sales — personal page only (not branch dashboard). */
+  const managerCommission = useMemo(() => {
+    void tick
+    if (!clinicManager || !user?.branchId) {
+      return { branchSales: 0, commission: 0 }
+    }
+    return computeClinicManagerCommission({
+      branchId: user.branchId,
+      from,
+      to,
+    })
+  }, [clinicManager, user?.branchId, from, to, tick])
 
   const chartData = useMemo(() => {
     const map = new Map<string, { date: string; mySales: number; myCommission: number }>()
@@ -373,7 +390,11 @@ export function MyCommissionSalesPage() {
     <div className="space-y-5">
       <AdminPageBanner
         title="My Commission & Sales"
-        description={`Your tagged checkout sales with ${(STAFF_COMMISSION_RATE * 100).toFixed(1)}% staff commission — filter by date and product.`}
+        description={
+          clinicManager
+            ? `Your staff commission plus clinic manager ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}% on clinic sales — filter by date and product.`
+            : `Your tagged checkout sales with ${(STAFF_COMMISSION_RATE * 100).toFixed(1)}% staff commission — filter by date and product.`
+        }
       />
 
       <BookingSummaryModal
@@ -439,7 +460,12 @@ export function MyCommissionSalesPage() {
         </p>
       </Card>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div
+        className={cn(
+          'grid gap-3 sm:grid-cols-2',
+          clinicManager ? 'xl:grid-cols-3' : 'xl:grid-cols-5',
+        )}
+      >
         <StatCard
           label="My Paid Sales"
           value={formatPesoExact(summary.paidSales)}
@@ -450,10 +476,19 @@ export function MyCommissionSalesPage() {
         <StatCard
           label="My Commission"
           value={formatPesoExact(summary.commission)}
-          subtext={`${(rate * 100).toFixed(1)}% · ${filterLabel}`}
+          subtext={`${(rate * 100).toFixed(1)}% tagged · ${filterLabel}`}
           icon={<Percent className="h-5 w-5" />}
           tone="gold"
         />
+        {clinicManager ? (
+          <StatCard
+            label="Clinic Manager Commission"
+            value={formatPesoExact(managerCommission.commission)}
+            subtext={`${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}% of clinic sales ${formatPesoExact(managerCommission.branchSales)} · ${filterLabel}`}
+            icon={<Percent className="h-5 w-5" />}
+            tone="emerald"
+          />
+        ) : null}
         <StatCard
           label="My Bookings"
           value={String(summary.bookings)}

@@ -459,6 +459,7 @@ function buildFranchiseOwnerNavSections(handoffUnread = 0): NavSection[] {
       { to: '/admin/attendance', label: 'My Attendance', icon: Clock },
       { to: '/admin/my-leave', label: 'My Leave', icon: CalendarOff },
       { to: '/admin/my-training', label: 'My Training', icon: GraduationCap },
+      { to: '/admin/commission-sales', label: 'My Commission & Sales', icon: Wallet },
       { to: '/admin/hr/leave', label: 'Leave Approvals', icon: CalendarOff },
       { to: '/admin/my-salary', label: 'My Salary', icon: Banknote },
     ],
