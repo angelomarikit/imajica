@@ -6,6 +6,7 @@ import {
   subscribeCatalogPriceOverrides,
 } from '@/services/catalogPriceOverrideService'
 import { SERVICE_CATALOG_SEED, type ServiceSeedRow } from '@/constants/serviceCatalogSeed'
+import { BACOOR_SERVICE_CATALOG_SEED } from '@/constants/bacoorServiceCatalogSeed'
 import { PACKAGE_CATALOG_SEED, type PackageSeedRow } from '@/constants/packageCatalogSeed'
 
 const SERVICES_KEY = 'imajica_catalog_services'
@@ -54,8 +55,12 @@ function writeDeletedIds(ids: Set<string>) {
   localStorage.setItem(SERVICES_DELETED_KEY, JSON.stringify([...ids]))
 }
 
-function seedRowToTreatment(row: ServiceSeedRow, index: number): Treatment {
-  const id = `svc-seed-${String(index + 1).padStart(4, '0')}`
+function seedRowToTreatment(
+  row: ServiceSeedRow,
+  index: number,
+  idPrefix = 'svc-seed',
+): Treatment {
+  const id = `${idPrefix}-${String(index + 1).padStart(4, '0')}`
   const branchId = row.branch ? BRANCH_NAME_TO_ID[row.branch] : undefined
   const noBranch = !row.branch
   return {
@@ -78,9 +83,12 @@ function seedRowToTreatment(row: ServiceSeedRow, index: number): Treatment {
 
 function builtInServices(): Treatment[] {
   const deleted = readDeletedIds()
-  return SERVICE_CATALOG_SEED.map((row, i) => seedRowToTreatment(row, i)).filter(
-    (s) => !deleted.has(s.id),
+  const hq = SERVICE_CATALOG_SEED.map((row, i) => seedRowToTreatment(row, i))
+  // Stable Bacoor franchise menu (separate id prefix so HQ seed indexes stay fixed)
+  const bacoor = BACOOR_SERVICE_CATALOG_SEED.map((row, i) =>
+    seedRowToTreatment(row, i, 'svc-bacoor'),
   )
+  return [...hq, ...bacoor].filter((s) => !deleted.has(s.id))
 }
 
 export function getServices(): Treatment[] {
