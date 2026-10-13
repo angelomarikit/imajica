@@ -19,33 +19,27 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { getBranches } from '@/services/branchService'
 import {
+  branchUsesOwnServiceMenu,
   deleteService,
   getServices,
+  getServicesForBranch,
   isServiceLiveAtBranch,
   serviceBranchLabel,
   subscribeCatalog,
   toggleServiceLiveForBranch,
 } from '@/services/catalogService'
-import type { Treatment } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import { useAuth } from '@/contexts/AuthContext'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
-function serviceMatchesBranch(s: Treatment, branchId: string): boolean {
-  if (branchId === 'all') return true
-  if (s.availableGlobally) return true
-  if (s.availableBranchIds?.includes(branchId)) return true
-  return s.branchId === branchId
-}
-
 export function ServiceListPage() {
   const { user } = useAuth()
   const franchiseOwner = isFranchiseBranchOwner(user)
   const forcedBranchId = useForcedBranchId()
-  const [services, setServices] = useState<Treatment[]>(() => getServices())
-  const branches = useMemo(() => getBranches(), [services])
+  const [catalogTick, setCatalogTick] = useState(0)
+  const branches = useMemo(() => getBranches(), [catalogTick])
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [sessionFilter, setSessionFilter] = useState('all')
@@ -54,21 +48,29 @@ export function ServiceListPage() {
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
-  useEffect(() => subscribeCatalog(() => setServices(getServices())), [])
+  useEffect(() => subscribeCatalog(() => setCatalogTick((n) => n + 1)), [])
 
   useEffect(() => {
     if (forcedBranchId) setBranchFilter(forcedBranchId)
   }, [forcedBranchId])
 
+  const ownMenuOnly = branchUsesOwnServiceMenu(branchFilter)
+
+  // Bacoor: sealed franchise menu. Other clinics: HQ can filter; other franchises browse full catalog to toggle live.
+  const services = useMemo(() => {
+    void catalogTick
+    if (ownMenuOnly) return getServicesForBranch(branchFilter)
+    if (franchiseOwner) return getServices()
+    return getServicesForBranch(branchFilter)
+  }, [catalogTick, branchFilter, ownMenuOnly, franchiseOwner])
+
   const filtered = useMemo(() => {
     return services.filter((s) => {
       if (sessionFilter !== 'all' && String(s.sessions ?? 1) !== sessionFilter) return false
-      // Franchise owners see full catalog so they can toggle live for their branch
-      if (!franchiseOwner && !serviceMatchesBranch(s, branchFilter)) return false
       if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false
       return true
     })
-  }, [services, sessionFilter, branchFilter, search, franchiseOwner])
+  }, [services, sessionFilter, search])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
@@ -142,11 +144,11 @@ export function ServiceListPage() {
       <AdminPageBanner
         title="Imajica Service Catalog"
         description={
-          franchiseOwner
-            ? 'Manage services for your branch — add new offerings, edit details, and toggle what is live.'
+          franchiseOwner || ownMenuOnly
+            ? 'Your clinic service menu — prices and offerings for this branch only.'
             : 'Elevating beauty and confidence. Manage and view clinic service portfolios, price structures, and active branch availabilities dynamically across the brand network.'
         }
-        stat={{ value: services.length, label: 'Total Services' }}
+        stat={{ value: filtered.length, label: 'Total Services' }}
       />
 
       <Card className="p-4 sm:p-5">
@@ -280,7 +282,7 @@ export function ServiceListPage() {
                     <td className="px-2 py-3 font-medium">{formatPeso(s.price)}</td>
                     <td className="px-2 py-3">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        {franchiseOwner && forcedBranchId ? (
+                        {franchiseOwner && forcedBranchId && !ownMenuOnly ? (
                           <button
                             type="button"
                             role="switch"

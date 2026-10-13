@@ -329,6 +329,52 @@ export function isServiceLiveAtBranch(service: Treatment, branchId: string): boo
   return service.branchId === branchId
 }
 
+/**
+ * Explicit branch assignment only — no “All Branches” spillover.
+ * Used for franchise own menus (e.g. Bacoor screenshot list).
+ */
+export function serviceAssignedToBranch(service: Treatment, branchId: string): boolean {
+  if (branchId === 'all') return true
+  if (service.availableBranchIds?.includes(branchId)) return true
+  return service.branchId === branchId
+}
+
+export function packageAssignedToBranch(pkg: Package, branchId: string): boolean {
+  if (branchId === 'all') return true
+  if (pkg.availableBranchIds?.includes(branchId)) return true
+  return pkg.branchId === branchId
+}
+
+/** Bacoor franchise UUID — dedicated screenshot menu (not full HQ catalog). */
+export const BACOOR_BRANCH_ID = BRANCH_NAME_TO_ID['Bacoor, Cavite']
+
+/**
+ * Branches with their own sealed menu (today: Bacoor only).
+ * Other franchises can still opt into the shared Imajica catalog.
+ */
+export function branchUsesOwnServiceMenu(branchId: string | undefined | null): boolean {
+  return Boolean(branchId && branchId === BACOOR_BRANCH_ID)
+}
+
+/** Services visible in Service List / booking for a branch filter. */
+export function getServicesForBranch(branchId: string | 'all' | undefined): Treatment[] {
+  const all = getServices()
+  if (!branchId || branchId === 'all') return all
+  if (branchUsesOwnServiceMenu(branchId)) {
+    return all.filter((s) => serviceAssignedToBranch(s, branchId))
+  }
+  return all.filter((s) => isServiceLiveAtBranch(s, branchId))
+}
+
+export function getPackagesForBranch(branchId: string | 'all' | undefined): Package[] {
+  const all = getPackagesCatalog()
+  if (!branchId || branchId === 'all') return all
+  if (branchUsesOwnServiceMenu(branchId)) {
+    return all.filter((p) => packageAssignedToBranch(p, branchId))
+  }
+  return all.filter((p) => isPackageLiveAtBranch(p, branchId))
+}
+
 export function togglePackageLiveForBranch(packageId: string, branchId: string, live: boolean): Package | null {
   const existing = getPackageById(packageId)
   if (!existing) return null

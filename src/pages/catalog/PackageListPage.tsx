@@ -18,33 +18,27 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { getBranches } from '@/services/branchService'
 import {
+  branchUsesOwnServiceMenu,
   deletePackage,
   getPackagesCatalog,
+  getPackagesForBranch,
   isPackageLiveAtBranch,
   packageBranchLabel,
   subscribeCatalog,
   togglePackageLiveForBranch,
 } from '@/services/catalogService'
-import type { Package } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import { useAuth } from '@/contexts/AuthContext'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 
-function packageMatchesBranch(p: Package, branchId: string): boolean {
-  if (branchId === 'all') return true
-  if (p.availableGlobally) return true
-  if (p.availableBranchIds?.includes(branchId)) return true
-  return p.branchId === branchId
-}
-
 export function PackageListPage() {
   const { user } = useAuth()
   const franchiseOwner = isFranchiseBranchOwner(user)
   const forcedBranchId = useForcedBranchId()
-  const [packages, setPackages] = useState<Package[]>(() => getPackagesCatalog())
-  const branches = useMemo(() => getBranches(), [packages])
+  const [catalogTick, setCatalogTick] = useState(0)
+  const branches = useMemo(() => getBranches(), [catalogTick])
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [sessionFilter, setSessionFilter] = useState('all')
@@ -53,19 +47,27 @@ export function PackageListPage() {
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
-  useEffect(() => subscribeCatalog(() => setPackages(getPackagesCatalog())), [])
+  useEffect(() => subscribeCatalog(() => setCatalogTick((n) => n + 1)), [])
   useEffect(() => {
     if (forcedBranchId) setBranchFilter(forcedBranchId)
   }, [forcedBranchId])
 
+  const ownMenuOnly = branchUsesOwnServiceMenu(branchFilter)
+
+  const packages = useMemo(() => {
+    void catalogTick
+    if (ownMenuOnly) return getPackagesForBranch(branchFilter)
+    if (franchiseOwner) return getPackagesCatalog()
+    return getPackagesForBranch(branchFilter)
+  }, [catalogTick, branchFilter, ownMenuOnly, franchiseOwner])
+
   const filtered = useMemo(() => {
     return packages.filter((p) => {
       if (sessionFilter !== 'all' && String(p.sessions) !== sessionFilter) return false
-      if (!franchiseOwner && !packageMatchesBranch(p, branchFilter)) return false
       if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false
       return true
     })
-  }, [packages, sessionFilter, branchFilter, search, franchiseOwner])
+  }, [packages, sessionFilter, search])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
@@ -123,8 +125,12 @@ export function PackageListPage() {
     <div className="space-y-5">
       <AdminPageBanner
         title="Imajica Package Catalog"
-        description="Manage treatment packages, inclusions, pricing, and branch availability across Imajica Medical Aesthetics."
-        stat={{ value: packages.length, label: 'Total Packages' }}
+        description={
+          franchiseOwner || ownMenuOnly
+            ? 'Packages available at your clinic only.'
+            : 'Manage treatment packages, inclusions, pricing, and branch availability across Imajica Medical Aesthetics.'
+        }
+        stat={{ value: filtered.length, label: 'Total Packages' }}
       />
 
       <Card className="p-4 sm:p-5">
@@ -144,7 +150,9 @@ export function PackageListPage() {
               </>
             ) : (
               <p className="text-sm text-slate-ui">
-                Toggle packages live for {user?.branchName ?? 'your branch'} only.
+                {ownMenuOnly
+                  ? `Packages for ${user?.branchName ?? 'your clinic'} only.`
+                  : `Toggle packages live for ${user?.branchName ?? 'your branch'} only.`}
               </p>
             )}
           </div>
@@ -276,7 +284,7 @@ export function PackageListPage() {
                     {formatPeso(p.promoPrice ?? p.regularPrice)}
                   </td>
                   <td className="px-2 py-3">
-                    {franchiseOwner && forcedBranchId ? (
+                    {franchiseOwner && forcedBranchId && !ownMenuOnly ? (
                       <button
                         type="button"
                         role="switch"

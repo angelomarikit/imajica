@@ -6,7 +6,11 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { useAuth } from '@/contexts/AuthContext'
 import { getBranches, subscribeBranches } from '@/services/branchService'
-import { getServiceById, saveServiceFromForm } from '@/services/catalogService'
+import {
+  BACOOR_BRANCH_ID,
+  getServiceById,
+  saveServiceFromForm,
+} from '@/services/catalogService'
 import type { Branch } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -58,6 +62,7 @@ export function NewServicePage() {
   const editId = params.get('edit')
   const isEdit = Boolean(editId)
   const franchiseOwner = isFranchiseBranchOwner(user)
+  const bacoorOwnMenu = franchiseOwner && user?.branchId === BACOOR_BRANCH_ID
 
   const [branches, setBranches] = useState<Branch[]>(() => getBranches())
   const [name, setName] = useState('')
@@ -111,12 +116,16 @@ export function NewServicePage() {
   const previewDesc =
     description.trim() || 'Provide a description to see how it displays here...'
 
-  const activeBranches = useMemo(
-    () => branches.filter((b) => b.status === 'active'),
-    [branches],
-  )
+  const activeBranches = useMemo(() => {
+    const active = branches.filter((b) => b.status === 'active')
+    if (bacoorOwnMenu && user?.branchId) {
+      return active.filter((b) => b.id === user.branchId)
+    }
+    return active
+  }, [branches, bacoorOwnMenu, user?.branchId])
 
   function setGlobal(next: boolean) {
+    if (bacoorOwnMenu) return
     setAvailableGlobally(next)
     if (next) {
       setAvailableBranchIds(activeBranches.map((b) => b.id))
@@ -125,6 +134,7 @@ export function NewServicePage() {
 
   function toggleBranch(id: string, on: boolean) {
     if (availableGlobally) return
+    if (bacoorOwnMenu && id !== user?.branchId) return
     setAvailableBranchIds((prev) => {
       if (on) return prev.includes(id) ? prev : [...prev, id]
       return prev.filter((x) => x !== id)
@@ -137,8 +147,19 @@ export function NewServicePage() {
       toast.error('Service name is required')
       return
     }
-    if (!availableGlobally && availableBranchIds.length === 0) {
+    const branchIds = bacoorOwnMenu
+      ? user?.branchId
+        ? [user.branchId]
+        : []
+      : availableGlobally
+        ? activeBranches.map((b) => b.id)
+        : availableBranchIds
+    if (!bacoorOwnMenu && !availableGlobally && branchIds.length === 0) {
       toast.error('Select at least one branch, or turn on Global')
+      return
+    }
+    if (bacoorOwnMenu && branchIds.length === 0) {
+      toast.error('Bacoor branch is required')
       return
     }
     setSaving(true)
@@ -149,10 +170,8 @@ export function NewServicePage() {
         price: priceNum,
         sessions: sessionsNum,
         status: active ? 'active' : 'inactive',
-        availableGlobally,
-        availableBranchIds: availableGlobally
-          ? activeBranches.map((b) => b.id)
-          : availableBranchIds,
+        availableGlobally: bacoorOwnMenu ? false : availableGlobally,
+        availableBranchIds: branchIds,
       })
       toast.success(isEdit ? 'Service updated' : 'Service saved')
       navigate('/admin/catalog/services')
@@ -316,19 +335,25 @@ export function NewServicePage() {
               <h2 className="font-semibold text-[#073D2C]">Branch Availability</h2>
             </div>
 
-            <div className="flex items-center justify-between gap-3 rounded-[12px] border border-border bg-ivory-100/80 px-3 py-3">
-              <div>
-                <p className="text-sm font-semibold text-[#073D2C]">Global (All Branches)</p>
-                <p className="text-xs text-slate-ui">
-                  Make this service available across all current and future branches.
-                </p>
+            {!bacoorOwnMenu ? (
+              <div className="flex items-center justify-between gap-3 rounded-[12px] border border-border bg-ivory-100/80 px-3 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-[#073D2C]">Global (All Branches)</p>
+                  <p className="text-xs text-slate-ui">
+                    Make this service available across all current and future branches.
+                  </p>
+                </div>
+                <Switch
+                  checked={availableGlobally}
+                  onChange={setGlobal}
+                  ariaLabel="Global all branches"
+                />
               </div>
-              <Switch
-                checked={availableGlobally}
-                onChange={setGlobal}
-                ariaLabel="Global all branches"
-              />
-            </div>
+            ) : (
+              <p className="rounded-[12px] border border-border bg-ivory-100/80 px-3 py-3 text-xs text-slate-ui">
+                Bacoor services stay on the Bacoor menu only — they are not shared to other clinics.
+              </p>
+            )}
 
             <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto pr-1">
               {activeBranches.length === 0 ? (

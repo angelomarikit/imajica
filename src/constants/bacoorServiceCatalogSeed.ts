@@ -109,7 +109,8 @@ export const BACOOR_SERVICE_CATALOG_SEED: ServiceSeedRow[] = [
   // Page 5 — kept ₱2,000 Immunity 1-session as primary; ₱500 flagged for review
   { name: 'ADD-ONS L-CARN', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 500 },
   { name: 'IMMUNITY DRIP', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 2000 },
-  { name: 'IMMUNITY DRIP (ADD-ON)', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 500 },
+  // Same name as screenshot (₱500 1-session variant)
+  { name: 'IMMUNITY DRIP', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 500 },
   { name: 'CLEANING SURGICAL SITE', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 500 },
   { name: 'EXIPRO GROIN', sessions: 7, branch: BACOOR_BRANCH, status: 'active', price: 7000 },
   { name: 'FLAWLESS UNDERARM', sessions: 10, branch: BACOOR_BRANCH, status: 'active', price: 15000 },
@@ -132,6 +133,7 @@ export const BACOOR_SERVICE_CATALOG_SEED: ServiceSeedRow[] = [
 
   // Page 7 — SLENDER DRIP 5 kept at ₱10,000 active (common price); ₱9,500 inactive flagged
   { name: 'SLENDER DRIP', sessions: 5, branch: BACOOR_BRANCH, status: 'active', price: 10000 },
+  { name: 'SLENDER DRIP', sessions: 5, branch: BACOOR_BRANCH, status: 'inactive', price: 9500 },
   { name: 'WARTS REMOVAL', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 1499 },
   { name: 'GLP', sessions: 4, branch: BACOOR_BRANCH, status: 'active', price: 30000 },
   { name: 'DIODE UNDERARM', sessions: 10, branch: BACOOR_BRANCH, status: 'active', price: 10000 },
@@ -160,7 +162,7 @@ export const BACOOR_SERVICE_CATALOG_SEED: ServiceSeedRow[] = [
   { name: 'CHEMICAL PEEL AND CHARCOAL LASER', sessions: 5, branch: BACOOR_BRANCH, status: 'active', price: 20000 },
   { name: 'IMAJICA AQUA PACKAGE', sessions: 5, branch: BACOOR_BRANCH, status: 'active', price: 4000 },
   { name: 'IMAJICA CLEAR SINGLE', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 4400 },
-  { name: 'WARTS REMOVAL (LEGACY)', sessions: 1, branch: BACOOR_BRANCH, status: 'inactive', price: 2500 },
+  { name: 'WARTS REMOVAL', sessions: 1, branch: BACOOR_BRANCH, status: 'inactive', price: 2500 },
   { name: 'INTENSIVE UNDER ARM TREATMENT', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 2500 },
   { name: 'WARTS REMOVAL 20%', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 2000 },
   { name: 'IMAJICA CELEBRITY 20%', sessions: 6, branch: BACOOR_BRANCH, status: 'active', price: 12000 },
@@ -170,6 +172,7 @@ export const BACOOR_SERVICE_CATALOG_SEED: ServiceSeedRow[] = [
   { name: 'SLENDER 15%', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 1700 },
   { name: 'ULTRAFORMER 20%', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 8000 },
   { name: 'SKINTAG REMOVAL', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 1499 },
+  { name: 'SKINTAG REMOVAL', sessions: 1, branch: BACOOR_BRANCH, status: 'inactive', price: 1000 },
   { name: 'MULTIVITAMINS 20%', sessions: 6, branch: BACOOR_BRANCH, status: 'active', price: 10000 },
   { name: 'ULTRAFORMER', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 10000 },
   { name: 'MESOMELA I', sessions: 1, branch: BACOOR_BRANCH, status: 'active', price: 5000 },

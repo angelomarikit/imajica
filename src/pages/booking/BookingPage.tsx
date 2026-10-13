@@ -18,7 +18,11 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
-import { getPackagesCatalog, getServices, subscribeCatalog } from '@/services/catalogService'
+import {
+  getPackagesForBranch,
+  getServicesForBranch,
+  subscribeCatalog,
+} from '@/services/catalogService'
 import { getCoupons } from '@/services/couponService'
 import { getCatalogProducts, subscribeProducts } from '@/services/productCatalogService'
 import { preloadSalesData } from '@/services/salesService'
@@ -88,7 +92,8 @@ export function BookingPage() {
 
   const offerings = useMemo(() => {
     void catalogTick
-    const services = getServices()
+    const branchId = bookingListBranchId ?? 'all'
+    const services = getServicesForBranch(branchId)
       .filter((s) => s.status === 'active')
       .map((s) => ({
         id: s.id,
@@ -97,7 +102,7 @@ export function BookingPage() {
         sessions: s.sessions ?? 1,
         kind: 'service' as const,
       }))
-    const packages = getPackagesCatalog()
+    const packages = getPackagesForBranch(branchId)
       .filter((p) => p.status === 'active')
       .map((p) => ({
         id: p.id,
@@ -107,7 +112,7 @@ export function BookingPage() {
         kind: 'package' as const,
       }))
     return [...services, ...packages]
-  }, [catalogTick])
+  }, [catalogTick, bookingListBranchId])
 
   const products = useMemo(() => {
     void catalogTick
