@@ -18,7 +18,6 @@ import { cn } from '@/utils/cn'
 export function BestSellingTreatmentsPage() {
   const range = defaultAnalyticsRange()
   const [sales, setSales] = useState<Sale[]>([])
-  const [loading, setLoading] = useState(true)
   const [fromDraft, setFromDraft] = useState(range.from)
   const [toDraft, setToDraft] = useState(range.to)
   const [from, setFrom] = useState(range.from)
@@ -32,7 +31,6 @@ export function BestSellingTreatmentsPage() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
     void fetchAnalyticsSalesForRange({ from, to })
       .then((rows) => {
         if (!cancelled) setSales(rows)
@@ -43,9 +41,6 @@ export function BestSellingTreatmentsPage() {
           setSales([])
           toast.error('Could not load treatment sales')
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
       })
     return () => {
       cancelled = true

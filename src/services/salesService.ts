@@ -382,41 +382,6 @@ async function hydrateSaleHeaders(headers: SaleHeaderRow[]): Promise<Sale[]> {
   return mapRemoteSales(all)
 }
 
-/** PostgREST max-rows is typically 1000 — page until exhausted (do not rely on .limit alone). */
-async function fetchRemoteLiveSales(options?: {
-  branchId?: string
-  /** @deprecated Kept for callers; embeds are no longer used for list fetches. */
-  lean?: boolean
-}): Promise<Sale[] | null> {
-  if (!isSupabaseConfigured || !supabase) return []
-
-  const pageSize = 1000
-  const headers: SaleHeaderRow[] = []
-  for (let from = 0; from < 50000; from += pageSize) {
-    const to = from + pageSize - 1
-    let query = supabase
-      .from('sales')
-      .select(REMOTE_SALES_HEADER_SELECT)
-      .order('created_at', { ascending: false })
-      .range(from, to)
-    if (options?.branchId) {
-      query = query.eq('branch_id', options.branchId)
-    }
-
-    const { data, error } = await query
-
-    if (error) {
-      console.error('[sales] remote fetch failed', error.message)
-      return null
-    }
-    if (!data?.length) break
-    headers.push(...(data as unknown as SaleHeaderRow[]))
-    if (data.length < pageSize) break
-  }
-
-  return hydrateSaleHeaders(headers)
-}
-
 /**
  * Fast Franchise Sales path: date-scoped ops rows only (skips Migration history).
  * Bacoor has ~3k migration rows — loading those for this page was causing multi-minute waits.

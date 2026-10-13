@@ -43,7 +43,6 @@ function leadBadge(source: string) {
 export function NewClientSalesPage() {
   const range = defaultAnalyticsRange()
   const [sales, setSales] = useState<Sale[]>([])
-  const [loading, setLoading] = useState(true)
   const [fromDraft, setFromDraft] = useState(range.from)
   const [toDraft, setToDraft] = useState(range.to)
   const [from, setFrom] = useState(range.from)
@@ -57,7 +56,6 @@ export function NewClientSalesPage() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
     void fetchAnalyticsSalesForRange({ from, to })
       .then((rows) => {
         if (!cancelled) setSales(rows)
@@ -68,9 +66,6 @@ export function NewClientSalesPage() {
           setSales([])
           toast.error('Could not load new client sales')
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
       })
     return () => {
       cancelled = true
