@@ -42,11 +42,6 @@ function mergeSales(): Sale[] {
   )
 }
 
-function applyImported(data: Sale[]) {
-  importedSales = data
-  syncClientsFromSalesRegistry()
-}
-
 /** Push every sale patient into Customer Registry (latest bookings first). */
 export function syncClientsFromSalesRegistry(): void {
   const clients = buildClientsFromSales(mergeSales())
@@ -515,19 +510,19 @@ export async function ensureBranchOpsSales(options?: {
 }
 
 /**
- * Pull one clinic's sales into memory first (fast path for Bacoor / Dasma customer lists).
- * Merges into the cache — does not wipe other branches.
- * Prefer {@link ensureBranchOpsSales} for list pages — full branch includes Migration history.
+ * @deprecated Use {@link ensureBranchOpsSales}. Full-branch fetch included Migration
+ * history and froze the UI — this now delegates to ops-only (no Migration, no JSON dump).
  */
 export async function ensureBranchRemoteSales(branchId: string): Promise<number> {
   if (!isSupabaseConfigured || !branchId) return 0
-  const remote = await fetchRemoteLiveSales({ branchId })
-  if (remote == null || remote.length === 0) return 0
-  mergeRemoteSaleLines(remote)
-  loaded = true
-  syncClientsFromSalesRegistry()
-  emitChange()
-  return remote.length
+  const to = manilaDateKey()
+  const rows = await ensureBranchOpsSales({
+    branchId,
+    from: '2025-09-01',
+    to,
+    syncClients: false,
+  })
+  return rows.length
 }
 
 async function lookupClientIdByName(clientName?: string): Promise<string | null> {
@@ -638,107 +633,75 @@ export async function ensureClientRemoteSales(
  * Apply a remote sales snapshot. Never replace a non-empty cache with [] —
  * an unauthenticated / pre-login fetch returns empty and would wipe profile lines.
  */
-function applyRemoteSalesSnapshot(remote: Sale[] | null): boolean {
-  if (remote == null) return false
-  if (remote.length === 0 && remoteLiveSales.length > 0) return false
-  remoteLiveSales = remote
-  return true
-}
-
-/** Load XLSX-derived sales JSON + remote booking sales once. */
+/**
+ * One-shot warm cache for booking / analytics pages.
+ * Never loads the old XLSX JSON dump or Migration history.
+ * After first load, later callers return immediately (no re-download on every page).
+ */
 export async function preloadSalesData(options?: {
-  /** Clinic managers: load this branch from Supabase first (skip HQ JSON dump). */
   branchId?: string
+  /** @deprecated JSON dump removed — ignored */
   skipImported?: boolean
 }): Promise<void> {
   const branchId = options?.branchId?.trim() || undefined
-  const skipImported = Boolean(options?.skipImported || branchId)
 
-  if (loaded) {
-    // Refresh remote on each call after first load so re-login picks up DB rows
-    if (isSupabaseConfigured) {
-      if (branchId) {
-        await ensureBranchRemoteSales(branchId)
-      } else {
-        const remote = await fetchRemoteLiveSales()
-        if (applyRemoteSalesSnapshot(remote)) {
-          syncClientsFromSalesRegistry()
-          emitChange()
-        }
-      }
-    } else {
-      syncClientsFromSalesRegistry()
-    }
-    return
-  }
+  if (loaded) return
   if (loadPromise) {
     await loadPromise
-    if (branchId && isSupabaseConfigured) {
-      await ensureBranchRemoteSales(branchId)
-    }
     return
   }
 
   loadPromise = (async () => {
-    // Remote first so clinic dashboards are not blocked by the large HQ import JSON
+    // Drop any leftover in-memory dump from older builds
+    importedSales = []
+    if (!isSupabaseConfigured) {
+      loaded = true
+      emitChange()
+      return
+    }
     try {
-      const remote = await fetchRemoteLiveSales(branchId ? { branchId, lean: true } : undefined)
-      if (branchId) {
-        if (remote?.length) mergeRemoteSaleLines(remote)
-      } else {
-        applyRemoteSalesSnapshot(remote)
-      }
+      const to = manilaDateKey()
+      // Recent ops only for app-wide warm cache (Franchise Sales / reports use their own ranges)
+      const from = daysAgoManila(90)
+      await ensureBranchOpsSales({
+        branchId,
+        from,
+        to,
+        syncClients: false,
+      })
     } catch (err) {
-      console.error('[sales] remote preload failed', err)
+      console.error('[sales] ops preload failed', err)
     }
-
-    if (!skipImported) {
-      try {
-        const res = await fetch('/data/sales-transactions.json')
-        if (res.ok) {
-          const data = (await res.json()) as Sale[]
-          if (Array.isArray(data)) applyImported(data)
-        } else {
-          console.error('[sales] failed to fetch sales-transactions.json', res.status)
-        }
-      } catch (err) {
-        console.error('[sales] preload failed', err)
-        importedSales = []
-      }
-    }
-
     loaded = true
-    syncClientsFromSalesRegistry()
     emitChange()
   })()
 
   return loadPromise
 }
 
+/** YYYY-MM-DD N calendar days before today (Manila). */
+function daysAgoManila(days: number): string {
+  const parts = manilaDateKey().split('-').map(Number)
+  const d = new Date(Date.UTC(parts[0]!, parts[1]! - 1, parts[2]!))
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
 /** Re-fetch remote sales after login (bootstrap often runs before a JWT exists). */
 export async function refreshRemoteSalesAfterAuth(branchId?: string): Promise<void> {
   if (!isSupabaseConfigured) return
-  // Clinic managers: ops-only (skip ~3k Migration rows). Profiles still load
-  // per-client Migration history via ensureClientRemoteSales.
-  // Ops Clinic Report layers start Sep 2025 (stacked Excel imports).
-  if (branchId) {
-    const to = manilaDateKey()
-    const from = '2025-09-01'
-    const ops = await ensureBranchOpsSales({ branchId, from, to, syncClients: true })
-    if (ops.length > 0) return
-  }
-  // HQ / org-wide: allow a full remote refresh even if an empty pre-auth load finished
-  const remote = await fetchRemoteLiveSales(branchId ? { branchId, lean: true } : undefined)
-  if (remote == null) return
-  if (remote.length === 0) return
-  if (branchId) {
-    mergeRemoteSaleLines(remote)
-  } else {
-    remoteLiveSales = remote
-  }
+  // Ops only — never Migration dump, never sales-transactions.json.
+  // Full Clinic Report history stays in Supabase; Franchise Sales / Customer List
+  // fetch their own date ranges. Profiles use ensureClientRemoteSales.
+  const to = manilaDateKey()
+  const from = daysAgoManila(90)
+  await ensureBranchOpsSales({
+    branchId,
+    from,
+    to,
+    syncClients: false,
+  })
   loaded = true
-  // Re-attach session / installment stats onto Customer Registry rows
-  syncClientsFromSalesRegistry()
   emitChange()
 }
 

@@ -16,11 +16,10 @@ import { Card } from '@/components/ui/Card'
 import {
   defaultAnalyticsRange,
   exportCsv,
-  getAnalyticsSales,
+  fetchAnalyticsSalesForRange,
   getNewClientSalesRows,
-  subscribeAnalytics,
 } from '@/services/analyticsService'
-import { preloadSalesData } from '@/services/salesService'
+import type { Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 
@@ -43,7 +42,8 @@ function leadBadge(source: string) {
 
 export function NewClientSalesPage() {
   const range = defaultAnalyticsRange()
-  const [sales, setSales] = useState(() => getAnalyticsSales())
+  const [sales, setSales] = useState<Sale[]>([])
+  const [loading, setLoading] = useState(true)
   const [fromDraft, setFromDraft] = useState(range.from)
   const [toDraft, setToDraft] = useState(range.to)
   const [from, setFrom] = useState(range.from)
@@ -57,13 +57,25 @@ export function NewClientSalesPage() {
 
   useEffect(() => {
     let cancelled = false
-    void preloadSalesData().then(() => {
-      if (!cancelled) setSales(getAnalyticsSales())
-    })
-    return subscribeAnalytics(() => {
-      if (!cancelled) setSales(getAnalyticsSales())
-    })
-  }, [])
+    setLoading(true)
+    void fetchAnalyticsSalesForRange({ from, to })
+      .then((rows) => {
+        if (!cancelled) setSales(rows)
+      })
+      .catch((err) => {
+        console.error('[new-client-sales] load failed', err)
+        if (!cancelled) {
+          setSales([])
+          toast.error('Could not load new client sales')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [from, to])
 
   const rows = useMemo(
     () => getNewClientSalesRows(sales, from, to, lead),

@@ -44,7 +44,6 @@ import {
 } from '@/services/dashboardSalesSummaryService'
 import {
   getBookingRows,
-  ensureBranchRemoteSales,
   getSales,
   preloadSalesData,
   subscribeSalesData,
@@ -535,16 +534,10 @@ function BranchOpsDashboard() {
     const refreshAppts = () => {
       void listAppointments().then(setAppointments)
     }
-    // Cards use SQL summary; line-item preload stays in background for booking/breakdown views
-    void (async () => {
-      if (scopeBranchId) {
-        void ensureBranchRemoteSales(scopeBranchId).then(refreshSales)
-      }
-      await preloadSalesData(
-        scopeBranchId ? { branchId: scopeBranchId, skipImported: true } : undefined,
-      )
-      refreshSales()
-    })()
+    // Cards use SQL summary RPC. Light ops warm-cache only (no Migration / JSON dump).
+    void preloadSalesData(
+      scopeBranchId ? { branchId: scopeBranchId } : undefined,
+    ).then(refreshSales)
     void preloadClientsFromSupabase().then(refreshClients)
     refreshSales()
     refreshClients()

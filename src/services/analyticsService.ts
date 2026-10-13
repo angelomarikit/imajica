@@ -1,6 +1,10 @@
 import { enrichFirstClientFlags } from '@/services/clientSalesProfileService'
 import { getExpenses } from '@/services/expenseService'
-import { getSales, subscribeSalesData } from '@/services/salesService'
+import {
+  fetchOpsSalesForRange,
+  getSales,
+  subscribeSalesData,
+} from '@/services/salesService'
 import type {
   NewClientSaleRow,
   PaymentMethod,
@@ -15,6 +19,23 @@ export function getAnalyticsSales(): Sale[] {
 
 export function subscribeAnalytics(listener: () => void) {
   return subscribeSalesData(listener)
+}
+
+/**
+ * Date-scoped ops sales from Supabase (excludes Migration dump).
+ * Use on analytics pages instead of relying on the browser warm cache.
+ */
+export async function fetchAnalyticsSalesForRange(options: {
+  from: string
+  to: string
+  branchId?: string
+}): Promise<Sale[]> {
+  const rows = await fetchOpsSalesForRange({
+    from: options.from,
+    to: options.to,
+    branchId: options.branchId,
+  })
+  return enrichFirstClientFlags(rows)
 }
 
 export function filterSalesByDate(sales: Sale[], from: string, to: string) {
@@ -208,5 +229,12 @@ export function feeLabelForMethod(method: PaymentMethod) {
 }
 
 export function defaultAnalyticsRange() {
-  return { from: '2025-09-01', to: '2026-09-30' }
+  const to = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
+  // Ops Clinic Report layers start Sep 2025
+  return { from: '2025-09-01', to }
 }

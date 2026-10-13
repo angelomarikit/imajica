@@ -1,11 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { preloadCatalogPriceOverrides } from '@/services/catalogPriceOverrideService'
-import { preloadSalesData, refreshRemoteSalesAfterAuth } from '@/services/salesService'
+import { refreshRemoteSalesAfterAuth } from '@/services/salesService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { isBranchScopedStaff } from '@/utils/franchiseAccess'
 
-/** Loads catalog overrides + remote sales after a real staff session exists. */
+/** Loads catalog overrides + a light ops sales warm-cache after staff login. */
 export function SalesDataBootstrap() {
   const { user } = useAuth()
   const bootedOverrides = useRef(false)
@@ -16,8 +16,7 @@ export function SalesDataBootstrap() {
     void preloadCatalogPriceOverrides()
   }, [])
 
-  // Wait for auth — a pre-login empty fetch used to leave clinic dashboards at ₱0.
-  // Clinic staff: ops-only refresh (excludes Migration dump). HQ keeps fuller preload.
+  // Ops-only warm cache (last ~90 days). Never JSON dump / Migration history.
   useEffect(() => {
     if (!user || user.role === 'CLIENT') return
     let cancelled = false
@@ -28,10 +27,6 @@ export function SalesDataBootstrap() {
       }
       const branchId = isBranchScopedStaff(user) ? user.branchId : undefined
       await refreshRemoteSalesAfterAuth(branchId)
-      if (cancelled) return
-      if (!branchId) {
-        await preloadSalesData()
-      }
     })()
     return () => {
       cancelled = true

@@ -9,16 +9,16 @@ import {
   bestSellingTreatments,
   defaultAnalyticsRange,
   exportCsv,
-  getAnalyticsSales,
-  subscribeAnalytics,
+  fetchAnalyticsSalesForRange,
 } from '@/services/analyticsService'
-import { preloadSalesData } from '@/services/salesService'
+import type { Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 
 export function BestSellingTreatmentsPage() {
   const range = defaultAnalyticsRange()
-  const [sales, setSales] = useState(() => getAnalyticsSales())
+  const [sales, setSales] = useState<Sale[]>([])
+  const [loading, setLoading] = useState(true)
   const [fromDraft, setFromDraft] = useState(range.from)
   const [toDraft, setToDraft] = useState(range.to)
   const [from, setFrom] = useState(range.from)
@@ -32,17 +32,29 @@ export function BestSellingTreatmentsPage() {
 
   useEffect(() => {
     let cancelled = false
-    void preloadSalesData().then(() => {
-      if (!cancelled) setSales(getAnalyticsSales())
-    })
-    return subscribeAnalytics(() => {
-      if (!cancelled) setSales(getAnalyticsSales())
-    })
-  }, [])
+    setLoading(true)
+    void fetchAnalyticsSalesForRange({ from, to })
+      .then((rows) => {
+        if (!cancelled) setSales(rows)
+      })
+      .catch((err) => {
+        console.error('[best-selling] load failed', err)
+        if (!cancelled) {
+          setSales([])
+          toast.error('Could not load treatment sales')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [from, to])
 
   const branchOptions = useMemo(() => {
     const set = new Set(
-      getAnalyticsSales()
+      sales
         .filter((s) => s.itemType === 'service' || s.itemType === 'package')
         .map((s) => s.branchName),
     )

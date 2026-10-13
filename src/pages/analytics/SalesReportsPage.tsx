@@ -19,11 +19,9 @@ import { Card } from '@/components/ui/Card'
 import {
   defaultAnalyticsRange,
   exportCsv,
-  getAnalyticsSales,
+  fetchAnalyticsSalesForRange,
   salesSummary,
-  subscribeAnalytics,
 } from '@/services/analyticsService'
-import { preloadSalesData, isSalesDataLoaded } from '@/services/salesService'
 import type { AnalyticsSaleType, Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -67,8 +65,8 @@ export function SalesReportsPage() {
   const franchiseOwner = isFranchiseBranchOwner(user)
   const isHq = isHqRole(user?.role)
   const range = franchiseOwner ? defaultBranchSalesRange() : defaultAnalyticsRange()
-  const [sales, setSales] = useState(() => getAnalyticsSales())
-  const [dataReady, setDataReady] = useState(() => isSalesDataLoaded() && getAnalyticsSales().length > 0)
+  const [sales, setSales] = useState<Sale[]>([])
+  const [dataReady, setDataReady] = useState(false)
   const [fromDraft, setFromDraft] = useState(range.from)
   const [toDraft, setToDraft] = useState(range.to)
   const [from, setFrom] = useState(range.from)
@@ -81,32 +79,32 @@ export function SalesReportsPage() {
 
   useEffect(() => {
     let cancelled = false
-    void preloadSalesData(
-      forcedBranchId ? { branchId: forcedBranchId, skipImported: true } : undefined,
-    ).then(() => {
-      if (!cancelled) {
-        setSales(getAnalyticsSales())
-        setDataReady(true)
-      }
+    setDataReady(false)
+    void fetchAnalyticsSalesForRange({
+      from,
+      to,
+      branchId: forcedBranchId,
     })
-    return subscribeAnalytics(() => {
-      if (!cancelled) {
-        setSales(getAnalyticsSales())
-        setDataReady(true)
-      }
-    })
-  }, [forcedBranchId])
+      .then((rows) => {
+        if (!cancelled) {
+          setSales(rows)
+          setDataReady(true)
+        }
+      })
+      .catch((err) => {
+        console.error('[sales-reports] load failed', err)
+        if (!cancelled) {
+          setSales([])
+          setDataReady(true)
+          toast.error('Could not load sales for this date range')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [from, to, forcedBranchId])
 
-  const scopedSales = useMemo(() => {
-    const base = forcedBranchId
-      ? sales.filter((s) => s.branchId === forcedBranchId)
-      : sales
-    // Clinic managers: ops sales only (migration installments stay on profiles)
-    if (!franchiseOwner) return base
-    return base.filter((s) => (s.leadSource || '').trim().toLowerCase() !== 'migration')
-  }, [sales, forcedBranchId, franchiseOwner])
-
-  const summary = useMemo(() => salesSummary(scopedSales, from, to), [scopedSales, from, to])
+  const summary = useMemo(() => salesSummary(sales, from, to), [sales, from, to])
 
   const filteredRows = useMemo(() => {
     return summary.rows.filter((s) => {
@@ -194,7 +192,7 @@ export function SalesReportsPage() {
 
       {!dataReady ? (
         <Card className="p-6 text-center text-sm text-slate-ui">
-          Loading sales transactions from import… ({sales.length.toLocaleString()} loaded so far)
+          Loading sales transactions… ({sales.length.toLocaleString()} loaded so far)
         </Card>
       ) : null}
 

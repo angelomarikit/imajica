@@ -124,11 +124,12 @@ export function ClientsPage() {
             month: '2-digit',
             day: '2-digit',
           }).format(new Date())
+          // Ops tags only — do not rebuild entire client registry from sales (freezes UI)
           await ensureBranchOpsSales({
             branchId: branchForClients,
             from: '2025-09-01',
             to,
-            syncClients: true,
+            syncClients: false,
           })
           applyKnownClientProfiles()
         }

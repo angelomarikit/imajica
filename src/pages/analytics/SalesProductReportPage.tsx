@@ -7,17 +7,17 @@ import { Card } from '@/components/ui/Card'
 import {
   defaultAnalyticsRange,
   exportCsv,
-  getAnalyticsSales,
+  fetchAnalyticsSalesForRange,
   productSalesReport,
-  subscribeAnalytics,
 } from '@/services/analyticsService'
-import { preloadSalesData } from '@/services/salesService'
+import type { Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 
 export function SalesProductReportPage() {
   const range = defaultAnalyticsRange()
-  const [sales, setSales] = useState(() => getAnalyticsSales())
+  const [sales, setSales] = useState<Sale[]>([])
+  const [loading, setLoading] = useState(true)
   const [fromDraft, setFromDraft] = useState(range.from)
   const [toDraft, setToDraft] = useState(range.to)
   const [from, setFrom] = useState(range.from)
@@ -29,13 +29,25 @@ export function SalesProductReportPage() {
 
   useEffect(() => {
     let cancelled = false
-    void preloadSalesData().then(() => {
-      if (!cancelled) setSales(getAnalyticsSales())
-    })
-    return subscribeAnalytics(() => {
-      if (!cancelled) setSales(getAnalyticsSales())
-    })
-  }, [])
+    setLoading(true)
+    void fetchAnalyticsSalesForRange({ from, to })
+      .then((rows) => {
+        if (!cancelled) setSales(rows)
+      })
+      .catch((err) => {
+        console.error('[product-sales] load failed', err)
+        if (!cancelled) {
+          setSales([])
+          toast.error('Could not load product sales')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [from, to])
 
   const rows = useMemo(() => productSalesReport(sales, from, to), [sales, from, to])
 

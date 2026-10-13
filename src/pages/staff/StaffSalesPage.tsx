@@ -4,10 +4,9 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import {
   defaultAnalyticsRange,
-  getAnalyticsSales,
-  subscribeAnalytics,
+  fetchAnalyticsSalesForRange,
 } from '@/services/analyticsService'
-import { preloadSalesData } from '@/services/salesService'
+import type { Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 
@@ -24,29 +23,28 @@ export function StaffSalesPage() {
   const [toDraft, setToDraft] = useState(range.to)
   const [from, setFrom] = useState(range.from)
   const [to, setTo] = useState(range.to)
-  const [tick, setTick] = useState(0)
+  const [sales, setSales] = useState<Sale[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
-    void preloadSalesData().then(() => {
-      if (!cancelled) {
-        setTick((n) => n + 1)
-        setLoading(false)
-      }
-    })
-    return subscribeAnalytics(() => setTick((n) => n + 1))
-  }, [])
+    setLoading(true)
+    void fetchAnalyticsSalesForRange({ from, to })
+      .then((rows) => {
+        if (!cancelled) setSales(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setSales([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [from, to])
 
   const rows = useMemo(() => {
-    void tick
-    const sales = getAnalyticsSales().filter((s) => {
-      const d = s.createdAt.slice(0, 10)
-      if (from && d < from) return false
-      if (to && d > to) return false
-      return true
-    })
-
     const map = new Map<string, { bookingCount: number; totalSales: number }>()
     for (const s of sales) {
       const key = (s.staffName || '').trim() || 'Unknown Unknown'
@@ -63,7 +61,7 @@ export function StaffSalesPage() {
       .map(([staffName, stats]) => ({ staffName, ...stats }))
       .sort((a, b) => b.bookingCount - a.bookingCount || b.totalSales - a.totalSales)
       .map((r, i): StaffSaleRow => ({ ...r, rank: i + 1 }))
-  }, [from, to, tick])
+  }, [sales])
 
   function applyFilter() {
     setFrom(fromDraft)
