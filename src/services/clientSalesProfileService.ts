@@ -76,6 +76,10 @@ export type ClientSessionHistoryRow = {
   staff: string
   statusLabel: string
   photos: string
+  /** True when this slot can still be marked used */
+  canUse?: boolean
+  /** Sale line id (`saleUuid:itemId`) to increment sessions_completed */
+  saleLineId?: string
 }
 
 function normKey(s: string) {
@@ -179,7 +183,10 @@ function entitlementKey(s: Sale) {
 }
 
 function installmentGroupKey(s: Sale) {
-  return `${s.clientId}|${s.bookingRef || s.invoiceNumber}|${normKey(s.treatmentOrPackage)}`
+  // Do not key on clientId — franchise import + live Pay Balance can use different client UUIDs
+  // for the same person; rows are already scoped via getClientSales (id OR name).
+  const ref = (s.bookingRef || s.invoiceNumber || '').trim()
+  return `${ref}|${normKey(s.treatmentOrPackage)}`
 }
 
 /** Sales for a client profile — match by id and/or display name (live checkout may remap ids). */
@@ -399,9 +406,11 @@ export function getInstallmentBalances(
     // Pending installment lines still count as paid-toward if status is pending but money was collected as downpayment
     const collectedAmount = group.reduce((sum, g) => sum + g.totalAmount, 0)
     const paymentSum = collectedAmount
-    const contractFromImport = group
+    const contractCandidates = group
       .map((g) => g.contractAmount)
-      .find((n) => n != null && Number.isFinite(n) && n > 0)
+      .filter((n): n is number => n != null && Number.isFinite(n) && n > 0)
+    const contractFromImport =
+      contractCandidates.length > 0 ? Math.max(...contractCandidates) : undefined
     const totalAmount =
       contractFromImport ?? cat?.price ?? Math.max(paymentSum, paidAmount)
     // For live checkout / imports: remaining = contract − collected
@@ -467,21 +476,34 @@ function getSessionHistoryFromAvailed(
       .filter(
         (s) =>
           (s.itemType === 'service' || s.itemType === 'package') &&
+          !isMoneyOnlyInstallment(s) &&
           normKey(s.treatmentOrPackage) === normKey(a.name) &&
           s.branchName === a.branchName,
       )
       .sort((x, y) => x.createdAt.localeCompare(y.createdAt))
     const purchase = related[0]
+    // Prefer a line that still has unused sessions for the next USE click
+    const openLine =
+      related.find((s) => {
+        const part = sessionsFromSale(
+          s,
+          matchCatalog(s.treatmentOrPackage, s.itemType, s.branchName),
+        )
+        return part.completed < part.total
+      }) || related[related.length - 1]
 
     for (let n = 1; n <= a.totalSessions; n++) {
+      const used = n <= a.completed
       rows.push({
         id: `${a.id}-sess-${n}`,
-        dateLabel: 'Not Used',
+        dateLabel: used ? a.lastSession || 'Used' : 'Not Used',
         servicePackage: a.name,
         sessionNumber: n,
         staff: purchase?.staffName || purchase?.doctorName || '—',
-        statusLabel: 'USE',
+        statusLabel: used ? 'USED' : 'USE',
         photos: '—',
+        canUse: !used && Boolean(openLine?.id),
+        saleLineId: openLine?.id,
       })
     }
   }

@@ -1,4 +1,5 @@
 import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
+import type { EmployeeBenefitLine } from '@/types'
 
 /** Shift used across the payroll spreadsheet (Manila). */
 export const PAYROLL_DEFAULT_SHIFT = {
@@ -11,6 +12,9 @@ export const PAYROLL_DEFAULT_SHIFT = {
   /** Working days used for Monthly Basic Salary in the sheet: SALARY/DAY × 26 */
   mbsDaysPerMonth: 26,
 } as const
+
+/** Standard paid workday hours for late deduction: (dailyWage / 8 / 60) × minutes late */
+export const STANDARD_WORK_HOURS_PER_DAY = 8
 
 export type PayrollRosterEmployee = {
   id: string
@@ -56,6 +60,11 @@ export type PayrollRosterEmployee = {
   otherDeduction?: number
   /** Recurring monthly allowance / benefit (HR-editable) */
   allowance?: number
+  /**
+   * Itemized benefits from Employee Database.
+   * Full monthly cost deducts once per month on the 2nd semi-monthly payslip (not split).
+   */
+  benefits?: EmployeeBenefitLine[]
 }
 
 function emp(

@@ -445,7 +445,21 @@ function buildHrNavSections(clinics: Branch[]): NavSection[] {
 }
 
 /** Clinic manager (BRANCH_ADMIN) — trimmed to their clinic ops only */
-function buildFranchiseOwnerNavSections(handoffUnread = 0): NavSection[] {
+function buildFranchiseOwnerNavSections(
+  handoffUnread = 0,
+  clinic?: { branchId?: string | null; branchName?: string | null },
+): NavSection[] {
+  const clinicSalary =
+    clinic?.branchId
+      ? [
+          {
+            to: `/admin/hr/salary/${clinic.branchId}`,
+            label: `${shortBranchName(clinic.branchName || 'Clinic')} Salary`,
+            icon: Banknote,
+          },
+        ]
+      : []
+
   return [
   {
     items: [
@@ -462,6 +476,7 @@ function buildFranchiseOwnerNavSections(handoffUnread = 0): NavSection[] {
       { to: '/admin/commission-sales', label: 'My Commission & Sales', icon: Wallet },
       { to: '/admin/hr/leave', label: 'Leave Approvals', icon: CalendarOff },
       { to: '/admin/my-salary', label: 'My Salary', icon: Banknote },
+      ...clinicSalary,
     ],
   },
   {
@@ -773,7 +788,12 @@ export function AdminSidebar({
   const { unread: handoffUnread } = useMarketingHandoffUnread()
   const navSections = useMemo(() => {
     if (isTimeclockStaff(user)) return buildTimeclockStaffNavSections(handoffUnread)
-    if (isFranchiseBranchOwner(user)) return buildFranchiseOwnerNavSections(handoffUnread)
+    if (isFranchiseBranchOwner(user)) {
+      return buildFranchiseOwnerNavSections(handoffUnread, {
+        branchId: user?.branchId,
+        branchName: user?.branchName,
+      })
+    }
     if (isHrRole(user?.role)) return buildHrNavSections(hrClinics)
     if (isAnyMarketingRole(user?.role)) return buildMarketingNavSections()
     return buildHqNavSections(hrClinics)

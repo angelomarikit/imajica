@@ -146,12 +146,16 @@ export async function sendPayslipToEmployee(input: {
   }
 
   if (isSupabaseConfigured && supabase && isUuid(row.id)) {
+    const employeeUserId =
+      row.employeeUserId && isUuid(row.employeeUserId) ? row.employeeUserId : null
+    const branchId = row.branchId && isUuid(row.branchId) ? row.branchId : null
+    const sentByUserId = isUuid(row.sentByUserId) ? row.sentByUserId : null
     const payload = {
       id: row.id,
-      employee_user_id: row.employeeUserId,
+      employee_user_id: employeeUserId,
       employee_email: row.employeeEmail,
       employee_name: row.employeeName,
-      branch_id: row.branchId,
+      branch_id: branchId,
       branch_name: row.branchName,
       period_from: row.periodFrom,
       period_to: row.periodTo,
@@ -162,13 +166,20 @@ export async function sendPayslipToEmployee(input: {
       net_pay: row.netPay,
       snapshot: row.snapshot,
       status: row.status,
-      sent_by_user_id: row.sentByUserId,
+      sent_by_user_id: sentByUserId,
       sent_by_name: row.sentByName,
       sent_at: row.sentAt,
       created_at: row.createdAt,
     }
     const { error } = await supabase.from('employee_payslips').upsert(payload)
     if (error && !/does not exist|schema cache/i.test(error.message)) {
+      // Still cache locally so clinic preview works; remote needs clinic-manager RLS migration
+      writeLocal([row, ...readLocal().filter((x) => x.id !== row.id)])
+      if (/row-level security|RLS/i.test(error.message)) {
+        throw new Error(
+          'Could not send payslip to the database (clinic manager needs payslip permission). Run migration 20261015000085_employee_payslips_clinic_manager.sql, then try again. A local copy was saved on this device.',
+        )
+      }
       throw new Error(error.message || 'Could not send payslip')
     }
   }

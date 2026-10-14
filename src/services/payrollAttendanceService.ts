@@ -1,5 +1,6 @@
 import {
   PAYROLL_DEFAULT_SHIFT,
+  STANDARD_WORK_HOURS_PER_DAY,
   monthlyBasicSalary,
   type PayrollRosterEmployee,
 } from '@/constants/payrollRosterSeed'
@@ -14,7 +15,10 @@ import type { AttendancePunch } from '@/types'
 import { getAccessUsers } from '@/services/userAccessService'
 import { staffNamesMatch } from '@/services/staffCommissionService'
 import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
-import { getMergedPayrollRoster } from '@/services/payrollProfileService'
+import {
+  getMergedPayrollRoster,
+  listPayrollProfilesForHr,
+} from '@/services/payrollProfileService'
 
 export const ATTENDANCE_INCENTIVE_AMOUNT = ATTENDANCE_INCENTIVE_AMOUNT_CONST
 
@@ -51,6 +55,35 @@ export function scheduledMinutesPerDay(): number {
   const start = PAYROLL_DEFAULT_SHIFT.startHour * 60 + PAYROLL_DEFAULT_SHIFT.startMinute
   const end = PAYROLL_DEFAULT_SHIFT.endHour * 60 + PAYROLL_DEFAULT_SHIFT.endMinute
   return Math.max(1, end - start)
+}
+
+/** Paid workday minutes for late/undertime money formula (8 hours). */
+export function paidWorkMinutesPerDay(): number {
+  return STANDARD_WORK_HOURS_PER_DAY * 60
+}
+
+/**
+ * Late deduction rate per minute:
+ * (Daily Wage ÷ 8 working hours ÷ 60) × minutes late
+ */
+export function latePerMinuteRate(salaryPerDay: number): number {
+  return salaryPerDay / paidWorkMinutesPerDay()
+}
+
+/**
+ * Benefits deduct once per month on the 2nd semi-monthly cut (period ending day ≥ 16),
+ * or when the selected range covers a full calendar month. First cut (1–15) skips them.
+ */
+export function shouldApplyMonthlyBenefits(periodFrom: string, periodTo: string): boolean {
+  const from = new Date(`${periodFrom}T12:00:00+08:00`)
+  const to = new Date(`${periodTo}T12:00:00+08:00`)
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return false
+  const sameMonth =
+    from.getFullYear() === to.getFullYear() && from.getMonth() === to.getMonth()
+  const dayFrom = from.getDate()
+  const dayTo = to.getDate()
+  if (sameMonth && dayFrom <= 1 && dayTo >= 28) return true
+  return dayTo >= 16
 }
 
 export function isScheduledWorkday(dateKey: string): boolean {
@@ -104,6 +137,9 @@ export type AttendancePayrollRow = {
   philhealthDeduction: number
   otherDeduction: number
   allowance: number
+  /** Full monthly itemized benefits — applied only on 2nd semi-monthly cut */
+  benefitsDeduction: number
+  benefitsAppliedThisPeriod: boolean
   statutoryTotal: number
   attendanceDeductions: number
   totalDeductions: number
@@ -211,7 +247,8 @@ function computeDay(
   const scheduleStart =
     PAYROLL_DEFAULT_SHIFT.startHour * 60 + PAYROLL_DEFAULT_SHIFT.startMinute
   const scheduleEnd = PAYROLL_DEFAULT_SHIFT.endHour * 60 + PAYROLL_DEFAULT_SHIFT.endMinute
-  const perMinute = salaryPerDay / scheduledMinutesPerDay()
+  // Money formula uses 8 paid hours (screenshot): (daily / 8 / 60) × minutes
+  const perMinute = latePerMinuteRate(salaryPerDay)
 
   const inMin = manilaMinutesOfDay(session.timeIn.punchedAt)
   const lateMinutes = Math.max(0, inMin - scheduleStart)
@@ -282,9 +319,18 @@ function buildRow(
   const philhealthDeduction = prorateMonthly(employee.philhealthEmployee, scheduledCount)
   const otherDeduction = prorateMonthly(employee.otherDeduction || 0, scheduledCount)
   const allowance = prorateMonthly(employee.allowance || 0, scheduledCount)
+  const benefitsAppliedThisPeriod = shouldApplyMonthlyBenefits(from, to)
+  const benefitsMonthly = (employee.benefits ?? []).reduce(
+    (s, b) => s + Math.max(0, Number(b.monthlyCost) || 0),
+    0,
+  )
+  const benefitsDeduction = benefitsAppliedThisPeriod
+    ? Math.round(benefitsMonthly * 100) / 100
+    : 0
   const statutoryTotal = sssDeduction + pagibigDeduction + philhealthDeduction + otherDeduction
   const attendanceDeductions = lateDeduction + undertimeDeduction + absenceDeduction
-  const totalDeductions = statutoryTotal + lateDeduction + undertimeDeduction
+  const totalDeductions =
+    statutoryTotal + lateDeduction + undertimeDeduction + benefitsDeduction
   // Absences reduce gross (not paid) — do not double-count in net; allowance adds to take-home
   const netPay = Math.max(
     0,
@@ -309,6 +355,8 @@ function buildRow(
     philhealthDeduction,
     otherDeduction,
     allowance,
+    benefitsDeduction,
+    benefitsAppliedThisPeriod,
     statutoryTotal,
     attendanceDeductions,
     totalDeductions: totalDeductions + absenceDeduction,
@@ -322,7 +370,8 @@ function buildRow(
 const ALL_CLINIC_BRANCH_IDS = Object.values(BRANCH_IDS)
 
 /**
- * Build attendance-based payroll for the seeded roster over a Manila date range.
+ * Build attendance-based payroll over a Manila date range.
+ * Roster = HR payroll profiles + live Employee Database (all clinics), not seed-only.
  * Gross = present days × salary/day; late/undertime from shift vs punches; statutory prorated.
  */
 export async function computeAttendancePayroll(
@@ -332,8 +381,54 @@ export async function computeAttendancePayroll(
 ): Promise<AttendancePayrollRow[]> {
   const scopeIds =
     opts?.branchIds?.length ? opts.branchIds : ALL_CLINIC_BRANCH_IDS
-  const punches = await listAttendanceForBranches(scopeIds, from, to)
-  let roster = getMergedPayrollRoster()
+  const [punches, profiles] = await Promise.all([
+    listAttendanceForBranches(scopeIds, from, to),
+    listPayrollProfilesForHr(),
+  ])
+  let roster = profiles
+    .filter((p) => p.status !== 'inactive')
+    .map(
+      (p): PayrollRosterEmployee => ({
+        id: p.id,
+        firstName: p.firstName,
+        middleName: p.middleName,
+        lastName: p.lastName,
+        fullName: p.fullName,
+        email: p.email,
+        matchEmails: p.matchEmails,
+        gender: p.gender,
+        birthDate: p.birthDate,
+        civilStatus: p.civilStatus,
+        phone: p.phone,
+        address: p.address,
+        emergencyContact: p.emergencyContact,
+        emergencyRelationship: p.emergencyRelationship,
+        emergencyPhone: p.emergencyPhone,
+        dateHired: p.dateHired,
+        employmentStatus: p.employmentStatus,
+        jobTitle: p.jobTitle,
+        branchLabel: p.branchLabel,
+        branchId: p.branchId,
+        shiftLabel: p.shiftLabel,
+        salaryPerDay: p.salaryPerDay,
+        tin: p.tin,
+        pagibigNo: p.pagibigNo,
+        philhealthNo: p.philhealthNo,
+        sssNo: p.sssNo,
+        sssEmployee: p.sssEmployee,
+        mpfEmployee: p.mpfEmployee,
+        pagibigEmployee: p.pagibigEmployee,
+        philhealthEmployee: p.philhealthEmployee,
+        sssEmployer: p.sssEmployer,
+        mpfEmployer: p.mpfEmployer,
+        ecEmployer: p.ecEmployer,
+        pagibigEmployer: p.pagibigEmployer,
+        philhealthEmployer: p.philhealthEmployer,
+        otherDeduction: p.otherDeduction,
+        allowance: p.allowance,
+        benefits: p.benefits ?? [],
+      }),
+    )
   if (opts?.branchIds?.length) {
     const allowed = new Set(opts.branchIds)
     roster = roster.filter((e) => e.branchId != null && allowed.has(e.branchId))

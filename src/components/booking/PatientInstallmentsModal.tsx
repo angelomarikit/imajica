@@ -126,6 +126,7 @@ export function PatientInstallmentsModal({
       resolveClinicBranchId(paying.branchId) ||
       resolveClinicBranchId(paying.branchName) ||
       resolveClinicBranchId(patient.preferredBranchId) ||
+      resolveClinicBranchId(user?.branchId) ||
       ''
     if (!branchId || !isUuid(branchId)) {
       toast.error('This installment is missing a clinic branch — cannot record payment')
@@ -137,8 +138,11 @@ export function PatientInstallmentsModal({
 
     setSaving(true)
     try {
-      let clientId = paying.clientId || patient.id
-      if (!isUuid(clientId)) {
+      // Prefer the installment owner's UUID so Pay Balance stays in the same group
+      let clientId =
+        (paying.clientId && isUuid(paying.clientId) ? paying.clientId : '') ||
+        (isUuid(patient.id) ? patient.id : '')
+      if (!clientId) {
         const { ensureBookingClient } = await import('@/services/appointmentService')
         const remote = await ensureBookingClient({
           clientId: patient.id,
@@ -157,13 +161,14 @@ export function PatientInstallmentsModal({
             clientId,
             clientName: patient.fullName,
             branchId,
-            branchName: paying.branchName || patient.preferredBranchName || '',
+            branchName: paying.branchName || patient.preferredBranchName || user?.branchName || '',
             staffId: paying.staffId || user?.id,
             staffName: paying.staffName || user?.fullName || 'Staff',
             treatmentOrPackage: paying.itemName,
             itemType: paying.itemType || 'service',
             paymentType: 'Installment Payment',
             bookingRef: paying.groupRef,
+            contractAmount: paying.totalAmount,
             quantity: 1,
             unitRetailPrice: amount,
             totalAmount: amount,
@@ -176,11 +181,11 @@ export function PatientInstallmentsModal({
       )
 
       toast.success(`Balance payment recorded · ${formatPesoExact(amount)}`, {
-        description: `${paying.itemName} · remaining will update on the profile`,
+        description: `${paying.itemName} · remaining balance updated`,
       })
       setPaying(null)
+      await ensureClientRemoteSales(clientId, patient.fullName)
       setSalesTick((n) => n + 1)
-      void preloadSalesData().then(() => setSalesTick((n) => n + 1))
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not record balance payment')
     } finally {

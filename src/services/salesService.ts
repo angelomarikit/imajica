@@ -828,6 +828,11 @@ export async function recordBookingCheckout(
     }
 
     const saleId = crypto.randomUUID()
+    const contractAmount =
+      head.contractAmount != null && Number.isFinite(Number(head.contractAmount))
+        ? Number(head.contractAmount)
+        : null
+
     const { error: saleError } = await supabase.from('sales').insert({
       id: saleId,
       client_id: head.clientId,
@@ -848,6 +853,7 @@ export async function recordBookingCheckout(
       lead_source: head.leadSource ?? null,
       referred_by_client_id: null,
       referred_by_name: head.referredByName ?? null,
+      contract_amount: contractAmount,
       created_at: createdAt,
     })
 
@@ -866,12 +872,22 @@ export async function recordBookingCheckout(
       line_total: line.totalAmount,
       sku: line.sku ?? null,
       unit_cost: line.unitBaseCost ?? 0,
+      sessions_total:
+        line.sessionsTotal != null && Number.isFinite(Number(line.sessionsTotal))
+          ? Number(line.sessionsTotal)
+          : null,
+      sessions_completed:
+        line.sessionsCompleted != null && Number.isFinite(Number(line.sessionsCompleted))
+          ? Number(line.sessionsCompleted)
+          : null,
     }))
 
     const { data: insertedItems, error: itemError } = await supabase
       .from('sale_items')
       .insert(itemRows)
-      .select('id, name, quantity, unit_price, line_total, item_type, sku')
+      .select(
+        'id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed',
+      )
 
     if (itemError) {
       throw new Error(itemError.message || 'Could not save sale items')
@@ -983,6 +999,57 @@ export async function recordBookingCheckout(
 export async function recordSaleFromBooking(saleInput: Omit<Sale, 'id'>): Promise<Sale> {
   const [sale] = await recordBookingCheckout([saleInput])
   return sale!
+}
+
+/**
+ * Mark one availed session as used (Session History → USE).
+ * `saleLineId` is `{saleUuid}:{saleItemUuid}` from mapped sales.
+ */
+export async function recordSessionUse(saleLineId: string): Promise<Sale | null> {
+  const sep = saleLineId.indexOf(':')
+  if (sep <= 0) throw new Error('Invalid sale line for session use')
+  const saleId = saleLineId.slice(0, sep)
+  const itemId = saleLineId.slice(sep + 1)
+  if (!isUuid(saleId) || !isUuid(itemId)) {
+    throw new Error('This entitlement is not linked to the database yet')
+  }
+
+  const existing = getSales().find((s) => s.id === saleLineId)
+  const total = Math.max(1, Number(existing?.sessionsTotal) || 1)
+  const completed = Math.max(0, Number(existing?.sessionsCompleted) || 0)
+  if (completed >= total) {
+    throw new Error('All sessions for this service are already used')
+  }
+  const nextCompleted = completed + 1
+
+  if (isSupabaseConfigured && supabase) {
+    const { requireSupabaseSession, mapBookingAuthError } = await import('@/utils/supabaseSession')
+    try {
+      await requireSupabaseSession()
+    } catch (err) {
+      throw new Error(mapBookingAuthError(err instanceof Error ? err.message : 'Not signed in'))
+    }
+    const { error } = await supabase
+      .from('sale_items')
+      .update({ sessions_completed: nextCompleted })
+      .eq('id', itemId)
+      .eq('sale_id', saleId)
+    if (error) throw new Error(error.message || 'Could not update session')
+  }
+
+  const patch = (s: Sale): Sale =>
+    s.id === saleLineId
+      ? { ...s, sessionsCompleted: nextCompleted, sessionsTotal: total }
+      : s
+
+  remoteLiveSales = remoteLiveSales.map(patch)
+  const extras = readExtraSales().map(patch)
+  localStorage.setItem(EXTRA_KEY, JSON.stringify(extras.slice(0, 500)))
+  if (existing && !remoteLiveSales.some((s) => s.id === saleLineId)) {
+    remoteLiveSales = [patch(existing), ...remoteLiveSales]
+  }
+  emitChange()
+  return getSales().find((s) => s.id === saleLineId) ?? null
 }
 
 export type TodayBookingRow = {

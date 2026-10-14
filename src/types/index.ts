@@ -145,6 +145,14 @@ export interface ClientSkinProfile {
   contraindications?: string
 }
 
+/** Itemized employee benefit — full monthly cost, deducted once per month on 2nd semi-monthly pay. */
+export interface EmployeeBenefitLine {
+  id: string
+  name: string
+  monthlyCost: number
+  notes?: string
+}
+
 export interface Staff {
   id: string
   /** Linked auth / profiles id when sourced from User Access */
@@ -171,6 +179,10 @@ export interface Staff {
   rating: number
   reviewCount: number
   baseSalary: number
+  /** Daily wage used for basic pay, late deduction, and payslips */
+  dailyRate?: number
+  /** Itemized benefits (monthly) — feed salary / payslip once per month */
+  benefits?: EmployeeBenefitLine[]
   birthDate?: string
   address?: string
   emergencyContactName?: string

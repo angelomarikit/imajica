@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { PayslipDocument } from '@/components/payroll/PayslipDocument'
 import { useAuth } from '@/contexts/AuthContext'
+import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { PAYROLL_DEFAULT_SHIFT } from '@/constants/payrollRosterSeed'
 import {
   formatManilaTime,
@@ -29,6 +30,8 @@ import {
   scheduledMinutesPerDay,
   type AttendancePayrollRow,
 } from '@/services/payrollAttendanceService'
+import { subscribeEmployeeHr } from '@/services/staffDirectoryService'
+import { subscribePayrollProfiles } from '@/services/payrollProfileService'
 import { buildPayslipDocument, type BuiltPayslip } from '@/services/payslipCompute'
 import { gatherPayslipIncentives } from '@/services/payslipIncentives'
 import {
@@ -41,7 +44,7 @@ import {
 import { preloadPlanBIncentives, subscribePlanBIncentives } from '@/services/planBIncentiveService'
 import { preloadSalesData, subscribeSalesData } from '@/services/salesService'
 import { preloadAccessUsers } from '@/services/userAccessService'
-import { canAccessPeopleOps } from '@/utils/franchiseAccess'
+import { canAccessPeopleOps, isBranchOwner } from '@/utils/franchiseAccess'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import type { AttendancePunch } from '@/types'
@@ -71,7 +74,11 @@ function sumIncentives(row: AttendancePayrollRow, periodFrom: string, periodTo: 
     (inc.planBAmount || 0)
   // Absences already zero out gross days — do not list them again in deductions vs net
   const netDeductions = Math.round(
-    (row.lateDeduction + row.undertimeDeduction + row.statutoryTotal) * 100,
+    (row.lateDeduction +
+      row.undertimeDeduction +
+      row.statutoryTotal +
+      (row.benefitsDeduction || 0)) *
+      100,
   ) / 100
   return {
     incentives: Math.round(total * 100) / 100,
@@ -84,7 +91,8 @@ function sumIncentives(row: AttendancePayrollRow, periodFrom: string, periodTo: 
 /** HQ payroll from Time In / Time Out + spreadsheet daily rates & statutory deductions. */
 export function AttendancePayrollPage({
   title = 'Payroll',
-  description = 'Daily rates, attendance hours, late/undertime, and statutory deductions from the payroll roster.',
+  description =
+    'Daily rates & benefits from Employee Database, attendance hours, late ((daily÷8÷60)×min), and statutory deductions. Benefits deduct once/month on the 2nd semi-monthly cut.',
   branchIds,
 }: {
   title?: string
@@ -93,7 +101,15 @@ export function AttendancePayrollPage({
   branchIds?: string[]
 } = {}) {
   const { user } = useAuth()
-  const allowed = canAccessPeopleOps(user)
+  const forcedBranchId = useForcedBranchId()
+  const clinicManager = isBranchOwner(user)
+  /** HQ/HR: all clinics. Clinic manager: only their locked branch salary page. */
+  const allowed =
+    canAccessPeopleOps(user) ||
+    (clinicManager &&
+      Boolean(forcedBranchId) &&
+      branchIds?.length === 1 &&
+      branchIds[0] === forcedBranchId)
   const initial = defaultMonthRange()
 
   const [fromDraft, setFromDraft] = useState(initial.from)
@@ -129,9 +145,21 @@ export function AttendancePayrollPage({
 
   useEffect(() => {
     void load()
-    return subscribeAttendance(() => {
+    const unsubAttendance = subscribeAttendance(() => {
       void load()
     })
+    // Reload when clinic manager saves daily rate / benefits on Employee Database
+    const unsubHr = subscribeEmployeeHr(() => {
+      void load()
+    })
+    const unsubPayroll = subscribePayrollProfiles(() => {
+      void load()
+    })
+    return () => {
+      unsubAttendance()
+      unsubHr()
+      unsubPayroll()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, branchKey])
 
@@ -331,7 +359,8 @@ export function AttendancePayrollPage({
             Apply
           </Button>
           <p className="text-xs text-slate-ui lg:ml-auto lg:self-center">
-            Shift {scheduledMinutesPerDay()} min/day · MBS = salary/day ×{' '}
+            Late = (daily ÷ 8 hrs ÷ 60) × min · Shift {scheduledMinutesPerDay()} min · MBS =
+            salary/day ×{' '}
             {PAYROLL_DEFAULT_SHIFT.mbsDaysPerMonth}
           </p>
         </div>
@@ -494,11 +523,20 @@ function HrPayslipPreview({
     return buildPayslipDocument({ row, periodFrom, periodTo, incentives })
   }, [row, periodFrom, periodTo, punches, salesTick])
 
-  // Reset draft when the auto-calculated payslip changes (new staff / range / punches)
+  // Identity of the auto-calc source — reset draft only when staff / period changes,
+  // not when background sales ticks fire (that was wiping manual edits before send).
+  const computeKey = `${row.employee.id}|${periodFrom}|${periodTo}|${row.daysPresent}|${row.employee.salaryPerDay}|${row.lateMinutes}`
+
   useEffect(() => {
     setDraft(computed)
     setEditing(false)
-  }, [computed])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only reset on identity/rate change
+  }, [computeKey])
+
+  // Keep draft in sync with computed only when not actively editing
+  useEffect(() => {
+    if (!editing) setDraft(computed)
+  }, [computed, editing])
 
   const payslip = draft ?? computed
 
@@ -512,6 +550,14 @@ function HrPayslipPreview({
 
   async function handleSend() {
     if (!user) return
+    if (payslip.base.employee.salaryPerDay <= 0 || payslip.grossEarnings <= 0) {
+      const ok = window.confirm(
+        `This payslip still shows ₱0 basic pay (daily rate is ${payslip.base.employee.salaryPerDay || 0}).\n\n` +
+          `Set the daily rate on Employee Database (or use Edit → Daily rate on this slip), then send again.\n\n` +
+          `Send anyway with zeros?`,
+      )
+      if (!ok) return
+    }
     setSending(true)
     try {
       await sendPayslipToEmployee({

@@ -1,4 +1,5 @@
 import type { AttendancePayrollRow } from '@/services/payrollAttendanceService'
+import { latePerMinuteRate } from '@/services/payrollAttendanceService'
 import {
   ATTENDANCE_INCENTIVE_AMOUNT,
   BRANCH_SALES_MILESTONE,
@@ -6,6 +7,7 @@ import {
   MILESTONE_SPLIT_RATE,
   STAFF_SALES_COMMISSION_RATE,
 } from '@/constants/payrollIncentives'
+import { STANDARD_WORK_HOURS_PER_DAY } from '@/constants/payrollRosterSeed'
 
 export type PayslipLineKind =
   | 'earning'
@@ -181,18 +183,19 @@ export function buildPayslipDocument(input: {
     })
   }
 
+  const perMin = latePerMinuteRate(e.salaryPerDay)
   lines.push({
     id: 'late',
     kind: 'deduction',
     label: 'Late deduction',
-    computation: `${row.lateMinutes} minute(s) × (salary/day ÷ scheduled minutes)`,
+    computation: `${row.lateMinutes} min × ((₱${e.salaryPerDay.toLocaleString('en-PH')} ÷ ${STANDARD_WORK_HOURS_PER_DAY} hrs ÷ 60) = ₱${perMin.toFixed(4)}/min)`,
     amount: -round2(row.lateDeduction),
   })
   lines.push({
     id: 'undertime',
     kind: 'deduction',
     label: 'Undertime deduction',
-    computation: `${row.undertimeMinutes} minute(s) × (salary/day ÷ scheduled minutes)`,
+    computation: `${row.undertimeMinutes} min × (daily wage ÷ ${STANDARD_WORK_HOURS_PER_DAY} hrs ÷ 60)`,
     amount: -round2(row.undertimeDeduction),
   })
   lines.push({
@@ -225,6 +228,38 @@ export function buildPayslipDocument(input: {
       amount: -round2(row.otherDeduction),
     })
   }
+
+  const benefitLines = e.benefits ?? []
+  const benefitsMonthlyTotal = benefitLines.reduce(
+    (s, b) => s + Math.max(0, Number(b.monthlyCost) || 0),
+    0,
+  )
+  if (benefitLines.length > 0) {
+    if (row.benefitsAppliedThisPeriod) {
+      for (const b of benefitLines) {
+        lines.push({
+          id: `benefit-${b.id}`,
+          kind: 'deduction',
+          label: `Benefit: ${b.name}`,
+          computation:
+            'Full monthly cost — deducted once this month on 2nd semi-monthly pay (not split across both pays)',
+          amount: -round2(b.monthlyCost),
+        })
+      }
+    } else {
+      lines.push({
+        id: 'benefits-deferred',
+        kind: 'info',
+        label: 'Monthly benefits (Employee Database)',
+        computation: `₱${benefitsMonthlyTotal.toLocaleString('en-PH', {
+          minimumFractionDigits: 2,
+        })} total — pay is twice a month; full benefits deduct only on the 2nd cut (period ending day ≥ 16), not on this slip`,
+        amount: 0,
+        includeInTotal: false,
+      })
+    }
+  }
+
   if (row.allowance > 0) {
     lines.push({
       id: 'allowance',
@@ -249,7 +284,8 @@ export function buildPayslipDocument(input: {
       row.sssDeduction +
       row.pagibigDeduction +
       row.philhealthDeduction +
-      (row.otherDeduction || 0),
+      (row.otherDeduction || 0) +
+      (row.benefitsDeduction || 0),
   )
   const netPay = round2(grossEarnings + totalIncentives - totalDeductions)
 
@@ -331,4 +367,160 @@ export function patchPayslipLine(
     return next
   })
   return recomputePayslipTotals({ ...payslip, lines })
+}
+
+/**
+ * Migration-friendly override: set days present and/or daily rate, then
+ * recalculate basic pay amount (days × rate) while leaving other lines alone.
+ */
+export function applyPayslipBasicOverride(
+  payslip: BuiltPayslip,
+  patch: { daysPresent?: number; salaryPerDay?: number },
+): BuiltPayslip {
+  const daysPresent = Math.max(
+    0,
+    patch.daysPresent != null ? Number(patch.daysPresent) || 0 : payslip.base.daysPresent,
+  )
+  const salaryPerDay = Math.max(
+    0,
+    patch.salaryPerDay != null
+      ? Number(patch.salaryPerDay) || 0
+      : payslip.base.employee.salaryPerDay,
+  )
+  const grossPay = round2(daysPresent * salaryPerDay)
+  const peso = salaryPerDay.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })
+  const withLine = patchPayslipLine(payslip, 'base', {
+    amount: grossPay,
+    computation: `${daysPresent} day(s) × ${peso}/day (manual)`,
+  })
+  return recomputePayslipTotals({
+    ...withLine,
+    base: {
+      ...withLine.base,
+      daysPresent,
+      grossPay,
+      employee: {
+        ...withLine.base.employee,
+        salaryPerDay,
+      },
+    },
+  })
+}
+
+function lineAmountAbs(payslip: BuiltPayslip, ...ids: string[]): number {
+  for (const id of ids) {
+    const line = payslip.lines.find((l) => l.id === id)
+    if (line) return Math.abs(Number(line.amount) || 0)
+  }
+  return 0
+}
+
+export function getPayslipManualFieldAmounts(payslip: BuiltPayslip) {
+  return {
+    lateMinutes: payslip.base.lateMinutes,
+    lateDeduction: payslip.base.lateDeduction,
+    staffCommission: lineAmountAbs(payslip, 'staff-commission'),
+    milestoneShare: lineAmountAbs(payslip, 'milestone-split', 'milestone-locked'),
+    attendanceIncentive: lineAmountAbs(payslip, 'attendance-incentive'),
+  }
+}
+
+function upsertIncentiveAmount(
+  payslip: BuiltPayslip,
+  ids: string[],
+  amount: number,
+  meta: { label: string; computation: string; preferredId: string },
+): BuiltPayslip {
+  const value = round2(Math.max(0, Number(amount) || 0))
+  const existing = payslip.lines.find((l) => ids.includes(l.id))
+  if (!existing) {
+    const lines = [
+      ...payslip.lines,
+      {
+        id: meta.preferredId,
+        kind: (value > 0 ? 'incentive' : 'info') as PayslipLineKind,
+        label: meta.label,
+        computation: meta.computation,
+        amount: value,
+        includeInTotal: value > 0,
+      },
+    ]
+    return recomputePayslipTotals({ ...payslip, lines })
+  }
+  const lines = payslip.lines.map((line) => {
+    if (!ids.includes(line.id)) return line
+    return {
+      ...line,
+      id: meta.preferredId,
+      kind: (value > 0 ? 'incentive' : 'info') as PayslipLineKind,
+      label: meta.label,
+      computation: meta.computation,
+      amount: value,
+      includeInTotal: value > 0,
+    }
+  })
+  return recomputePayslipTotals({ ...payslip, lines })
+}
+
+/**
+ * Manual overrides for migration: late minutes, staff commission, 2M milestone,
+ * attendance incentive — each updates the matching payslip line / totals.
+ */
+export function applyPayslipManualOverrides(
+  payslip: BuiltPayslip,
+  patch: {
+    lateMinutes?: number
+    staffCommission?: number
+    milestoneShare?: number
+    attendanceIncentive?: number
+  },
+): BuiltPayslip {
+  let next = payslip
+
+  if (patch.lateMinutes != null) {
+    const lateMinutes = Math.max(0, Number(patch.lateMinutes) || 0)
+    const rate = latePerMinuteRate(next.base.employee.salaryPerDay)
+    const lateDeduction = round2(lateMinutes * rate)
+    next = patchPayslipLine(next, 'late', {
+      amount: -lateDeduction,
+      computation: `${lateMinutes} min × ((₱${next.base.employee.salaryPerDay.toLocaleString('en-PH')} ÷ ${STANDARD_WORK_HOURS_PER_DAY} hrs ÷ 60) = ₱${rate.toFixed(4)}/min) (manual)`,
+    })
+    next = {
+      ...next,
+      base: {
+        ...next.base,
+        lateMinutes,
+        lateDeduction,
+      },
+    }
+  }
+
+  if (patch.staffCommission != null) {
+    const amount = Math.max(0, Number(patch.staffCommission) || 0)
+    next = upsertIncentiveAmount(next, ['staff-commission'], amount, {
+      preferredId: 'staff-commission',
+      label: 'Staff sales commission (0.5%)',
+      computation: `Manual entry ₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+    })
+  }
+
+  if (patch.milestoneShare != null) {
+    const amount = Math.max(0, Number(patch.milestoneShare) || 0)
+    next = upsertIncentiveAmount(next, ['milestone-split', 'milestone-locked'], amount, {
+      preferredId: 'milestone-split',
+      label: '2M milestone team split (1%)',
+      computation: `Manual entry ₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+    })
+  }
+
+  if (patch.attendanceIncentive != null) {
+    const amount = Math.max(0, Number(patch.attendanceIncentive) || 0)
+    next = upsertIncentiveAmount(next, ['attendance-incentive'], amount, {
+      preferredId: 'attendance-incentive',
+      label: 'Attendance incentive',
+      computation: `Manual entry ₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+    })
+  }
+
+  return next
 }

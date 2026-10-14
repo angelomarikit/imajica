@@ -17,19 +17,29 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { demoCommissions } from '@/constants/demoData'
 import { useAuth } from '@/contexts/AuthContext'
-import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { exportCsv } from '@/services/analyticsService'
 import {
   getEmployeeById,
   listDirectoryStaff,
+  matchesStaffBranch,
   saveEmployeeHrDetails,
   subscribeEmployeeHr,
 } from '@/services/staffDirectoryService'
-import type { Staff } from '@/types'
-import { formatPeso } from '@/utils/currency'
+import { upsertEmployeePayFromDirectory } from '@/services/payrollProfileService'
+import type { EmployeeBenefitLine, Staff } from '@/types'
+import { formatPeso, formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import { canAccessPeopleOps, isFranchiseBranchOwner } from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
+
+function newBenefitId() {
+  return `ben-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+function benefitsMonthlyTotal(benefits: EmployeeBenefitLine[]) {
+  return benefits.reduce((s, b) => s + Math.max(0, Number(b.monthlyCost) || 0), 0)
+}
 
 const fieldClass =
   'mt-1.5 w-full rounded-[10px] border border-border bg-white px-3 py-2.5 text-sm text-[#073D2C] outline-none focus:border-emerald-800/40 focus:ring-2 focus:ring-emerald-900/10'
@@ -52,6 +62,7 @@ export function StaffPage() {
   const peopleOps = canAccessPeopleOps(user)
   const franchiseOwner = isFranchiseBranchOwner(user)
   const forcedBranchId = useForcedBranchId()
+  const effectiveBranchId = useEffectiveBranchId()
   const [staffRows, setStaffRows] = useState<Staff[]>([])
   const [loading, setLoading] = useState(true)
   const [queryDraft, setQueryDraft] = useState('')
@@ -81,12 +92,13 @@ export function StaffPage() {
 
   const filtered = useMemo(() => {
     let list = staffRows
-    if (franchiseOwner) {
-      list = list.filter(
-        (s) =>
-          (forcedBranchId && s.branchId === forcedBranchId) ||
-          (user?.branchName && s.branchName === user.branchName),
-      )
+    // Clinic manager: staff registered to their clinic (fuzzy branch match)
+    if (franchiseOwner && forcedBranchId) {
+      list = list.filter((s) => matchesStaffBranch(s, forcedBranchId))
+    }
+    // HR / HQ: optional header branch filter (All Branches = everyone)
+    if (peopleOps && effectiveBranchId !== 'all') {
+      list = list.filter((s) => matchesStaffBranch(s, effectiveBranchId))
     }
     const q = query.toLowerCase()
     if (!q) return list
@@ -95,7 +107,14 @@ export function StaffPage() {
         `${s.fullName} ${s.email} ${s.title} ${s.phone} ${s.branchName} ${s.department ?? ''} ${s.employeeCode ?? ''} ${s.address ?? ''} ${s.emergencyContactName ?? ''}`.toLowerCase()
       return hay.includes(q)
     })
-  }, [staffRows, query, franchiseOwner, forcedBranchId, user?.branchName])
+  }, [
+    staffRows,
+    query,
+    franchiseOwner,
+    forcedBranchId,
+    peopleOps,
+    effectiveBranchId,
+  ])
 
   function handleExport() {
     exportCsv(
@@ -108,6 +127,8 @@ export function StaffPage() {
         'Branch',
         'Department',
         'Employee No',
+        'Daily Rate',
+        'Benefits Monthly',
         'Address',
         'Emergency Contact',
         'Emergency Phone',
@@ -121,6 +142,8 @@ export function StaffPage() {
         s.branchName,
         s.department ?? '',
         s.employeeCode ?? '',
+        String(s.dailyRate ?? ''),
+        String(benefitsMonthlyTotal(s.benefits ?? [])),
         s.address ?? '',
         s.emergencyContactName ?? '',
         s.emergencyContactPhone ?? '',
@@ -134,7 +157,13 @@ export function StaffPage() {
     <div className="space-y-5">
       <AdminPageBanner
         title="Employee Database"
-        description="Company employees from User Access / clinic accounts. Open a profile for contact, home address, emergency person, and employment details."
+        description={
+          peopleOps
+            ? 'All clinic employees from User Access. Use the header branch filter to narrow to one clinic, or All Branches to see everyone.'
+            : franchiseOwner
+              ? 'Employees registered to your clinic. Open a profile for contact, employment, and HR details.'
+              : 'Company employees from User Access / clinic accounts. Open a profile for contact, home address, emergency person, and employment details.'
+        }
         stat={{ value: filtered.length, label: 'Total Employees' }}
       />
 
@@ -181,6 +210,8 @@ export function StaffPage() {
                 <th className="px-2 py-3">Position</th>
                 <th className="px-2 py-3">Contact Number</th>
                 <th className="px-2 py-3">Branch</th>
+                <th className="px-2 py-3">Daily Rate</th>
+                <th className="px-2 py-3">Benefits</th>
                 <th className="px-2 py-3">Status</th>
                 <th className="px-2 py-3">Actions</th>
               </tr>
@@ -188,12 +219,14 @@ export function StaffPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-2 py-8 text-center text-slate-ui">
+                  <td colSpan={10} className="px-2 py-8 text-center text-slate-ui">
                     Loading employees…
                   </td>
                 </tr>
               ) : (
-                filtered.map((s) => (
+                filtered.map((s) => {
+                  const benTotal = benefitsMonthlyTotal(s.benefits ?? [])
+                  return (
                   <tr key={s.id} className="border-t border-border/70 hover:bg-ivory-100">
                     <td className="px-2 py-3">
                       <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[#073D2C] text-[11px] font-semibold text-[#F3E6C8]">
@@ -222,6 +255,25 @@ export function StaffPage() {
                         {s.branchName || '—'}
                       </span>
                     </td>
+                    <td className="px-2 py-3 font-metric font-semibold text-[#073D2C]">
+                      {s.dailyRate != null && s.dailyRate > 0
+                        ? formatPesoExact(s.dailyRate)
+                        : '—'}
+                    </td>
+                    <td className="px-2 py-3">
+                      {benTotal > 0 ? (
+                        <div>
+                          <p className="font-metric font-semibold text-[#073D2C]">
+                            {formatPesoExact(benTotal)}
+                          </p>
+                          <p className="text-[10px] text-slate-ui">
+                            {(s.benefits ?? []).length} item(s) · once/mo
+                          </p>
+                        </div>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td className="px-2 py-3">
                       <span
                         className={cn(
@@ -243,11 +295,11 @@ export function StaffPage() {
                         >
                           <Eye className="h-3.5 w-3.5" />
                         </Link>
-                        {peopleOps ? (
+                        {peopleOps || franchiseOwner ? (
                           <Link
                             to={`/admin/staff/${s.id}?edit=1`}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-orange-50 text-orange-700 hover:bg-orange-100"
-                            title="Edit HR details"
+                            title={franchiseOwner && !peopleOps ? 'Edit daily rate & benefits' : 'Edit HR details'}
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </Link>
@@ -267,11 +319,12 @@ export function StaffPage() {
                       </div>
                     </td>
                   </tr>
-                ))
+                  )
+                })
               )}
               {!loading && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-2 py-8 text-center text-slate-ui">
+                  <td colSpan={10} className="px-2 py-8 text-center text-slate-ui">
                     No employees found.
                   </td>
                 </tr>
@@ -289,6 +342,10 @@ export function StaffDetailPage() {
   const [searchParams] = useSearchParams()
   const { user } = useAuth()
   const peopleOps = canAccessPeopleOps(user)
+  const franchiseOwner = isFranchiseBranchOwner(user)
+  /** Clinic managers may edit daily rate + benefits; HR may edit full profile. */
+  const canEditPay = peopleOps || franchiseOwner
+  const canEditHr = peopleOps
   const navigate = useNavigate()
   const editRequested = searchParams.get('edit') === '1'
 
@@ -310,10 +367,12 @@ export function StaffDetailPage() {
   const [emergencyName, setEmergencyName] = useState('')
   const [emergencyRelation, setEmergencyRelation] = useState('')
   const [emergencyPhone, setEmergencyPhone] = useState('')
+  const [dailyRate, setDailyRate] = useState('')
+  const [benefits, setBenefits] = useState<EmployeeBenefitLine[]>([])
 
   useEffect(() => {
-    if (editRequested && peopleOps) setEditing(true)
-  }, [editRequested, peopleOps])
+    if (editRequested && canEditPay) setEditing(true)
+  }, [editRequested, canEditPay])
 
   useEffect(() => {
     let cancelled = false
@@ -354,32 +413,67 @@ export function StaffDetailPage() {
     setEmergencyName(row.emergencyContactName ?? '')
     setEmergencyRelation(row.emergencyContactRelation ?? '')
     setEmergencyPhone(row.emergencyContactPhone ?? '')
+    setDailyRate(row.dailyRate != null && row.dailyRate > 0 ? String(row.dailyRate) : '')
+    setBenefits(row.benefits?.length ? row.benefits.map((b) => ({ ...b })) : [])
   }
 
   async function handleSave(e: FormEvent) {
     e.preventDefault()
-    if (!staff || !peopleOps) return
+    if (!staff || !canEditPay) return
     setSaving(true)
     try {
-      const updated = await saveEmployeeHrDetails(staff, {
-        firstName: firstName.trim(),
-        middleName: middleName.trim(),
-        lastName: lastName.trim(),
-        birthDate: birthDate || undefined,
-        phone: phone.trim(),
-        title: title.trim(),
-        department: department.trim(),
-        hireDate: hireDate || undefined,
-        employmentType,
-        address: address.trim(),
-        emergencyContactName: emergencyName.trim(),
-        emergencyContactRelation: emergencyRelation.trim(),
-        emergencyContactPhone: emergencyPhone.trim(),
+      const rate = Math.max(0, Number(dailyRate) || 0)
+      const cleanBenefits = benefits
+        .map((b) => ({
+          ...b,
+          name: b.name.trim(),
+          monthlyCost: Math.max(0, Number(b.monthlyCost) || 0),
+          notes: b.notes?.trim() || undefined,
+        }))
+        .filter((b) => b.name.length > 0)
+
+      const hrPatch = canEditHr
+        ? {
+            firstName: firstName.trim(),
+            middleName: middleName.trim(),
+            lastName: lastName.trim(),
+            birthDate: birthDate || undefined,
+            phone: phone.trim(),
+            title: title.trim(),
+            department: department.trim(),
+            hireDate: hireDate || undefined,
+            employmentType,
+            address: address.trim(),
+            emergencyContactName: emergencyName.trim(),
+            emergencyContactRelation: emergencyRelation.trim(),
+            emergencyContactPhone: emergencyPhone.trim(),
+            dailyRate: rate,
+            benefits: cleanBenefits,
+          }
+        : {
+            dailyRate: rate,
+            benefits: cleanBenefits,
+          }
+
+      const updated = await saveEmployeeHrDetails(staff, hrPatch)
+      await upsertEmployeePayFromDirectory({
+        userId: updated.profileId || updated.id,
+        email: updated.email,
+        fullName: updated.fullName,
+        branchId: updated.branchId,
+        branchName: updated.branchName,
+        jobTitle: updated.title,
+        dailyRate: rate,
+        benefits: cleanBenefits,
       })
       setStaff(updated)
       hydrateForm(updated)
       setEditing(false)
-      toast.success('Employee HR details saved')
+      toast.success(
+        canEditHr
+          ? 'Employee details & pay saved — wired to Salary / payslip'
+          : 'Daily rate & benefits saved — wired to Salary / payslip',
+      )
       navigate(`/admin/staff/${updated.id}`, { replace: true })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save employee details')
@@ -408,7 +502,7 @@ export function StaffDetailPage() {
   return (
     <div className="space-y-5">
       <AdminPageBanner
-        eyebrow="HR · Employee Database"
+        eyebrow={peopleOps ? 'HR · Employee Database' : 'Clinic · Employee Database'}
         title={staff.fullName}
         description={`${staff.title || formatRoleLabel(staff.role)} · ${staff.branchName || '—'}`}
         actions={
@@ -419,119 +513,260 @@ export function StaffDetailPage() {
                 Back
               </Button>
             </Link>
-            {peopleOps && !editing ? (
+            {canEditPay && !editing ? (
               <Button type="button" className="gap-1.5" onClick={() => setEditing(true)}>
                 <Pencil className="h-4 w-4" />
-                Edit details
+                {canEditHr ? 'Edit details' : 'Edit pay & benefits'}
               </Button>
             ) : null}
           </div>
         }
       />
 
-      {editing && peopleOps ? (
+      {editing && canEditPay ? (
         <form onSubmit={handleSave} className="space-y-4">
-          <Card className="p-5 sm:p-6">
-            <h2 className={cn(labelClass, 'mb-4')}>Personal information</h2>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <label className="block">
-                <span className={labelClass}>First name</span>
-                <input className={fieldClass} value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Middle name</span>
-                <input className={fieldClass} value={middleName} onChange={(e) => setMiddleName(e.target.value)} />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Last name</span>
-                <input className={fieldClass} value={lastName} onChange={(e) => setLastName(e.target.value)} required />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Birth date</span>
-                <input type="date" className={fieldClass} value={birthDate} onChange={(e) => setBirthDate(e.target.value)} />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Mobile number</span>
-                <input
-                  className={fieldClass}
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="09XXXXXXXXX"
-                />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Work email</span>
-                <input className={fieldClass} value={staff.email} disabled />
-              </label>
-            </div>
-          </Card>
+          {canEditHr ? (
+            <>
+              <Card className="p-5 sm:p-6">
+                <h2 className={cn(labelClass, 'mb-4')}>Personal information</h2>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <label className="block">
+                    <span className={labelClass}>First name</span>
+                    <input className={fieldClass} value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Middle name</span>
+                    <input className={fieldClass} value={middleName} onChange={(e) => setMiddleName(e.target.value)} />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Last name</span>
+                    <input className={fieldClass} value={lastName} onChange={(e) => setLastName(e.target.value)} required />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Birth date</span>
+                    <input type="date" className={fieldClass} value={birthDate} onChange={(e) => setBirthDate(e.target.value)} />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Mobile number</span>
+                    <input
+                      className={fieldClass}
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="09XXXXXXXXX"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Work email</span>
+                    <input className={fieldClass} value={staff.email} disabled />
+                  </label>
+                </div>
+              </Card>
+
+              <Card className="p-5 sm:p-6">
+                <h2 className={cn(labelClass, 'mb-4')}>Employment</h2>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block">
+                    <span className={labelClass}>Position / title</span>
+                    <input className={fieldClass} value={title} onChange={(e) => setTitle(e.target.value)} />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Department</span>
+                    <input className={fieldClass} value={department} onChange={(e) => setDepartment(e.target.value)} />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Hire / join date</span>
+                    <input type="date" className={fieldClass} value={hireDate} onChange={(e) => setHireDate(e.target.value)} />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Employment type</span>
+                    <select className={fieldClass} value={employmentType} onChange={(e) => setEmploymentType(e.target.value)}>
+                      <option>Full-time</option>
+                      <option>Part-time</option>
+                      <option>Contract</option>
+                    </select>
+                  </label>
+                  <div className="rounded-[10px] border border-border bg-ivory-50 p-3 sm:col-span-2">
+                    <p className="text-xs text-slate-ui">Branch · Role · Employee no.</p>
+                    <p className="mt-1 font-semibold text-[#073D2C]">
+                      {staff.branchName || '—'} · {formatRoleLabel(staff.role)}
+                      {staff.employeeCode ? ` · Emp #${staff.employeeCode}` : ''}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="p-5 sm:p-6">
+                <h2 className={cn(labelClass, 'mb-4')}>Home address</h2>
+                <label className="block">
+                  <span className={labelClass}>Complete residential address</span>
+                  <textarea
+                    className={cn(fieldClass, 'min-h-[100px] resize-y')}
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder="House/Unit, Street, Barangay, City, Province"
+                  />
+                </label>
+              </Card>
+
+              <Card className="p-5 sm:p-6">
+                <h2 className={cn(labelClass, 'mb-4')}>Emergency contact</h2>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <label className="block">
+                    <span className={labelClass}>Person to contact</span>
+                    <input className={fieldClass} value={emergencyName} onChange={(e) => setEmergencyName(e.target.value)} />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Relationship</span>
+                    <input
+                      className={fieldClass}
+                      value={emergencyRelation}
+                      onChange={(e) => setEmergencyRelation(e.target.value)}
+                      placeholder="Spouse, Parent, Sibling…"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Emergency mobile</span>
+                    <input className={fieldClass} value={emergencyPhone} onChange={(e) => setEmergencyPhone(e.target.value)} />
+                  </label>
+                </div>
+              </Card>
+            </>
+          ) : (
+            <Card className="p-4 sm:p-5">
+              <p className="text-sm text-slate-ui">
+                Editing pay for <strong className="text-[#073D2C]">{staff.fullName}</strong> ·{' '}
+                {staff.branchName || '—'} · {formatRoleLabel(staff.role)}
+              </p>
+            </Card>
+          )}
 
           <Card className="p-5 sm:p-6">
-            <h2 className={cn(labelClass, 'mb-4')}>Employment</h2>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="block">
-                <span className={labelClass}>Position / title</span>
-                <input className={fieldClass} value={title} onChange={(e) => setTitle(e.target.value)} />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Department</span>
-                <input className={fieldClass} value={department} onChange={(e) => setDepartment(e.target.value)} />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Hire / join date</span>
-                <input type="date" className={fieldClass} value={hireDate} onChange={(e) => setHireDate(e.target.value)} />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Employment type</span>
-                <select className={fieldClass} value={employmentType} onChange={(e) => setEmploymentType(e.target.value)}>
-                  <option>Full-time</option>
-                  <option>Part-time</option>
-                  <option>Contract</option>
-                </select>
-              </label>
-              <div className="rounded-[10px] border border-border bg-ivory-50 p-3 sm:col-span-2">
-                <p className="text-xs text-slate-ui">Branch · Role · Employee no.</p>
-                <p className="mt-1 font-semibold text-[#073D2C]">
-                  {staff.branchName || '—'} · {formatRoleLabel(staff.role)}
-                  {staff.employeeCode ? ` · Emp #${staff.employeeCode}` : ''}
-                </p>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="p-5 sm:p-6">
-            <h2 className={cn(labelClass, 'mb-4')}>Home address</h2>
-            <label className="block">
-              <span className={labelClass}>Complete residential address</span>
-              <textarea
-                className={cn(fieldClass, 'min-h-[100px] resize-y')}
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="House/Unit, Street, Barangay, City, Province"
+            <h2 className={cn(labelClass, 'mb-1')}>Daily rate &amp; benefits</h2>
+            <p className="mb-4 text-xs text-slate-ui">
+              Daily rate feeds Salary basic pay and late deduction (daily ÷ 8 hrs ÷ 60 × minutes late).
+              Benefits are itemized monthly costs — pay is twice a month, but these deduct once on the
+              2nd semi-monthly payslip only.
+            </p>
+            <label className="block max-w-xs">
+              <span className={labelClass}>Daily rate (₱)</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                className={fieldClass}
+                value={dailyRate}
+                onChange={(e) => setDailyRate(e.target.value)}
+                placeholder="e.g. 800"
               />
             </label>
-          </Card>
 
-          <Card className="p-5 sm:p-6">
-            <h2 className={cn(labelClass, 'mb-4')}>Emergency contact</h2>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <label className="block">
-                <span className={labelClass}>Person to contact</span>
-                <input className={fieldClass} value={emergencyName} onChange={(e) => setEmergencyName(e.target.value)} />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Relationship</span>
-                <input
-                  className={fieldClass}
-                  value={emergencyRelation}
-                  onChange={(e) => setEmergencyRelation(e.target.value)}
-                  placeholder="Spouse, Parent, Sibling…"
-                />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Emergency mobile</span>
-                <input className={fieldClass} value={emergencyPhone} onChange={(e) => setEmergencyPhone(e.target.value)} />
-              </label>
+            <div className="mt-5">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className={labelClass}>Benefits (add one by one)</span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="gap-1"
+                  onClick={() =>
+                    setBenefits((prev) => [
+                      ...prev,
+                      { id: newBenefitId(), name: '', monthlyCost: 0 },
+                    ])
+                  }
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add benefit
+                </Button>
+              </div>
+              {benefits.length === 0 ? (
+                <p className="rounded-[10px] border border-dashed border-border bg-ivory-50 px-3 py-4 text-sm text-slate-ui">
+                  No benefits yet. Add items like HMO, rice subsidy, etc. with their monthly cost.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {benefits.map((b, idx) => (
+                    <div
+                      key={b.id}
+                      className="grid gap-2 rounded-[10px] border border-border bg-white p-3 sm:grid-cols-[1fr_8rem_1fr_auto]"
+                    >
+                      <label className="block">
+                        <span className="text-[10px] font-semibold uppercase text-slate-ui">Name</span>
+                        <input
+                          className={fieldClass}
+                          value={b.name}
+                          onChange={(e) =>
+                            setBenefits((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, name: e.target.value } : row,
+                              ),
+                            )
+                          }
+                          placeholder="e.g. HMO"
+                          required
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] font-semibold uppercase text-slate-ui">
+                          Monthly ₱
+                        </span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          className={fieldClass}
+                          value={b.monthlyCost || ''}
+                          onChange={(e) =>
+                            setBenefits((prev) =>
+                              prev.map((row, i) =>
+                                i === idx
+                                  ? { ...row, monthlyCost: Number(e.target.value) || 0 }
+                                  : row,
+                              ),
+                            )
+                          }
+                          required
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] font-semibold uppercase text-slate-ui">
+                          Notes
+                        </span>
+                        <input
+                          className={fieldClass}
+                          value={b.notes ?? ''}
+                          onChange={(e) =>
+                            setBenefits((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, notes: e.target.value } : row,
+                              ),
+                            )
+                          }
+                          placeholder="Optional"
+                        />
+                      </label>
+                      <div className="flex items-end">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-700"
+                          onClick={() =>
+                            setBenefits((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  <p className="text-sm font-semibold text-[#073D2C]">
+                    Total monthly benefits:{' '}
+                    {formatPesoExact(benefitsMonthlyTotal(benefits))} — deducted once/month on 2nd
+                    pay
+                  </p>
+                </div>
+              )}
             </div>
           </Card>
 
@@ -549,7 +784,7 @@ export function StaffDetailPage() {
             </Button>
             <Button type="submit" className="gap-1.5" disabled={saving}>
               <Save className="h-4 w-4" />
-              {saving ? 'Saving…' : 'Save HR details'}
+              {saving ? 'Saving…' : canEditHr ? 'Save HR details' : 'Save pay & benefits'}
             </Button>
           </div>
         </form>
@@ -625,6 +860,50 @@ function StaffDetailBody({ staff }: { staff: Staff }) {
           <DetailTile label="Relationship" value={staff.emergencyContactRelation || '—'} />
           <DetailTile label="Emergency mobile" value={staff.emergencyContactPhone || '—'} />
         </div>
+      </Card>
+
+      <Card className="p-4 sm:p-5">
+        <h3 className={cn(labelClass, 'mb-1')}>Daily rate &amp; benefits</h3>
+        <p className="mb-3 text-xs text-slate-ui">
+          Wired to Salary / payslip. Benefits deduct once per month on the 2nd semi-monthly pay
+          (pay is issued twice a month).
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <DetailTile
+            label="Daily rate"
+            value={
+              staff.dailyRate != null && staff.dailyRate > 0
+                ? formatPesoExact(staff.dailyRate)
+                : 'Not set'
+            }
+          />
+          <DetailTile
+            label="Benefits (monthly total)"
+            value={
+              benefitsMonthlyTotal(staff.benefits ?? []) > 0
+                ? formatPesoExact(benefitsMonthlyTotal(staff.benefits ?? []))
+                : 'None'
+            }
+          />
+        </div>
+        {(staff.benefits ?? []).length > 0 ? (
+          <ul className="mt-3 divide-y divide-border/70 rounded-[10px] border border-border">
+            {(staff.benefits ?? []).map((b) => (
+              <li
+                key={b.id}
+                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm"
+              >
+                <div>
+                  <p className="font-semibold text-[#073D2C]">{b.name}</p>
+                  {b.notes ? <p className="text-[11px] text-slate-ui">{b.notes}</p> : null}
+                </div>
+                <p className="font-metric font-semibold text-[#073D2C]">
+                  {formatPesoExact(b.monthlyCost)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </Card>
 
       {staff.baseSalary > 0 ? (

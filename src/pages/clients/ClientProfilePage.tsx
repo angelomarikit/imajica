@@ -23,7 +23,7 @@ import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { recomputeClientSalesProfile } from '@/services/clientSalesProfileService'
 import { getClientById, getClients, hydrateClientFromSupabase, persistClientToSupabase, preloadClientsFromSupabase, saveClient, subscribeClients } from '@/services/clientService'
 import { subscribeAnalytics } from '@/services/analyticsService'
-import { ensureClientRemoteSales, getSales } from '@/services/salesService'
+import { ensureClientRemoteSales, getSales, recordSessionUse } from '@/services/salesService'
 import { getClinicBranches, resolveClinicBranchId } from '@/services/branchService'
 import type { Client } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
@@ -84,6 +84,7 @@ export function ClientProfilePage() {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<PersonalForm | null>(null)
   const [saving, setSaving] = useState(false)
+  const [usingSessionId, setUsingSessionId] = useState<string | null>(null)
 
   const branches = useMemo(() => {
     const all = getClinicBranches()
@@ -177,6 +178,23 @@ export function ClientProfilePage() {
     }
     return recomputeClientSalesProfile(client.id, getSales(), client.fullName)
   }, [client, salesTick, tab])
+
+  async function handleUseSession(saleLineId: string | undefined, sessionRowId: string) {
+    if (!saleLineId) {
+      toast.error('This session is not linked to a sale line yet')
+      return
+    }
+    setUsingSessionId(sessionRowId)
+    try {
+      await recordSessionUse(saleLineId)
+      setSalesTick((n) => n + 1)
+      toast.success('Session marked as used')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not use session')
+    } finally {
+      setUsingSessionId(null)
+    }
+  }
 
   function startEdit() {
     if (!client) return
@@ -464,9 +482,19 @@ export function ClientProfilePage() {
                     <Td>{row.sessionNumber}</Td>
                     <Td>{row.staff}</Td>
                     <Td>
-                      <Button size="sm" variant="primary" className="h-7 px-3 text-xs" disabled>
-                        USE
-                      </Button>
+                      {row.canUse ? (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          className="h-7 px-3 text-xs"
+                          disabled={usingSessionId === row.id}
+                          onClick={() => void handleUseSession(row.saleLineId, row.id)}
+                        >
+                          {usingSessionId === row.id ? '…' : 'USE'}
+                        </Button>
+                      ) : (
+                        <Badge variant="success">USED</Badge>
+                      )}
                     </Td>
                     <Td>{row.photos}</Td>
                   </tr>

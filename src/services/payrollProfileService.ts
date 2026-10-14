@@ -11,7 +11,26 @@ import {
 } from '@/constants/payrollRosterSeed'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { listDirectoryStaff } from '@/services/staffDirectoryService'
+import type { EmployeeBenefitLine } from '@/types'
 import { isUuid } from '@/utils/uuid'
+
+function normalizeBenefitLines(raw: unknown): EmployeeBenefitLine[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((b) => {
+      if (!b || typeof b !== 'object') return null
+      const row = b as Record<string, unknown>
+      const name = String(row.name ?? '').trim()
+      if (!name) return null
+      return {
+        id: String(row.id ?? `ben-${Math.random().toString(36).slice(2, 10)}`),
+        name,
+        monthlyCost: Math.max(0, Number(row.monthlyCost) || 0),
+        notes: row.notes ? String(row.notes) : undefined,
+      } satisfies EmployeeBenefitLine
+    })
+    .filter((b): b is EmployeeBenefitLine => Boolean(b))
+}
 
 const KEY = 'imajica_payroll_profiles'
 const CHANGE = 'imajica:payroll-profiles-changed'
@@ -56,6 +75,7 @@ function seedAsProfiles(): PayrollProfileRecord[] {
     ...e,
     otherDeduction: 0,
     allowance: 0,
+    benefits: e.benefits ?? [],
     status: 'active' as const,
   }))
 }
@@ -88,6 +108,7 @@ function mapDbRow(row: {
   philhealth_employer: number
   other_deduction?: number
   allowance?: number
+  benefits?: unknown
   notes?: string | null
   status: string
 }): PayrollProfileRecord {
@@ -135,6 +156,7 @@ function mapDbRow(row: {
     philhealthEmployer: Number(row.philhealth_employer) || 0,
     otherDeduction: Number(row.other_deduction) || 0,
     allowance: Number(row.allowance) || 0,
+    benefits: normalizeBenefitLines(row.benefits),
     notes: row.notes || undefined,
     status: row.status === 'inactive' ? 'inactive' : 'active',
   }
@@ -191,6 +213,7 @@ function stubFromDirectory(input: {
     philhealthEmployer: 0,
     otherDeduction: 0,
     allowance: 0,
+    benefits: [],
     status: 'active',
   }
 }
@@ -251,6 +274,7 @@ export function getMergedPayrollRoster(): PayrollRosterEmployee[] {
     philhealthEmployer: p.philhealthEmployer,
     otherDeduction: p.otherDeduction,
     allowance: p.allowance,
+    benefits: p.benefits ?? [],
   }))
 }
 
@@ -289,6 +313,10 @@ export async function listPayrollProfilesForHr(): Promise<PayrollProfileRecord[]
       merged.find((p) => p.userId === emp.id || p.matchEmails.some((m) => m.toLowerCase() === email))
 
     if (existing) {
+      const directoryRate =
+        emp.dailyRate != null && emp.dailyRate > 0 ? emp.dailyRate : undefined
+      const directoryBenefits =
+        emp.benefits && emp.benefits.length > 0 ? normalizeBenefitLines(emp.benefits) : undefined
       const next = {
         ...existing,
         userId: existing.userId || emp.id,
@@ -296,6 +324,9 @@ export async function listPayrollProfilesForHr(): Promise<PayrollProfileRecord[]
         branchId: existing.branchId || emp.branchId || null,
         branchLabel: existing.branchLabel || emp.branchName || '',
         jobTitle: existing.jobTitle || emp.title || 'Staff',
+        // Employee Database daily rate / benefits win when set (clinic manager source of truth)
+        salaryPerDay: directoryRate ?? existing.salaryPerDay,
+        benefits: directoryBenefits ?? existing.benefits ?? [],
         matchEmails: [
           ...new Set([
             ...existing.matchEmails,
@@ -312,10 +343,12 @@ export async function listPayrollProfilesForHr(): Promise<PayrollProfileRecord[]
       id: emp.id,
       fullName: emp.fullName,
       email: emp.email,
-      branchId: emp.branchId,
-      branchName: emp.branchName,
-      title: emp.title,
+      branchId: emp.branchId || '',
+      branchName: emp.branchName || '',
+      title: emp.title || 'Staff',
     })
+    if (emp.dailyRate != null && emp.dailyRate > 0) stub.salaryPerDay = emp.dailyRate
+    if (emp.benefits?.length) stub.benefits = normalizeBenefitLines(emp.benefits)
     byEmail.set((stub.email || emp.id).toLowerCase(), stub)
   }
 
@@ -339,6 +372,7 @@ export async function savePayrollProfile(profile: PayrollProfileRecord): Promise
     philhealthEmployer: Math.max(0, Number(profile.philhealthEmployer) || 0),
     otherDeduction: Math.max(0, Number(profile.otherDeduction) || 0),
     allowance: Math.max(0, Number(profile.allowance) || 0),
+    benefits: normalizeBenefitLines(profile.benefits),
   }
 
   if (isSupabaseConfigured && supabase) {
@@ -369,6 +403,7 @@ export async function savePayrollProfile(profile: PayrollProfileRecord): Promise
       philhealth_employer: next.philhealthEmployer,
       other_deduction: next.otherDeduction,
       allowance: next.allowance,
+      benefits: next.benefits ?? [],
       notes: next.notes || null,
       status: next.status,
       updated_at: now,
@@ -396,8 +431,10 @@ export async function savePayrollProfile(profile: PayrollProfileRecord): Promise
       error = res.error
     }
 
-    if (error) throw new Error(error.message)
-    if (data) {
+    if (error) {
+      // Keep local roster so Salary still sees the rate even if remote RLS blocks.
+      console.warn('[payroll] remote save failed, keeping local profile', error.message)
+    } else if (data) {
       const mapped = mapDbRow(data)
       const all = readLocal().filter(
         (r) => r.email.trim().toLowerCase() !== mapped.email.trim().toLowerCase(),
@@ -422,6 +459,50 @@ export function employerBenefitMonthly(p: PayrollProfileRecord): number {
 
 export function suggestPhilhealthFromDaily(salaryPerDay: number): number {
   return philhealthShareFromMbs(monthlyBasicSalary(salaryPerDay))
+}
+
+/** Sync daily rate + itemized benefits from Employee Database into the payroll roster. */
+export async function upsertEmployeePayFromDirectory(input: {
+  userId: string
+  email: string
+  fullName: string
+  branchId?: string
+  branchName?: string
+  jobTitle?: string
+  dailyRate: number
+  benefits: EmployeeBenefitLine[]
+}): Promise<PayrollProfileRecord> {
+  const profiles = await listPayrollProfilesForHr()
+  const emailKey = input.email.trim().toLowerCase()
+  const existing =
+    profiles.find((p) => p.email.trim().toLowerCase() === emailKey) ||
+    profiles.find((p) => p.userId === input.userId || p.id === input.userId)
+
+  const base =
+    existing ??
+    stubFromDirectory({
+      id: input.userId,
+      fullName: input.fullName,
+      email: input.email,
+      branchId: input.branchId || '',
+      branchName: input.branchName || '',
+      title: input.jobTitle || 'Staff',
+    })
+
+  return savePayrollProfile({
+    ...base,
+    userId: base.userId || input.userId,
+    id: input.userId,
+    salaryPerDay: Math.max(0, Number(input.dailyRate) || 0),
+    benefits: normalizeBenefitLines(input.benefits),
+    branchId: base.branchId || input.branchId || null,
+    branchLabel: base.branchLabel || input.branchName || '',
+    jobTitle: base.jobTitle || input.jobTitle || 'Staff',
+  })
+}
+
+export function totalMonthlyBenefits(benefits: EmployeeBenefitLine[] | undefined): number {
+  return (benefits ?? []).reduce((s, b) => s + Math.max(0, Number(b.monthlyCost) || 0), 0)
 }
 
 export { monthlyBasicSalary, PAYROLL_DEFAULT_SHIFT }

@@ -220,9 +220,9 @@ export default function App() {
                 <Route
                   path="hr/salary/:branchId"
                   element={
-                    <RequirePeopleOps>
+                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'BRANCH_ADMIN']}>
                       <HrClinicSalaryPage />
-                    </RequirePeopleOps>
+                    </RequireRole>
                   }
                 />
                 <Route

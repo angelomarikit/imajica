@@ -2,9 +2,10 @@ import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { getBranches } from '@/services/branchService'
 import { getAccessUsers, listAccessUsers, preloadAccessUsers } from '@/services/userAccessService'
-import type { AccessUser, Staff, UserRole } from '@/types'
+import type { AccessUser, EmployeeBenefitLine, Staff, UserRole } from '@/types'
 import { TIMECLOCK_ROLES } from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
+import { isUuid } from '@/utils/uuid'
 
 /** Map old demo branch ids → current clinic UUIDs */
 const LEGACY_BRANCH_IDS: Record<string, string> = {
@@ -36,8 +37,31 @@ export type EmployeeHrDetails = {
   hireDate?: string
   employmentType?: string
   baseSalary?: number
+  /** Daily wage → salary / payslip / late deduction */
+  dailyRate?: number
+  /** Itemized monthly benefits (deduct once/month on 2nd pay) */
+  benefits?: EmployeeBenefitLine[]
   avatarUrl?: string
   code?: string
+}
+
+function normalizeBenefits(raw: unknown): EmployeeBenefitLine[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((b) => {
+      if (!b || typeof b !== 'object') return null
+      const row = b as Record<string, unknown>
+      const name = String(row.name ?? '').trim()
+      const monthlyCost = Math.max(0, Number(row.monthlyCost) || 0)
+      if (!name) return null
+      return {
+        id: String(row.id ?? `ben-${Math.random().toString(36).slice(2, 10)}`),
+        name,
+        monthlyCost,
+        notes: row.notes ? String(row.notes) : undefined,
+      } satisfies EmployeeBenefitLine
+    })
+    .filter((b): b is EmployeeBenefitLine => Boolean(b))
 }
 
 type StaffDbRow = {
@@ -57,6 +81,8 @@ type StaffDbRow = {
   hire_date: string | null
   employment_type: string | null
   base_salary: number | null
+  daily_rate?: number | null
+  benefits?: unknown
   birth_date: string | null
   address: string | null
   avatar_url: string | null
@@ -139,6 +165,7 @@ export function subscribeEmployeeHr(listener: () => void) {
 }
 
 function hrFromDbRow(row: StaffDbRow): EmployeeHrDetails {
+  const dailyRate = Number(row.daily_rate)
   return {
     profileId: row.profile_id ?? row.id,
     staffRowId: row.id,
@@ -156,6 +183,8 @@ function hrFromDbRow(row: StaffDbRow): EmployeeHrDetails {
     hireDate: row.hire_date ?? undefined,
     employmentType: row.employment_type ?? undefined,
     baseSalary: row.base_salary ?? undefined,
+    dailyRate: Number.isFinite(dailyRate) && dailyRate > 0 ? dailyRate : undefined,
+    benefits: normalizeBenefits(row.benefits),
     avatarUrl: row.avatar_url ?? undefined,
     code: row.code,
   }
@@ -164,13 +193,22 @@ function hrFromDbRow(row: StaffDbRow): EmployeeHrDetails {
 async function loadRemoteHrByProfile(): Promise<Map<string, EmployeeHrDetails>> {
   const map = new Map<string, EmployeeHrDetails>()
   if (!isSupabaseConfigured || !supabase) return map
-  const { data, error } = await supabase
-    .from('staff')
-    .select(
-      'id, profile_id, code, full_name, first_name, middle_name, last_name, email, phone, role_id, title, department, status, hire_date, employment_type, base_salary, birth_date, address, avatar_url, emergency_contact_name, emergency_contact_relation, emergency_contact_phone',
-    )
-  if (error || !data) return map
-  for (const row of data as StaffDbRow[]) {
+  const colsWithPay =
+    'id, profile_id, code, full_name, first_name, middle_name, last_name, email, phone, role_id, title, department, status, hire_date, employment_type, base_salary, daily_rate, benefits, birth_date, address, avatar_url, emergency_contact_name, emergency_contact_relation, emergency_contact_phone'
+  const colsLegacy =
+    'id, profile_id, code, full_name, first_name, middle_name, last_name, email, phone, role_id, title, department, status, hire_date, employment_type, base_salary, birth_date, address, avatar_url, emergency_contact_name, emergency_contact_relation, emergency_contact_phone'
+  let data: StaffDbRow[] | null = null
+  const first = await supabase.from('staff').select(colsWithPay)
+  if (first.error && /daily_rate|benefits|column/i.test(first.error.message)) {
+    const second = await supabase.from('staff').select(colsLegacy)
+    if (second.error || !second.data) return map
+    data = second.data as StaffDbRow[]
+  } else if (first.error || !first.data) {
+    return map
+  } else {
+    data = first.data as StaffDbRow[]
+  }
+  for (const row of data) {
     const key = row.profile_id || row.id
     map.set(key, hrFromDbRow(row))
     if (row.email) map.set(`email:${row.email.trim().toLowerCase()}`, hrFromDbRow(row))
@@ -184,6 +222,11 @@ function applyHr(staff: Staff, hr?: EmployeeHrDetails | null): Staff {
   const middleName = hr.middleName ?? staff.middleName
   const lastName = hr.lastName ?? staff.lastName
   const composed = [firstName, middleName, lastName].filter(Boolean).join(' ')
+  const dailyRate =
+    hr.dailyRate != null && Number.isFinite(hr.dailyRate)
+      ? Math.max(0, Number(hr.dailyRate))
+      : staff.dailyRate
+  const benefits = hr.benefits != null ? normalizeBenefits(hr.benefits) : staff.benefits
   return {
     ...staff,
     firstName,
@@ -201,6 +244,8 @@ function applyHr(staff: Staff, hr?: EmployeeHrDetails | null): Staff {
     hireDate: hr.hireDate ?? staff.hireDate,
     employmentType: hr.employmentType ?? staff.employmentType,
     baseSalary: hr.baseSalary ?? staff.baseSalary,
+    dailyRate,
+    benefits,
     avatarUrl: hr.avatarUrl ?? staff.avatarUrl,
     code: hr.code ?? staff.code,
   }
@@ -264,12 +309,29 @@ function resolveHr(
   remote: Map<string, EmployeeHrDetails>,
   local: Record<string, EmployeeHrDetails>,
 ): EmployeeHrDetails | undefined {
-  return (
-    local[u.id] ??
+  const fromRemote =
     remote.get(u.id) ??
-    (u.email ? remote.get(`email:${u.email.trim().toLowerCase()}`) : undefined) ??
-    undefined
-  )
+    (u.email ? remote.get(`email:${u.email.trim().toLowerCase()}`) : undefined)
+  const fromLocal = local[u.id]
+  if (!fromRemote && !fromLocal) return undefined
+  if (!fromRemote) return fromLocal
+  if (!fromLocal) return fromRemote
+  // Merge: local edits win, but keep remote daily rate / benefits when local omitted them
+  const mergedBenefits =
+    fromLocal.benefits && fromLocal.benefits.length > 0
+      ? fromLocal.benefits
+      : fromRemote.benefits
+  const mergedRate =
+    fromLocal.dailyRate != null && fromLocal.dailyRate > 0
+      ? fromLocal.dailyRate
+      : fromRemote.dailyRate
+  return {
+    ...fromRemote,
+    ...fromLocal,
+    dailyRate: mergedRate,
+    benefits: mergedBenefits,
+    profileId: fromLocal.profileId || fromRemote.profileId,
+  }
 }
 
 /** Sync directory (booking / payroll helpers). Uses local access users + local HR overlays. */
@@ -319,6 +381,16 @@ export async function saveEmployeeHrDetails(
     hireDate: patch.hireDate ?? staff.hireDate,
     employmentType: patch.employmentType ?? staff.employmentType,
     baseSalary: patch.baseSalary ?? staff.baseSalary,
+    dailyRate:
+      patch.dailyRate != null
+        ? Math.max(0, Number(patch.dailyRate) || 0)
+        : staff.dailyRate,
+    benefits:
+      patch.benefits != null
+        ? normalizeBenefits(patch.benefits)
+        : staff.benefits
+          ? normalizeBenefits(staff.benefits)
+          : [],
     avatarUrl: patch.avatarUrl ?? staff.avatarUrl,
     code: patch.code ?? staff.code,
   }
@@ -342,6 +414,8 @@ export async function saveEmployeeHrDetails(
       hire_date: next.hireDate || null,
       employment_type: next.employmentType || null,
       base_salary: next.baseSalary ?? 0,
+      daily_rate: next.dailyRate ?? 0,
+      benefits: next.benefits ?? [],
       birth_date: next.birthDate || null,
       address: next.address || null,
       avatar_url: next.avatarUrl || null,
@@ -358,24 +432,50 @@ export async function saveEmployeeHrDetails(
       .maybeSingle()
 
     let staffRowId = (existing as { id?: string } | null)?.id
-    if (staffRowId) {
-      const { error } = await supabase.from('staff').update(payload).eq('id', staffRowId)
-      if (error) throw new Error(error.message)
-    } else {
-      const { data, error } = await supabase.from('staff').insert(payload).select('id').single()
-      if (error) throw new Error(error.message)
-      staffRowId = (data as { id: string }).id
+
+    const tryWrite = async (body: Record<string, unknown>) => {
+      if (staffRowId) {
+        const { error } = await supabase.from('staff').update(body).eq('id', staffRowId)
+        return { error, id: staffRowId as string }
+      }
+      // Pre-generate id and skip INSERT…RETURNING — SELECT RLS used to block
+      // franchise clinic managers before staff_branches existed.
+      const newId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0')}`.slice(0, 36)
+      const { error } = await supabase.from('staff').insert({ ...body, id: newId })
+      return { error, id: newId }
     }
+
+    let writeRes = await tryWrite(payload)
+    if (writeRes.error && /daily_rate|benefits|column/i.test(writeRes.error.message)) {
+      const { daily_rate: _d, benefits: _b, ...legacyPayload } = payload as typeof payload & {
+        daily_rate?: number
+        benefits?: unknown
+      }
+      writeRes = await tryWrite(legacyPayload)
+    }
+    if (writeRes.error) throw new Error(writeRes.error.message)
+    staffRowId = writeRes.id
     next.staffRowId = staffRowId
 
-    if (staff.branchId) {
-      await supabase.from('staff_branches').upsert(
+    if (staff.branchId && isUuid(staff.branchId) && staffRowId) {
+      const { error: linkErr } = await supabase.from('staff_branches').upsert(
         { staff_id: staffRowId, branch_id: staff.branchId, is_primary: true },
         { onConflict: 'staff_id,branch_id' },
       )
+      if (linkErr) {
+        console.warn('[staff] staff_branches link failed', linkErr.message)
+      }
     }
 
-    await supabase.from('profiles').update({ phone: next.phone || null, full_name: fullName }).eq('id', profileId)
+    if (isUuid(profileId)) {
+      await supabase
+        .from('profiles')
+        .update({ phone: next.phone || null, full_name: fullName })
+        .eq('id', profileId)
+    }
   }
 
   const local = readLocalHr()

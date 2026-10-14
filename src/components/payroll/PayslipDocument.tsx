@@ -2,10 +2,21 @@ import logo from '@/assets/logo-imajica.jpg'
 import { BRAND } from '@/constants/brand'
 import { Button } from '@/components/ui/Button'
 import type { BuiltPayslip } from '@/services/payslipCompute'
-import { patchPayslipLine } from '@/services/payslipCompute'
+import {
+  applyPayslipBasicOverride,
+  applyPayslipManualOverrides,
+  getPayslipManualFieldAmounts,
+  patchPayslipLine,
+} from '@/services/payslipCompute'
 import { formatPeso, formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import { Send, Printer } from 'lucide-react'
+
+const manualFieldClass =
+  'mt-1.5 w-full rounded-md border border-[#e8dfcf] bg-white px-3 py-2 text-sm font-semibold text-[#0A2E26] outline-none focus:border-[#C5A059]'
+const manualLabelClass =
+  'text-[10px] font-semibold uppercase tracking-wide text-[#6b5420]'
+const manualHintClass = 'mt-1 block text-[11px] text-slate-ui'
 
 export function PayslipDocument({
   payslip,
@@ -42,6 +53,33 @@ export function PayslipDocument({
     if (!onChange) return
     onChange(patchPayslipLine(payslip, lineId, { computation }))
   }
+
+  function updateDaysPresent(raw: string) {
+    if (!onChange) return
+    const n = Number(raw)
+    if (Number.isNaN(n)) return
+    onChange(applyPayslipBasicOverride(payslip, { daysPresent: n }))
+  }
+
+  function updateDailyRate(raw: string) {
+    if (!onChange) return
+    const n = Number(raw.replace(/,/g, ''))
+    if (Number.isNaN(n)) return
+    onChange(applyPayslipBasicOverride(payslip, { salaryPerDay: n }))
+  }
+
+  function updateManual(
+    patch: Parameters<typeof applyPayslipManualOverrides>[1],
+    raw: string,
+  ) {
+    if (!onChange) return
+    const n = Number(raw.replace(/,/g, ''))
+    if (Number.isNaN(n)) return
+    const key = Object.keys(patch)[0] as keyof typeof patch
+    onChange(applyPayslipManualOverrides(payslip, { [key]: n }))
+  }
+
+  const manual = getPayslipManualFieldAmounts(payslip)
 
   function handlePrint() {
     // Ensure only one payslip is targeted if multiple exist in DOM
@@ -121,6 +159,101 @@ export function PayslipDocument({
             </p>
           </div>
         </div>
+
+        {editable && onChange ? (
+          <div className="mt-4 space-y-3 rounded-[14px] border border-dashed border-[#C5A059]/50 bg-[#FFFDF8] p-4 print:hidden">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#6b5420]">
+              Manual overrides — auto-populate payslip lines
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-left">
+                <span className={manualLabelClass}>Days present (manual)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={payslip.base.daysPresent}
+                  onChange={(e) => updateDaysPresent(e.target.value)}
+                  className={manualFieldClass}
+                />
+                <span className={manualHintClass}>
+                  Recalculates basic pay = days × daily rate
+                </span>
+              </label>
+              <label className="block text-left">
+                <span className={manualLabelClass}>Daily rate / basic salary per day (₱)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={payslip.base.employee.salaryPerDay}
+                  onChange={(e) => updateDailyRate(e.target.value)}
+                  className={manualFieldClass}
+                />
+                <span className={manualHintClass}>
+                  Easy edit while migrating from the old system
+                </span>
+              </label>
+              <label className="block text-left">
+                <span className={manualLabelClass}>Late minutes (manual)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={manual.lateMinutes}
+                  onChange={(e) => updateManual({ lateMinutes: 0 }, e.target.value)}
+                  className={manualFieldClass}
+                />
+                <span className={manualHintClass}>
+                  Late deduction = (daily ÷ 8 ÷ 60) × minutes → ₱
+                  {manual.lateDeduction.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                </span>
+              </label>
+              <label className="block text-left">
+                <span className={manualLabelClass}>Staff commission (₱)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={manual.staffCommission}
+                  onChange={(e) => updateManual({ staffCommission: 0 }, e.target.value)}
+                  className={manualFieldClass}
+                />
+                <span className={manualHintClass}>
+                  Populates staff sales commission line on the payslip
+                </span>
+              </label>
+              <label className="block text-left">
+                <span className={manualLabelClass}>2M milestone share (₱)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={manual.milestoneShare}
+                  onChange={(e) => updateManual({ milestoneShare: 0 }, e.target.value)}
+                  className={manualFieldClass}
+                />
+                <span className={manualHintClass}>
+                  Populates 2M milestone team split — even if auto unlock is locked
+                </span>
+              </label>
+              <label className="block text-left">
+                <span className={manualLabelClass}>Attendance incentive (₱)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={manual.attendanceIncentive}
+                  onChange={(e) => updateManual({ attendanceIncentive: 0 }, e.target.value)}
+                  className={manualFieldClass}
+                />
+                <span className={manualHintClass}>
+                  Populates attendance incentive line (manual award while migrating)
+                </span>
+              </label>
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-5">
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6b5420]">
