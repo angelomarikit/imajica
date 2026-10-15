@@ -23,6 +23,7 @@ import { LoginPage } from '@/pages/auth/LoginPage'
 import { RegisterPage } from '@/pages/auth/RegisterPage'
 import { BestSellingTreatmentsPage } from '@/pages/analytics/BestSellingTreatmentsPage'
 import { NewClientSalesPage } from '@/pages/analytics/NewClientSalesPage'
+import { PaymentChannelsReportPage } from '@/pages/analytics/PaymentChannelsReportPage'
 import { SalesProductReportPage } from '@/pages/analytics/SalesProductReportPage'
 import { SalesReportsPage } from '@/pages/analytics/SalesReportsPage'
 import { BranchOrdersPage } from '@/pages/admin/BranchOrdersPage'
@@ -449,6 +450,14 @@ export default function App() {
                   element={<Navigate to="/admin/analytics/sales-reports" replace />}
                 />
                 <Route path="analytics/sales-reports" element={<SalesReportsPage />} />
+                <Route
+                  path="analytics/payment-channels"
+                  element={
+                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'BRANCH_ADMIN']}>
+                      <PaymentChannelsReportPage />
+                    </RequireRole>
+                  }
+                />
                 <Route
                   path="analytics/sales-product-report"
                   element={

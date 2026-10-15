@@ -47,6 +47,7 @@ import {
   MessageCircle,
   TrendingUp,
   Stethoscope,
+  CreditCard,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import logo from '@/assets/logo-imajica.jpg'
@@ -224,6 +225,11 @@ const hqNavSectionsBase: NavSection[] = [
     items: [
       { to: '/admin/analytics/sales-reports', label: 'Sales Reports', icon: PieChart },
       {
+        to: '/admin/analytics/payment-channels',
+        label: 'Payment Channels Report',
+        icon: CreditCard,
+      },
+      {
         to: '/admin/analytics/sales-product-report',
         label: 'Sales Product Report',
         icon: Package,
@@ -394,6 +400,7 @@ function buildTimeclockStaffNavSections(handoffUnread = 0): NavSection[] {
     '/admin/analytics/sales-product-report',
     '/admin/analytics/best-selling-treatments',
     '/admin/analytics/new-client-sales',
+    '/admin/analytics/payment-channels',
   ])
   const hqOnlyCategories = new Set(['HR and Payroll'])
   const sections: NavSection[] = [
@@ -597,6 +604,11 @@ function buildFranchiseOwnerNavSections(
     category: 'Reports',
     items: [
       { to: '/admin/analytics/sales-reports', label: 'Branch Sales', icon: PieChart },
+      {
+        to: '/admin/analytics/payment-channels',
+        label: 'Payment Channels Report',
+        icon: CreditCard,
+      },
       {
         to: '/admin/reports/branch-attendance',
         label: 'Branch Attendance',
