@@ -1,6 +1,7 @@
 import { enrichFirstClientFlags } from '@/services/clientSalesProfileService'
 import { getExpenses } from '@/services/expenseService'
 import {
+  clinicRecognizedAmount,
   fetchOpsSalesForRange,
   getSales,
   subscribeSalesData,
@@ -70,11 +71,11 @@ export function salesSummary(sales: Sale[], from: string, to: string) {
   const inRange = filterSalesByDate(sales, from, to)
   const productSales = inRange
     .filter((s) => s.itemType === 'product')
-    .reduce((s, x) => s + x.totalAmount, 0)
+    .reduce((s, x) => s + clinicRecognizedAmount(x), 0)
   const serviceSales = inRange
     .filter((s) => s.itemType === 'service' || s.itemType === 'package')
-    .reduce((s, x) => s + x.totalAmount, 0)
-  const grossSales = inRange.reduce((s, x) => s + x.totalAmount, 0)
+    .reduce((s, x) => s + clinicRecognizedAmount(x), 0)
+  const grossSales = inRange.reduce((s, x) => s + clinicRecognizedAmount(x), 0)
   const fees = inRange.reduce((s, x) => s + transactionFee(x), 0)
   const branchExpenses = sumBranchExpenses(from, to)
   const netSales = grossSales - branchExpenses - fees
@@ -99,16 +100,17 @@ export function productSalesReport(sales: Sale[], from: string, to: string): Pro
     const qty = s.quantity ?? 1
     const base = s.unitBaseCost ?? s.totalAmount / qty
     const retail = s.unitRetailPrice ?? s.totalAmount / qty
+    const lineRevenue = clinicRecognizedAmount(s)
     const existing = map.get(key)
     if (existing) {
       existing.unitsSold += qty
-      existing.totalRevenue += retail * qty
+      existing.totalRevenue += lineRevenue
       existing.totalCost += base * qty
       existing.totalProfit = existing.totalRevenue - existing.totalCost
       existing.profitMargin =
         existing.totalRevenue > 0 ? (existing.totalProfit / existing.totalRevenue) * 100 : 0
     } else {
-      const totalRevenue = retail * qty
+      const totalRevenue = lineRevenue
       const totalCost = base * qty
       const totalProfit = totalRevenue - totalCost
       map.set(key, {
@@ -142,16 +144,17 @@ export function bestSellingTreatments(
   for (const s of rows) {
     const key = s.treatmentOrPackage
     const existing = map.get(key)
+    const revenue = clinicRecognizedAmount(s)
     if (existing) {
       existing.totalBooked += 1
-      existing.totalRevenue += s.totalAmount
+      existing.totalRevenue += revenue
     } else {
       map.set(key, {
         rank: 0,
         treatmentName: s.treatmentOrPackage,
         type: s.itemType === 'package' ? 'Package' : 'Service',
         totalBooked: 1,
-        totalRevenue: s.totalAmount,
+        totalRevenue: revenue,
       })
     }
   }
@@ -181,7 +184,7 @@ export function getNewClientSalesRows(
       availed: `${s.treatmentOrPackage}, (x${s.quantity ?? 1})`,
       leadSource: s.leadSource || 'Walk-In',
       staffName: s.staffName || '—',
-      amountPaid: s.totalAmount,
+      amountPaid: clinicRecognizedAmount(s),
       paymentType: s.paymentType || 'Full Payment',
       status: s.status === 'paid' ? 'Paid' : s.status === 'pending' ? 'Pending' : s.status,
       branchName: s.branchName,

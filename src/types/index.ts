@@ -428,6 +428,12 @@ export interface Sale {
   staffName?: string
   doctorId?: string
   doctorName?: string
+  /** Outsourced doctor procedure — customer pays 100%; clinic books 80% */
+  isDoctorsProcedure?: boolean
+  /** 20% of order total owed to outsourced doctor */
+  doctorFeeAmount?: number
+  /** 80% clinic net when doctor's procedure; else omit / use totalAmount */
+  clinicNetAmount?: number
   treatmentOrPackage: string
   /** Analytics / booking line classification */
   itemType?: 'service' | 'package' | 'product'

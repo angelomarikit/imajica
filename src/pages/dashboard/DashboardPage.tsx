@@ -42,6 +42,7 @@ import {
   type BranchDashboardSalesSummary,
 } from '@/services/dashboardSalesSummaryService'
 import {
+  clinicRecognizedAmount,
   getBookingRows,
   getSales,
   preloadSalesData,
@@ -243,7 +244,7 @@ type SalesBreakdownView = {
 }
 
 function buildSalesBrief(sales: Sale[]) {
-  const total = sales.reduce((n, s) => n + (s.totalAmount || 0), 0)
+  const total = sales.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
   const byType = {
     service: 0,
     package: 0,
@@ -255,13 +256,14 @@ function buildSalesBrief(sales: Sale[]) {
   const bookings = new Set<string>()
 
   for (const s of sales) {
+    const amount = clinicRecognizedAmount(s)
     const type = s.itemType === 'package' || s.itemType === 'product' ? s.itemType : 'service'
-    byType[type] += s.totalAmount || 0
+    byType[type] += amount
     const pay = (s.paymentMethod || 'other').replaceAll('_', ' ')
-    byPay.set(pay, (byPay.get(pay) || 0) + (s.totalAmount || 0))
+    byPay.set(pay, (byPay.get(pay) || 0) + amount)
     const key = (s.treatmentOrPackage || 'Item').trim() || 'Item'
     const prev = byItem.get(key) ?? { name: key, amount: 0, qty: 0 }
-    prev.amount += s.totalAmount || 0
+    prev.amount += amount
     prev.qty += s.quantity || 1
     byItem.set(key, prev)
     if (s.clientId) clients.add(s.clientId)
@@ -652,17 +654,17 @@ function BranchOpsDashboard() {
     const useRpc = Boolean(scopeBranchId && rpcSummary)
     const periodSalesTotal = useRpc
       ? rpcSummary!.rangeSales
-      : rangeSales.reduce((n, s) => n + (s.totalAmount || 0), 0)
+      : rangeSales.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
     const dailySales = useRpc
       ? rpcSummary!.todaySales
-      : todaySales.reduce((n, s) => n + (s.totalAmount || 0), 0)
+      : todaySales.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
 
     // Full calendar month of the selected range end (not just the filtered days).
     let monthKey = rangeTo.slice(0, 7)
     let monthSalesLines = scopedSales.filter((s) => saleDateKey(s).startsWith(monthKey))
     let monthlySales = useRpc
       ? rpcSummary!.monthSales
-      : monthSalesLines.reduce((n, s) => n + (s.totalAmount || 0), 0)
+      : monthSalesLines.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
     let monthlyLabel = useRpc
       ? rpcSummary!.monthLabel ||
         new Date(`${monthKey}-01T12:00:00`).toLocaleDateString('en-US', {
@@ -682,7 +684,7 @@ function BranchOpsDashboard() {
       if (latestMonth && latestMonth !== monthKey) {
         monthKey = latestMonth
         monthSalesLines = scopedSales.filter((s) => saleDateKey(s).startsWith(latestMonth))
-        monthlySales = monthSalesLines.reduce((n, s) => n + (s.totalAmount || 0), 0)
+        monthlySales = monthSalesLines.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
         monthlyLabel = new Date(`${latestMonth}-01T12:00:00`).toLocaleDateString('en-US', {
           month: 'long',
           year: 'numeric',
@@ -769,10 +771,10 @@ function BranchOpsDashboard() {
       const branchSales = sales.filter((s) => s.branchId === b.id)
       const periodSales = branchSales
         .filter((s) => inDateRange(saleDateKey(s), rangeFrom, rangeTo))
-        .reduce((n, s) => n + (s.totalAmount || 0), 0)
+        .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
       const daySales = branchSales
         .filter((s) => saleDateKey(s) === todayKey)
-        .reduce((n, s) => n + (s.totalAmount || 0), 0)
+        .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
       const bookingCount = getBookingRows({ branchId: b.id }).filter((r) =>
         inDateRange(todayDateKey(new Date(r.dateIso)), rangeFrom, rangeTo),
       ).length
@@ -864,7 +866,7 @@ function BranchOpsDashboard() {
         ? rpcSummary.todaySales
         : scopedSales
             .filter((s) => saleDateKey(s) === todayKey)
-            .reduce((n, s) => n + (s.totalAmount || 0), 0)
+            .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
     // Only expenses marked "Deduct cash" reduce the drawer (reporting expenses do not).
     const expenseCashOut = scopedExpenses
       .filter(
@@ -1318,9 +1320,10 @@ function BranchOpsDashboard() {
             </div>
           </div>
           <p className="mt-2 text-[11px] text-slate-500">
-            Ending = beginning + daily sales − cash expenses
+            Ending = beginning + daily clinic sales − cash expenses. Doctor&apos;s procedures
+            count at 80% clinic net.
             {cash.expenseCashOut > 0
-              ? ` (${formatPesoExact(cash.expenseCashOut)})`
+              ? ` Expenses (${formatPesoExact(cash.expenseCashOut)})`
               : ''}
             {cash.manualDeducted > 0
               ? ` − manual deductions (${formatPesoExact(cash.manualDeducted)})`

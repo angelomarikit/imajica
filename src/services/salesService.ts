@@ -9,6 +9,22 @@ import {
 import { getClientById, getClients, saveClient } from '@/services/clientService'
 import { isUuid } from '@/utils/uuid'
 
+/** Clinic share of a doctor's-procedure order (customer still pays 100%). */
+export const CLINIC_NET_RATE = 0.8
+export const DOCTOR_FEE_RATE = 0.2
+
+/**
+ * Amount recognized as clinic sales for dashboards, cashflow, commissions, and reports.
+ * Doctor's procedure lines use 80% of line total (never sum header clinic_net across lines).
+ */
+export function clinicRecognizedAmount(
+  sale: Pick<Sale, 'totalAmount' | 'isDoctorsProcedure'>,
+): number {
+  const gross = sale.totalAmount || 0
+  if (!sale.isDoctorsProcedure) return gross
+  return Math.round(gross * CLINIC_NET_RATE * 100) / 100
+}
+
 const EXTRA_KEY = 'imajica_analytics_sales'
 const CHANGE = 'imajica:analytics-changed'
 
@@ -97,6 +113,9 @@ type RemoteSaleRow = {
   branch_id: string
   staff_name: string | null
   doctor_name: string | null
+  is_doctors_procedure?: boolean | null
+  doctor_fee_amount?: number | null
+  clinic_net_amount?: number | null
   total_amount: number
   status: string
   created_at: string
@@ -220,6 +239,15 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
         branchName,
         staffName: row.staff_name || undefined,
         doctorName: row.doctor_name || undefined,
+        isDoctorsProcedure: Boolean(row.is_doctors_procedure),
+        doctorFeeAmount:
+          row.doctor_fee_amount != null && Number.isFinite(Number(row.doctor_fee_amount))
+            ? Number(row.doctor_fee_amount)
+            : undefined,
+        clinicNetAmount:
+          row.clinic_net_amount != null && Number.isFinite(Number(row.clinic_net_amount))
+            ? Number(row.clinic_net_amount)
+            : undefined,
         treatmentOrPackage: item.name,
         itemType,
         paymentType: row.payment_type || 'Full Payment',
@@ -260,13 +288,15 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
  * Items + payments are loaded in separate batched queries below.
  */
 const REMOTE_SALES_HEADER_SELECT: string =
-  'id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at, ' +
+  'id, client_id, branch_id, staff_name, doctor_name, is_doctors_procedure, doctor_fee_amount, ' +
+  'clinic_net_amount, total_amount, status, created_at, ' +
   'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
   'contract_amount'
 
 /** Single-client profile fetch can still use embeds (small result set). */
 const REMOTE_SALES_CLIENT_SELECT: string =
-  'id, client_id, branch_id, staff_name, doctor_name, total_amount, status, created_at, ' +
+  'id, client_id, branch_id, staff_name, doctor_name, is_doctors_procedure, doctor_fee_amount, ' +
+  'clinic_net_amount, total_amount, status, created_at, ' +
   'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
   'contract_amount, ' +
   'sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ), ' +
@@ -833,6 +863,18 @@ export async function recordBookingCheckout(
         ? Number(head.contractAmount)
         : null
 
+    const isDoctorsProcedure = Boolean(head.isDoctorsProcedure)
+    const doctorFeeAmount =
+      isDoctorsProcedure && head.doctorFeeAmount != null && Number.isFinite(Number(head.doctorFeeAmount))
+        ? Number(head.doctorFeeAmount)
+        : 0
+    const clinicNetAmount =
+      isDoctorsProcedure && head.clinicNetAmount != null && Number.isFinite(Number(head.clinicNetAmount))
+        ? Number(head.clinicNetAmount)
+        : isDoctorsProcedure
+          ? Math.round(totalAmount * 0.8 * 100) / 100
+          : null
+
     const { error: saleError } = await supabase.from('sales').insert({
       id: saleId,
       client_id: head.clientId,
@@ -841,7 +883,10 @@ export async function recordBookingCheckout(
       staff_id: null,
       staff_name: head.staffName ?? null,
       doctor_id: null,
-      doctor_name: head.doctorName ?? null,
+      doctor_name: isDoctorsProcedure ? (head.doctorName ?? null) : null,
+      is_doctors_procedure: isDoctorsProcedure,
+      doctor_fee_amount: doctorFeeAmount,
+      clinic_net_amount: clinicNetAmount,
       subtotal: totalAmount,
       discount: 0,
       tax: 0,
@@ -1062,13 +1107,36 @@ export type TodayBookingRow = {
   staffName: string
   dateIso: string
   status: string
+  /** Commission / clinic sales base — clinic net when doctor's procedure */
   payment: number
+  /** Gross cash collected (100% of order lines) */
+  grossPayment?: number
+  isDoctorsProcedure?: boolean
+  doctorName?: string
+  doctorFeeAmount?: number
   paymentType: string
   paymentMethod: string
   branchId: string
   branchName: string
   saleIds: string[]
   isLive: boolean
+}
+
+export type DoctorFeeRow = {
+  saleId: string
+  bookingRef: string
+  invoiceNumber: string
+  clientId: string
+  clientName: string
+  doctorName: string
+  branchId: string
+  branchName: string
+  serviceTotal: number
+  doctorFeeAmount: number
+  clinicNetAmount: number
+  status: string
+  createdAt: string
+  staffName?: string
 }
 
 function shortBookingId(sale: Sale): string {
@@ -1167,7 +1235,20 @@ export function getBookingRows(opts?: {
     const products = sorted
       .filter((l) => l.itemType === 'product')
       .map((l) => l.treatmentOrPackage)
-    const payment = sorted.reduce((sum, l) => sum + (l.totalAmount || 0), 0)
+    const grossPayment = sorted.reduce((sum, l) => sum + (l.totalAmount || 0), 0)
+    const isDoctorsProcedure = Boolean(head.isDoctorsProcedure)
+    const clinicNet =
+      isDoctorsProcedure && head.clinicNetAmount != null && Number.isFinite(head.clinicNetAmount)
+        ? Number(head.clinicNetAmount)
+        : isDoctorsProcedure
+          ? Math.round(grossPayment * 0.8 * 100) / 100
+          : grossPayment
+    const doctorFee =
+      isDoctorsProcedure && head.doctorFeeAmount != null && Number.isFinite(head.doctorFeeAmount)
+        ? Number(head.doctorFeeAmount)
+        : isDoctorsProcedure
+          ? Math.round(grossPayment * 0.2 * 100) / 100
+          : 0
     const paid = sorted.every((l) => l.status === 'paid')
     rows.push({
       bookingKey,
@@ -1179,7 +1260,11 @@ export function getBookingRows(opts?: {
       staffName: head.staffName || '—',
       dateIso: head.createdAt,
       status: paid ? 'Paid' : head.status === 'pending' ? 'Pending' : head.status,
-      payment,
+      payment: clinicNet,
+      grossPayment,
+      isDoctorsProcedure,
+      doctorName: head.doctorName,
+      doctorFeeAmount: doctorFee,
       paymentType: paymentTypeShort(head.paymentType),
       paymentMethod: paymentMethodsDisplay(head),
       branchId: head.branchId,
@@ -1190,6 +1275,64 @@ export function getBookingRows(opts?: {
   }
 
   return rows.sort((a, b) => b.dateIso.localeCompare(a.dateIso))
+}
+
+function saleHeaderId(saleId: string): string {
+  const colon = saleId.indexOf(':')
+  return colon > 0 ? saleId.slice(0, colon) : saleId
+}
+
+/** Sales flagged as doctor's procedure — payouts owed to outsourced doctors. */
+export function listDoctorFees(opts?: {
+  branchId?: string
+  from?: string
+  to?: string
+}): DoctorFeeRow[] {
+  const byHeader = new Map<string, Sale[]>()
+  for (const s of getSales()) {
+    if (!s.isDoctorsProcedure) continue
+    if (opts?.branchId && s.branchId !== opts.branchId) continue
+    const day = localDateKey(s.createdAt)
+    if (opts?.from && day < opts.from) continue
+    if (opts?.to && day > opts.to) continue
+    const headerId = saleHeaderId(s.id)
+    const list = byHeader.get(headerId) ?? []
+    list.push(s)
+    byHeader.set(headerId, list)
+  }
+
+  const rows: DoctorFeeRow[] = []
+  for (const [headerId, lines] of byHeader) {
+    const sorted = [...lines].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    const head = sorted[0]!
+    const serviceTotal = sorted.reduce((sum, l) => sum + (l.totalAmount || 0), 0)
+    const doctorFee =
+      head.doctorFeeAmount != null && Number.isFinite(head.doctorFeeAmount)
+        ? Number(head.doctorFeeAmount)
+        : Math.round(serviceTotal * 0.2 * 100) / 100
+    const clinicNet =
+      head.clinicNetAmount != null && Number.isFinite(head.clinicNetAmount)
+        ? Number(head.clinicNetAmount)
+        : Math.round(serviceTotal * 0.8 * 100) / 100
+    rows.push({
+      saleId: headerId,
+      bookingRef: head.bookingRef || head.invoiceNumber || headerId.slice(0, 8),
+      invoiceNumber: head.invoiceNumber || head.bookingRef || headerId.slice(0, 8),
+      clientId: head.clientId,
+      clientName: head.clientName,
+      doctorName: head.doctorName?.trim() || '—',
+      branchId: head.branchId,
+      branchName: head.branchName,
+      serviceTotal,
+      doctorFeeAmount: doctorFee,
+      clinicNetAmount: clinicNet,
+      status: head.status,
+      createdAt: head.createdAt,
+      staffName: head.staffName,
+    })
+  }
+
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
 /** Line items belonging to one booking (invoice / bookingRef). */

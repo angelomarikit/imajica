@@ -46,6 +46,7 @@ import {
   Megaphone,
   MessageCircle,
   TrendingUp,
+  Stethoscope,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import logo from '@/assets/logo-imajica.jpg'
@@ -174,7 +175,10 @@ const hqNavSectionsBase: NavSection[] = [
   },
   {
     category: 'Sales',
-    items: [{ to: '/admin/payments', label: 'Payments', icon: Wallet }],
+    items: [
+      { to: '/admin/payments', label: 'Payments', icon: Wallet },
+      { to: '/admin/doctors-fee', label: 'Doctors Fee', icon: Stethoscope },
+    ],
   },
   {
     category: 'Administration',
@@ -488,7 +492,10 @@ function buildFranchiseOwnerNavSections(
   },
   {
     category: 'Sales',
-    items: [{ to: '/admin/payments', label: 'Franchise Sales', icon: Wallet }],
+    items: [
+      { to: '/admin/payments', label: 'Franchise Sales', icon: Wallet },
+      { to: '/admin/doctors-fee', label: 'Doctors Fee', icon: Stethoscope },
+    ],
   },
   {
     category: 'Catalog',

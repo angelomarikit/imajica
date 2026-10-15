@@ -6,6 +6,7 @@ import {
   defaultAnalyticsRange,
   fetchAnalyticsSalesForRange,
 } from '@/services/analyticsService'
+import { clinicRecognizedAmount } from '@/services/salesService'
 import type { Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -49,11 +50,12 @@ export function StaffSalesPage() {
     for (const s of sales) {
       const key = (s.staffName || '').trim() || 'Unknown Unknown'
       const existing = map.get(key)
+      const amount = clinicRecognizedAmount(s)
       if (existing) {
         existing.bookingCount += 1
-        existing.totalSales += s.totalAmount
+        existing.totalSales += amount
       } else {
-        map.set(key, { bookingCount: 1, totalSales: s.totalAmount })
+        map.set(key, { bookingCount: 1, totalSales: amount })
       }
     }
 

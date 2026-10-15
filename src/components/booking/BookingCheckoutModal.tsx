@@ -9,17 +9,22 @@ import { useBranch } from '@/contexts/BranchContext'
 import { createAppointment, ensureBookingClient, toDateKey } from '@/services/appointmentService'
 import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import { deleteClient, getClients, saveClient } from '@/services/clientService'
-import { recordBookingCheckout } from '@/services/salesService'
 import {
-  getActiveDoctorsForBooking,
+  DOCTOR_FEE_RATE,
+  recordBookingCheckout,
+} from '@/services/salesService'
+import {
   getActiveStaffForBooking,
-  listActiveDoctorsForBooking,
   listActiveStaffForBooking,
 } from '@/services/staffDirectoryService'
 import type { Client, PaymentMethod, Staff } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import { isUuid } from '@/utils/uuid'
+
+function roundMoney(n: number) {
+  return Math.round(n * 100) / 100
+}
 
 export type CheckoutCartLine = {
   id: string
@@ -134,26 +139,17 @@ export function BookingCheckoutModal({
   const [staffOptions, setStaffOptions] = useState<Staff[]>(() =>
     branchId ? getActiveStaffForBooking(branchId) : [],
   )
-  const [doctorOptions, setDoctorOptions] = useState<Staff[]>(() =>
-    branchId ? getActiveDoctorsForBooking(branchId) : [],
-  )
 
   useEffect(() => {
     if (!open || !branchId) {
       setStaffOptions([])
-      setDoctorOptions([])
       return
     }
     setStaffOptions(getActiveStaffForBooking(branchId))
-    setDoctorOptions(getActiveDoctorsForBooking(branchId))
     let cancelled = false
-    void Promise.all([
-      listActiveStaffForBooking(branchId),
-      listActiveDoctorsForBooking(branchId),
-    ]).then(([staff, doctors]) => {
+    void listActiveStaffForBooking(branchId).then((staff) => {
       if (cancelled) return
       setStaffOptions(staff)
-      setDoctorOptions(doctors)
     })
     return () => {
       cancelled = true
@@ -186,10 +182,15 @@ export function BookingCheckoutModal({
   const [referredById, setReferredById] = useState('')
   const [usePoints, setUsePoints] = useState(false)
   const [primaryStaffId, setPrimaryStaffId] = useState('')
-  const [doctorId, setDoctorId] = useState('')
+  const [isDoctorsProcedure, setIsDoctorsProcedure] = useState(false)
+  const [doctorName, setDoctorName] = useState('')
   const [saving, setSaving] = useState(false)
 
   const isSplitPayment = paymentType === 'Split Payment'
+  const doctorFeeAmount = isDoctorsProcedure ? roundMoney(total * DOCTOR_FEE_RATE) : 0
+  const clinicNetAmount = isDoctorsProcedure
+    ? roundMoney(total * (1 - DOCTOR_FEE_RATE))
+    : total
 
   useEffect(() => {
     if (!open) return
@@ -204,7 +205,8 @@ export function BookingCheckoutModal({
     setReferredById('')
     setUsePoints(false)
     setPrimaryStaffId('')
-    setDoctorId('')
+    setIsDoctorsProcedure(false)
+    setDoctorName('')
   }, [open, total, patient.id])
 
   function handlePaymentTypeChange(next: BookingPaymentType) {
@@ -227,13 +229,10 @@ export function BookingCheckoutModal({
     if (primaryStaffId && !staffOptions.some((s) => s.id === primaryStaffId)) {
       setPrimaryStaffId('')
     }
-    if (doctorId && !doctorOptions.some((d) => d.id === doctorId)) {
-      setDoctorId('')
-    }
     if (!primaryStaffId && user?.id && staffOptions.some((s) => s.id === user.id)) {
       setPrimaryStaffId(user.id)
     }
-  }, [staffOptions, doctorOptions, primaryStaffId, doctorId, user?.id])
+  }, [staffOptions, primaryStaffId, user?.id])
 
   const referrerMatches = useMemo(() => {
     const q = referrerQuery.trim().toLowerCase()
@@ -284,7 +283,11 @@ export function BookingCheckoutModal({
       toast.error('Selected staff is not registered to this branch')
       return
     }
-    const doctor = doctorOptions.find((d) => d.id === doctorId)
+    const doctorNameTrimmed = doctorName.trim()
+    if (isDoctorsProcedure && !doctorNameTrimmed) {
+      toast.error('Enter the outsourced doctor’s name')
+      return
+    }
     if (!encodeDate.trim()) {
       toast.error('Select the date of encode')
       return
@@ -376,8 +379,10 @@ export function BookingCheckoutModal({
           branchName: saleBranchName,
           staffId: primaryStaff.id,
           staffName: primaryStaff.fullName,
-          doctorId: doctor?.id,
-          doctorName: doctor?.fullName,
+          doctorName: isDoctorsProcedure ? doctorNameTrimmed : undefined,
+          isDoctorsProcedure,
+          doctorFeeAmount: isDoctorsProcedure ? doctorFeeAmount : 0,
+          clinicNetAmount: isDoctorsProcedure ? clinicNetAmount : undefined,
           treatmentOrPackage: line.name,
           itemType: (line.kind === 'product'
             ? 'product'
@@ -422,7 +427,9 @@ export function BookingCheckoutModal({
           leadSource,
           downPayment: paidAmount,
           notes: [
-            doctor ? `Doctor: ${doctor.fullName}` : null,
+            isDoctorsProcedure
+              ? `Doctor's Procedure · ${doctorNameTrimmed} · Fee ${formatPesoExact(doctorFeeAmount)} · Clinic net ${formatPesoExact(clinicNetAmount)}`
+              : null,
             selectedReferrer ? `Referred by: ${selectedReferrer.fullName}` : null,
             isSplitPayment && paymentMethod2
               ? `Payment: Split · ${paymentLabel(paymentMethod)} ${formatPesoExact(amount1)} + ${paymentLabel(paymentMethod2)} ${formatPesoExact(amount2)}`
@@ -804,22 +811,59 @@ export function BookingCheckoutModal({
                   </p>
                 ) : null}
               </label>
-              <label className="block">
-                <span className={fieldLabel}>Doctor (Optional)</span>
-                <select
-                  className={cn(fieldControl, !doctorId && 'text-slate-ui/70')}
-                  value={doctorId}
-                  onChange={(e) => setDoctorId(e.target.value)}
-                  disabled={!branchId}
-                >
-                  <option value="">Select Doctor (optional)</option>
-                  {doctorOptions.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.fullName}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="block space-y-2">
+                <label className="flex cursor-pointer items-start gap-2.5 rounded-[10px] border border-border bg-white px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-border text-[#073D2C] focus:ring-[#073D2C]"
+                    checked={isDoctorsProcedure}
+                    onChange={(e) => {
+                      setIsDoctorsProcedure(e.target.checked)
+                      if (!e.target.checked) setDoctorName('')
+                    }}
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-[#073D2C]">
+                      Doctor&apos;s Procedure
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-slate-ui">
+                      Outsourced doctor earns 20%. Customer still pays full amount; clinic net sale
+                      becomes 80%.
+                    </span>
+                  </span>
+                </label>
+                {isDoctorsProcedure ? (
+                  <div className="space-y-2 rounded-[10px] border border-emerald-200 bg-emerald-50/60 px-3 py-3">
+                    <label className="block">
+                      <span className={fieldLabel}>Doctor name</span>
+                      <input
+                        type="text"
+                        className={fieldControl}
+                        value={doctorName}
+                        onChange={(e) => setDoctorName(e.target.value)}
+                        placeholder="Outsourced doctor’s full name"
+                        required
+                      />
+                    </label>
+                    <div className="space-y-1 text-sm text-[#073D2C]">
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-ui">Service total</span>
+                        <span className="font-medium">{formatPesoExact(total)}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-ui">Doctor fee (20%)</span>
+                        <span className="font-semibold text-amber-800">
+                          {formatPesoExact(doctorFeeAmount)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between gap-3 border-t border-emerald-200/80 pt-1">
+                        <span className="font-medium">Clinic net sale (80%)</span>
+                        <span className="font-semibold">{formatPesoExact(clinicNetAmount)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </section>
         </div>
@@ -832,6 +876,12 @@ export function BookingCheckoutModal({
             </span>
             <span className="font-semibold text-[#073D2C]">{formatPesoExact(total)}</span>
           </div>
+          {isDoctorsProcedure ? (
+            <p className="text-center text-[11px] text-slate-ui">
+              Clinic net {formatPesoExact(clinicNetAmount)} · Doctor fee{' '}
+              {formatPesoExact(doctorFeeAmount)}
+            </p>
+          ) : null}
           <Button type="submit" className="h-12 w-full text-base font-semibold" disabled={saving}>
             {saving ? 'Placing Order…' : `Place Order · ${formatPesoExact(total)}`}
           </Button>

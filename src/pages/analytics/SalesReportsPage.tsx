@@ -22,6 +22,7 @@ import {
   fetchAnalyticsSalesForRange,
   salesSummary,
 } from '@/services/analyticsService'
+import { clinicRecognizedAmount } from '@/services/salesService'
 import type { AnalyticsSaleType, Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -151,7 +152,7 @@ export function SalesReportsPage() {
         s.bookingRef || '',
         s.clientName,
         s.staffName || '',
-        String(s.totalAmount),
+        String(clinicRecognizedAmount(s)),
         s.itemType || 'service',
         s.paymentType || 'Full Payment',
         s.status,
@@ -480,7 +481,7 @@ function TransactionRow({ sale: s }: { sale: Sale }) {
       </td>
       <td className="px-2 py-3 font-medium uppercase text-[#073D2C]">{s.clientName}</td>
       <td className="px-2 py-3 text-slate-ui">{s.staffName || '—'}</td>
-      <td className="px-2 py-3 font-semibold">{formatPesoExact(s.totalAmount)}</td>
+      <td className="px-2 py-3 font-semibold">{formatPesoExact(clinicRecognizedAmount(s))}</td>
       <td className="px-2 py-3">{typeBadge(s.itemType)}</td>
       <td className="px-2 py-3">
         <span className="text-xs font-semibold text-emerald-700">

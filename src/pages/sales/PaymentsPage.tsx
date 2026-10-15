@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { exportCsv, salesSummary } from '@/services/analyticsService'
-import { fetchOpsSalesForRange } from '@/services/salesService'
+import { clinicRecognizedAmount, fetchOpsSalesForRange } from '@/services/salesService'
 import type { AnalyticsSaleType, Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -148,7 +148,7 @@ export function PaymentsPage() {
         s.treatmentOrPackage,
         s.clientName,
         s.staffName || '',
-        String(s.totalAmount),
+        String(clinicRecognizedAmount(s)),
         s.itemType || 'service',
         paymentLabel(s),
         s.status,
@@ -362,7 +362,7 @@ function TransactionRow({ sale: s }: { sale: Sale }) {
       <td className="px-2 py-3 font-semibold uppercase text-[#073D2C]">{s.treatmentOrPackage}</td>
       <td className="px-2 py-3 font-medium text-[#073D2C]">{s.clientName}</td>
       <td className="px-2 py-3 text-slate-ui">{s.staffName || '—'}</td>
-      <td className="px-2 py-3 font-semibold">{formatPesoExact(s.totalAmount)}</td>
+      <td className="px-2 py-3 font-semibold">{formatPesoExact(clinicRecognizedAmount(s))}</td>
       <td className="px-2 py-3">{typeBadge(s.itemType)}</td>
       <td className="px-2 py-3">
         <Badge variant="success">{paymentLabel(s)}</Badge>

@@ -103,7 +103,7 @@ import { MarketingHandoffsPage } from '@/pages/marketing/MarketingHandoffsPage'
 import { PackagesPage } from '@/pages/packages/PackagesPage'
 import { PayrollPage } from '@/pages/payroll/PayrollPage'
 import { LandingPage } from '@/pages/public/LandingPage'
-import { BookingPage, PaymentsPage } from '@/pages/sales/SalesPage'
+import { BookingPage, DoctorsFeePage, PaymentsPage } from '@/pages/sales/SalesPage'
 import { SettingsRoutes } from '@/pages/settings/SettingsPage'
 import { NewStaffPage } from '@/pages/staff/NewStaffPage'
 import { StaffPositionsPage } from '@/pages/staff/StaffPositionsPage'
@@ -344,6 +344,7 @@ export default function App() {
                 <Route path="booking" element={<BookingPage />} />
                 <Route path="sales" element={<Navigate to="/admin/booking" replace />} />
                 <Route path="payments" element={<PaymentsPage />} />
+                <Route path="doctors-fee" element={<DoctorsFeePage />} />
                 <Route path="staff/new" element={<NewStaffPage />} />
                 <Route
                   path="staff/sales"
