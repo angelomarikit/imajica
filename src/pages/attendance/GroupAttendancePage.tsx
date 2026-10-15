@@ -4,6 +4,7 @@ import {
   FileSpreadsheet,
   Filter,
   MapPin,
+  Plus,
   Search,
   Users,
 } from 'lucide-react'
@@ -14,6 +15,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { AttendanceSessionModal } from '@/components/attendance/AttendanceSessionModal'
+import { HrAddAttendanceModal } from '@/components/attendance/HrAddAttendanceModal'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
 import {
@@ -88,6 +90,8 @@ export function GroupAttendancePage({
     staff: StaffAttendanceSummary
     session: AttendanceSession
   } | null>(null)
+  const [addModalStaff, setAddModalStaff] = useState<StaffAttendanceSummary | null>(null)
+  const peopleOps = canAccessPeopleOps(user)
 
   const activeBranchIds = useMemo(() => {
     if (branchFilter !== 'all' && branchIds.includes(branchFilter)) return [branchFilter]
@@ -411,7 +415,24 @@ export function GroupAttendancePage({
                     {selected.email ? ` · ${selected.email}` : ''}
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {peopleOps ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={!selected.branchId}
+                      title={
+                        selected.branchId
+                          ? 'Add Time In / Time Out for this employee'
+                          : 'Employee has no clinic branch'
+                      }
+                      onClick={() => setAddModalStaff(selected)}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add Time In / Out
+                    </Button>
+                  ) : null}
                   <MiniStat label="Days" value={String(selected.daysPresent)} />
                   <MiniStat label="Sessions" value={String(selected.sessionCount)} />
                   <MiniStat
@@ -422,9 +443,22 @@ export function GroupAttendancePage({
               </div>
 
               {selected.sessions.length === 0 ? (
-                <p className="rounded-[12px] border border-dashed border-border bg-ivory-50 px-4 py-8 text-center text-sm text-slate-ui">
-                  No Time In / Time Out records in this date range.
-                </p>
+                <div className="rounded-[12px] border border-dashed border-border bg-ivory-50 px-4 py-8 text-center">
+                  <p className="text-sm text-slate-ui">
+                    No Time In / Time Out records in this date range.
+                  </p>
+                  {peopleOps ? (
+                    <Button
+                      type="button"
+                      className="mt-3 gap-1.5"
+                      disabled={!selected.branchId}
+                      onClick={() => setAddModalStaff(selected)}
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add Time In / Out
+                    </Button>
+                  ) : null}
+                </div>
               ) : (
                 <div className="space-y-2">
                   <p className="text-xs text-slate-ui">
@@ -510,8 +544,21 @@ export function GroupAttendancePage({
           staffEmail={sessionModal.staff.email}
           branchName={sessionModal.staff.branchName ?? groupLabel}
           session={sessionModal.session}
-          canEditTimes={canAccessPeopleOps(user)}
+          canEditTimes={peopleOps}
           onClose={() => setSessionModal(null)}
+          onSaved={() => void load()}
+        />
+      ) : null}
+
+      {addModalStaff && addModalStaff.branchId ? (
+        <HrAddAttendanceModal
+          staffName={addModalStaff.fullName}
+          staffRole={addModalStaff.role}
+          staffEmail={addModalStaff.email}
+          userId={addModalStaff.userId}
+          branchId={addModalStaff.branchId}
+          branchName={addModalStaff.branchName ?? groupLabel}
+          onClose={() => setAddModalStaff(null)}
           onSaved={() => void load()}
         />
       ) : null}

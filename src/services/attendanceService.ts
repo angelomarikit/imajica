@@ -527,15 +527,22 @@ export function toManilaDatetimeLocalValue(iso: string): string {
   return `${get('year')}-${get('month')}-${get('day')}T${hour}:${get('minute')}`
 }
 
-/** ISO from a Manila `datetime-local` value (YYYY-MM-DDTHH:mm). */
+/** ISO from a Manila `datetime-local` value (YYYY-MM-DDTHH:mm or with :ss). */
 export function fromManilaDatetimeLocalValue(local: string): string {
   const trimmed = local.trim()
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)) {
-    throw new Error('Invalid date/time')
+  // Some browsers send seconds (…T19:00:00); accept both shapes.
+  const match = trimmed.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::\d{2})?$/)
+  if (!match) {
+    throw new Error('Invalid date/time — use the date & time pickers')
   }
-  const iso = new Date(`${trimmed}:00+08:00`).toISOString()
+  const iso = new Date(`${match[1]}:00+08:00`).toISOString()
   if (Number.isNaN(Date.parse(iso))) throw new Error('Invalid date/time')
   return iso
+}
+
+function newPunchId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0')}`.slice(0, 36)
 }
 
 /** HR / people-ops: correct Time In or Time Out timestamp. */
@@ -567,60 +574,263 @@ export async function updateAttendancePunchTime(input: {
   return next
 }
 
+export type AttendanceLocationPick = {
+  label: string
+  latitude: number | null
+  longitude: number | null
+}
+
+/**
+ * Distinct locations from an employee's prior punches (newest first) —
+ * used so HR can copy the employee's usual timeclock location.
+ */
+export function listEmployeeAttendanceLocations(
+  punches: AttendancePunch[],
+  limit = 8,
+): AttendanceLocationPick[] {
+  const seen = new Set<string>()
+  const out: AttendanceLocationPick[] = []
+  const sorted = [...punches].sort((a, b) => b.punchedAt.localeCompare(a.punchedAt))
+  for (const p of sorted) {
+    const label = (p.locationLabel || '').trim()
+    const lat = p.latitude
+    const lng = p.longitude
+    if (!label && (lat == null || lng == null)) continue
+    const key =
+      lat != null && lng != null
+        ? `${lat.toFixed(5)},${lng.toFixed(5)}|${label.toLowerCase()}`
+        : `label:${label.toLowerCase()}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({
+      label: label || (lat != null && lng != null ? `${lat}, ${lng}` : 'Saved location'),
+      latitude: lat,
+      longitude: lng,
+    })
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 /**
  * HR / people-ops: add a missing Time Out (or corrective punch) for another user.
  * Skips kiosk/day rules — used for payroll corrections only.
+ * Always store on the employee's clinic branch_id so Clinic Managers see it.
  */
 export async function createCorrectiveAttendancePunch(input: {
   userId: string
   branchId: string
   punchType: AttendancePunchType
   punchedAt: string
+  locationLabel?: string | null
+  latitude?: number | null
+  longitude?: number | null
 }): Promise<AttendancePunch> {
-  if (isSupabaseConfigured && supabase) {
-    const payload = {
-      user_id: input.userId,
-      branch_id: input.branchId,
-      punch_type: input.punchType,
-      punched_at: input.punchedAt,
-      photo_url: null,
-      latitude: null,
-      longitude: null,
-      accuracy_m: null,
-      location_label: 'HR correction',
+  const rows = await insertCorrectiveAttendancePunches([input])
+  return rows[0]!
+}
+
+/** Batch-insert HR corrective punches (avoids half-saved Time In without Time Out). */
+export async function insertCorrectiveAttendancePunches(
+  inputs: Array<{
+    userId: string
+    branchId: string
+    punchType: AttendancePunchType
+    punchedAt: string
+    locationLabel?: string | null
+    latitude?: number | null
+    longitude?: number | null
+  }>,
+): Promise<AttendancePunch[]> {
+  if (!inputs.length) return []
+
+  const rows: AttendancePunch[] = inputs.map((input) => {
+    const punchedAt = input.punchedAt
+    const locationLabel = (input.locationLabel || '').trim() || 'HR correction'
+    return {
+      id: newPunchId(),
+      userId: input.userId,
+      branchId: input.branchId,
+      punchType: input.punchType,
+      punchedAt,
+      photoUrl: null,
+      latitude: input.latitude ?? null,
+      longitude: input.longitude ?? null,
+      accuracyM: null,
+      locationLabel,
+      createdAt: punchedAt,
     }
-    const { data, error } = await supabase
-      .from('staff_attendance_logs')
-      .insert(payload)
-      .select(ATTENDANCE_SELECT)
-      .single()
-    if (error) throw new Error(error.message)
-    const mapped = mapRow(data as DbRow)
-    writeLocal([mapped, ...readLocal().filter((p) => p.id !== mapped.id)])
-    emit()
-    return mapped
+  })
+
+  if (isSupabaseConfigured && supabase) {
+    const payload = rows.map((r) => ({
+      id: r.id,
+      user_id: r.userId,
+      branch_id: r.branchId,
+      punch_type: r.punchType,
+      punched_at: r.punchedAt,
+      photo_url: null,
+      latitude: r.latitude,
+      longitude: r.longitude,
+      accuracy_m: null,
+      location_label: r.locationLabel,
+    }))
+    // Insert without RETURNING — franchise/HR SELECT RLS has bitten INSERT…SELECT before
+    const { error } = await supabase.from('staff_attendance_logs').insert(payload)
+    if (error) throw new Error(error.message || 'Could not save attendance punches')
   }
 
-  const punchedAt = input.punchedAt
-  const id =
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : `punch-${Date.now()}`
-  const row: AttendancePunch = {
-    id,
-    userId: input.userId,
-    branchId: input.branchId,
-    punchType: input.punchType,
-    punchedAt,
-    photoUrl: null,
-    latitude: null,
-    longitude: null,
-    accuracyM: null,
-    locationLabel: 'HR correction',
-    createdAt: punchedAt,
+  const idSet = new Set(rows.map((r) => r.id))
+  writeLocal([...rows, ...readLocal().filter((p) => !idSet.has(p.id))])
+  emit()
+  return rows
+}
+
+/**
+ * HR / people-ops: create a full Time In (+ optional Time Out) for an employee
+ * on their clinic branch — visible to that branch's Clinic Manager.
+ * If the day already has an open Time In, only adds Time Out (and updates location).
+ */
+export async function createHrAttendanceSession(input: {
+  userId: string
+  branchId: string
+  timeInLocal: string
+  timeOutLocal?: string | null
+  locationLabel?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  /** When true, allow a second time-in on a day that already has one */
+  allowDuplicateDay?: boolean
+}): Promise<{ timeIn: AttendancePunch; timeOut: AttendancePunch | null }> {
+  if (!input.userId?.trim()) throw new Error('Select an employee')
+  if (!input.branchId?.trim()) throw new Error('Employee has no clinic branch')
+
+  const timeInIso = fromManilaDatetimeLocalValue(input.timeInLocal)
+  let timeOutIso: string | null = null
+  if (input.timeOutLocal?.trim()) {
+    timeOutIso = fromManilaDatetimeLocalValue(input.timeOutLocal)
+    if (timeOutIso <= timeInIso) {
+      throw new Error('Time Out must be after Time In')
+    }
+  } else {
+    throw new Error('Time Out is required — enter both Time In and Time Out')
   }
-  writeLocal([row, ...readLocal()])
-  return row
+
+  const dateKey = manilaDateKey(timeInIso)
+  const existing = await listMyAttendance(input.userId)
+  const daySessions = buildAttendanceSessions(
+    existing.filter((p) => manilaDateKey(p.punchedAt) === dateKey),
+  )
+  const openSession = daySessions.find((s) => !s.timeOut)
+
+  const locationLabel = (input.locationLabel || '').trim() || 'HR correction'
+  const latitude = input.latitude ?? null
+  const longitude = input.longitude ?? null
+
+  // Day already has open Time In → close it with Time Out (don't orphan another in)
+  if (openSession && !input.allowDuplicateDay) {
+    await updateAttendancePunchTime({
+      id: openSession.timeIn.id,
+      punchedAt: timeInIso,
+    })
+    if (locationLabel || latitude != null) {
+      await updateAttendancePunchLocation({
+        id: openSession.timeIn.id,
+        locationLabel,
+        latitude,
+        longitude,
+      })
+    }
+    const [timeOut] = await insertCorrectiveAttendancePunches([
+      {
+        userId: input.userId,
+        branchId: input.branchId,
+        punchType: 'time_out',
+        punchedAt: timeOutIso,
+        locationLabel,
+        latitude,
+        longitude,
+      },
+    ])
+    return {
+      timeIn: {
+        ...openSession.timeIn,
+        punchedAt: timeInIso,
+        locationLabel,
+        latitude,
+        longitude,
+      },
+      timeOut: timeOut ?? null,
+    }
+  }
+
+  if (!input.allowDuplicateDay) {
+    const completed = daySessions.some((s) => Boolean(s.timeOut))
+    if (completed) {
+      throw new Error(
+        `This employee already has a complete attendance on ${dateKey}. Confirm to add another session.`,
+      )
+    }
+  }
+
+  const inserted = await insertCorrectiveAttendancePunches([
+    {
+      userId: input.userId,
+      branchId: input.branchId,
+      punchType: 'time_in',
+      punchedAt: timeInIso,
+      locationLabel,
+      latitude,
+      longitude,
+    },
+    {
+      userId: input.userId,
+      branchId: input.branchId,
+      punchType: 'time_out',
+      punchedAt: timeOutIso,
+      locationLabel,
+      latitude,
+      longitude,
+    },
+  ])
+
+  return {
+    timeIn: inserted.find((p) => p.punchType === 'time_in') ?? inserted[0]!,
+    timeOut: inserted.find((p) => p.punchType === 'time_out') ?? null,
+  }
+}
+
+/** HR: update location fields on an existing punch. */
+export async function updateAttendancePunchLocation(input: {
+  id: string
+  locationLabel: string
+  latitude?: number | null
+  longitude?: number | null
+}): Promise<void> {
+  const locationLabel = input.locationLabel.trim() || 'HR correction'
+  const latitude = input.latitude ?? null
+  const longitude = input.longitude ?? null
+
+  if (isSupabaseConfigured && supabase) {
+    const { error } = await supabase
+      .from('staff_attendance_logs')
+      .update({
+        location_label: locationLabel,
+        latitude,
+        longitude,
+      })
+      .eq('id', input.id)
+    if (error) throw new Error(error.message)
+  }
+
+  writeLocal(
+    readLocal().map((p) =>
+      p.id === input.id
+        ? { ...p, locationLabel, latitude, longitude }
+        : p,
+    ),
+  )
+  emit()
 }
 
 /**
@@ -631,6 +841,9 @@ export async function saveAttendanceSessionTimes(input: {
   session: AttendanceSession
   timeInLocal: string
   timeOutLocal: string | null
+  locationLabel?: string | null
+  latitude?: number | null
+  longitude?: number | null
 }): Promise<void> {
   const timeInIso = fromManilaDatetimeLocalValue(input.timeInLocal)
   let timeOutIso: string | null = null
@@ -646,18 +859,41 @@ export async function saveAttendanceSessionTimes(input: {
     punchedAt: timeInIso,
   })
 
+  const locationLabel = (input.locationLabel || '').trim()
+  if (locationLabel || input.latitude != null || input.longitude != null) {
+    await updateAttendancePunchLocation({
+      id: input.session.timeIn.id,
+      locationLabel: locationLabel || input.session.timeIn.locationLabel || 'HR correction',
+      latitude: input.latitude ?? input.session.timeIn.latitude,
+      longitude: input.longitude ?? input.session.timeIn.longitude,
+    })
+  }
+
   if (timeOutIso) {
     if (input.session.timeOut) {
       await updateAttendancePunchTime({
         id: input.session.timeOut.id,
         punchedAt: timeOutIso,
       })
+      if (locationLabel || input.latitude != null || input.longitude != null) {
+        await updateAttendancePunchLocation({
+          id: input.session.timeOut.id,
+          locationLabel:
+            locationLabel || input.session.timeOut.locationLabel || 'HR correction',
+          latitude: input.latitude ?? input.session.timeOut.latitude,
+          longitude: input.longitude ?? input.session.timeOut.longitude,
+        })
+      }
     } else {
       await createCorrectiveAttendancePunch({
         userId: input.session.timeIn.userId,
         branchId: input.session.timeIn.branchId,
         punchType: 'time_out',
         punchedAt: timeOutIso,
+        locationLabel:
+          locationLabel || input.session.timeIn.locationLabel || 'HR correction',
+        latitude: input.latitude ?? input.session.timeIn.latitude,
+        longitude: input.longitude ?? input.session.timeIn.longitude,
       })
     }
   }

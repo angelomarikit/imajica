@@ -44,12 +44,24 @@ export function AttendanceSessionModal({
   const [timeOutLocal, setTimeOutLocal] = useState(() =>
     session.timeOut ? toManilaDatetimeLocalValue(session.timeOut.punchedAt) : '',
   )
+  const [locationLabel, setLocationLabel] = useState(
+    () => session.timeIn.locationLabel ?? '',
+  )
+  const [latitude, setLatitude] = useState(() =>
+    session.timeIn.latitude != null ? String(session.timeIn.latitude) : '',
+  )
+  const [longitude, setLongitude] = useState(() =>
+    session.timeIn.longitude != null ? String(session.timeIn.longitude) : '',
+  )
 
   useEffect(() => {
     setTimeInLocal(toManilaDatetimeLocalValue(session.timeIn.punchedAt))
     setTimeOutLocal(
       session.timeOut ? toManilaDatetimeLocalValue(session.timeOut.punchedAt) : '',
     )
+    setLocationLabel(session.timeIn.locationLabel ?? '')
+    setLatitude(session.timeIn.latitude != null ? String(session.timeIn.latitude) : '')
+    setLongitude(session.timeIn.longitude != null ? String(session.timeIn.longitude) : '')
     setEditing(false)
   }, [session])
 
@@ -78,14 +90,26 @@ export function AttendanceSessionModal({
   }, [session])
 
   async function handleSave() {
+    if (!timeOutLocal.trim()) {
+      toast.error('Enter Time Out — open sessions need a Time Out to complete')
+      return
+    }
     setSaving(true)
     try {
+      const lat = latitude.trim() ? Number(latitude) : null
+      const lng = longitude.trim() ? Number(longitude) : null
+      if ((latitude.trim() || longitude.trim()) && (Number.isNaN(lat!) || Number.isNaN(lng!))) {
+        throw new Error('Latitude / longitude must be valid numbers')
+      }
       await saveAttendanceSessionTimes({
         session,
         timeInLocal,
-        timeOutLocal: timeOutLocal.trim() || null,
+        timeOutLocal: timeOutLocal.trim(),
+        locationLabel: locationLabel.trim() || null,
+        latitude: lat,
+        longitude: lng,
       })
-      toast.success('Attendance times updated')
+      toast.success('Attendance times & location updated')
       setEditing(false)
       onSaved?.()
       onClose()
@@ -173,6 +197,7 @@ export function AttendanceSessionModal({
                       value={timeOutLocal}
                       onChange={(e) => setTimeOutLocal(e.target.value)}
                       className="mt-1 w-full rounded-[10px] border border-border bg-white px-3 py-2 text-sm text-charcoal outline-none focus:border-emerald-700"
+                      required
                     />
                     {!session.timeOut ? (
                       <span className="mt-1 block text-[11px] text-slate-ui">
@@ -180,15 +205,42 @@ export function AttendanceSessionModal({
                       </span>
                     ) : null}
                   </label>
+                  <label className="block text-xs font-medium text-slate-ui">
+                    Location label
+                    <input
+                      value={locationLabel}
+                      onChange={(e) => setLocationLabel(e.target.value)}
+                      placeholder="Street, City, Province"
+                      className="mt-1 w-full rounded-[10px] border border-border bg-white px-3 py-2 text-sm text-charcoal outline-none focus:border-emerald-700"
+                    />
+                  </label>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="block text-xs font-medium text-slate-ui">
+                      Latitude
+                      <input
+                        value={latitude}
+                        onChange={(e) => setLatitude(e.target.value)}
+                        className="mt-1 w-full rounded-[10px] border border-border bg-white px-3 py-2 text-sm text-charcoal outline-none focus:border-emerald-700"
+                      />
+                    </label>
+                    <label className="block text-xs font-medium text-slate-ui">
+                      Longitude
+                      <input
+                        value={longitude}
+                        onChange={(e) => setLongitude(e.target.value)}
+                        className="mt-1 w-full rounded-[10px] border border-border bg-white px-3 py-2 text-sm text-charcoal outline-none focus:border-emerald-700"
+                      />
+                    </label>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <Button
                       type="button"
                       variant="primary"
                       size="sm"
-                      disabled={saving || !timeInLocal}
+                      disabled={saving || !timeInLocal || !timeOutLocal.trim()}
                       onClick={() => void handleSave()}
                     >
-                      {saving ? 'Saving…' : 'Save times'}
+                      {saving ? 'Saving…' : 'Save times & location'}
                     </Button>
                     <Button
                       type="button"
@@ -200,6 +252,17 @@ export function AttendanceSessionModal({
                         setTimeOutLocal(
                           session.timeOut
                             ? toManilaDatetimeLocalValue(session.timeOut.punchedAt)
+                            : '',
+                        )
+                        setLocationLabel(session.timeIn.locationLabel ?? '')
+                        setLatitude(
+                          session.timeIn.latitude != null
+                            ? String(session.timeIn.latitude)
+                            : '',
+                        )
+                        setLongitude(
+                          session.timeIn.longitude != null
+                            ? String(session.timeIn.longitude)
                             : '',
                         )
                         setEditing(false)
