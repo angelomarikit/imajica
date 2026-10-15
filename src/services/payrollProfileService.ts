@@ -16,20 +16,20 @@ import { isUuid } from '@/utils/uuid'
 
 function normalizeBenefitLines(raw: unknown): EmployeeBenefitLine[] {
   if (!Array.isArray(raw)) return []
-  return raw
-    .map((b) => {
-      if (!b || typeof b !== 'object') return null
-      const row = b as Record<string, unknown>
-      const name = String(row.name ?? '').trim()
-      if (!name) return null
-      return {
-        id: String(row.id ?? `ben-${Math.random().toString(36).slice(2, 10)}`),
-        name,
-        monthlyCost: Math.max(0, Number(row.monthlyCost) || 0),
-        notes: row.notes ? String(row.notes) : undefined,
-      } satisfies EmployeeBenefitLine
+  const out: EmployeeBenefitLine[] = []
+  for (const b of raw) {
+    if (!b || typeof b !== 'object') continue
+    const row = b as Record<string, unknown>
+    const name = String(row.name ?? '').trim()
+    if (!name) continue
+    out.push({
+      id: String(row.id ?? `ben-${Math.random().toString(36).slice(2, 10)}`),
+      name,
+      monthlyCost: Math.max(0, Number(row.monthlyCost) || 0),
+      notes: row.notes ? String(row.notes) : undefined,
     })
-    .filter((b): b is EmployeeBenefitLine => Boolean(b))
+  }
+  return out
 }
 
 const KEY = 'imajica_payroll_profiles'

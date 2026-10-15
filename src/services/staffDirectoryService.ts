@@ -47,21 +47,20 @@ export type EmployeeHrDetails = {
 
 function normalizeBenefits(raw: unknown): EmployeeBenefitLine[] {
   if (!Array.isArray(raw)) return []
-  return raw
-    .map((b) => {
-      if (!b || typeof b !== 'object') return null
-      const row = b as Record<string, unknown>
-      const name = String(row.name ?? '').trim()
-      const monthlyCost = Math.max(0, Number(row.monthlyCost) || 0)
-      if (!name) return null
-      return {
-        id: String(row.id ?? `ben-${Math.random().toString(36).slice(2, 10)}`),
-        name,
-        monthlyCost,
-        notes: row.notes ? String(row.notes) : undefined,
-      } satisfies EmployeeBenefitLine
+  const out: EmployeeBenefitLine[] = []
+  for (const b of raw) {
+    if (!b || typeof b !== 'object') continue
+    const row = b as Record<string, unknown>
+    const name = String(row.name ?? '').trim()
+    if (!name) continue
+    out.push({
+      id: String(row.id ?? `ben-${Math.random().toString(36).slice(2, 10)}`),
+      name,
+      monthlyCost: Math.max(0, Number(row.monthlyCost) || 0),
+      notes: row.notes ? String(row.notes) : undefined,
     })
-    .filter((b): b is EmployeeBenefitLine => Boolean(b))
+  }
+  return out
 }
 
 type StaffDbRow = {
@@ -398,6 +397,7 @@ export async function saveEmployeeHrDetails(
   const fullName = [next.firstName, next.middleName, next.lastName].filter(Boolean).join(' ') || staff.fullName
 
   if (isSupabaseConfigured && supabase) {
+    const client = supabase
     const payload = {
       profile_id: profileId,
       code: next.code || staff.code,
@@ -425,7 +425,7 @@ export async function saveEmployeeHrDetails(
       updated_at: new Date().toISOString(),
     }
 
-    const { data: existing } = await supabase
+    const { data: existing } = await client
       .from('staff')
       .select('id')
       .eq('profile_id', profileId)
@@ -435,7 +435,7 @@ export async function saveEmployeeHrDetails(
 
     const tryWrite = async (body: Record<string, unknown>) => {
       if (staffRowId) {
-        const { error } = await supabase.from('staff').update(body).eq('id', staffRowId)
+        const { error } = await client.from('staff').update(body).eq('id', staffRowId)
         return { error, id: staffRowId as string }
       }
       // Pre-generate id and skip INSERT…RETURNING — SELECT RLS used to block
@@ -444,7 +444,7 @@ export async function saveEmployeeHrDetails(
         typeof crypto !== 'undefined' && crypto.randomUUID
           ? crypto.randomUUID()
           : `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0')}`.slice(0, 36)
-      const { error } = await supabase.from('staff').insert({ ...body, id: newId })
+      const { error } = await client.from('staff').insert({ ...body, id: newId })
       return { error, id: newId }
     }
 
@@ -461,7 +461,7 @@ export async function saveEmployeeHrDetails(
     next.staffRowId = staffRowId
 
     if (staff.branchId && isUuid(staff.branchId) && staffRowId) {
-      const { error: linkErr } = await supabase.from('staff_branches').upsert(
+      const { error: linkErr } = await client.from('staff_branches').upsert(
         { staff_id: staffRowId, branch_id: staff.branchId, is_primary: true },
         { onConflict: 'staff_id,branch_id' },
       )
@@ -471,7 +471,7 @@ export async function saveEmployeeHrDetails(
     }
 
     if (isUuid(profileId)) {
-      await supabase
+      await client
         .from('profiles')
         .update({ phone: next.phone || null, full_name: fullName })
         .eq('id', profileId)
