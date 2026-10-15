@@ -337,15 +337,23 @@ export async function getTodayAttendanceStatus(userId: string): Promise<TodayAtt
   const today = manilaDateKey()
   const punches = await listMyAttendanceForDay(userId, today)
   const lastPunch = punches.length ? punches[punches.length - 1]! : null
-  const hasTimedInToday = punches.some((p) => p.punchType === 'time_in')
-  /** Open session = last punch today is Time In (waiting for Time Out). */
-  const openTimeIn = lastPunch?.punchType === 'time_in' ? lastPunch : null
+  const timeInCount = punches.filter((p) => p.punchType === 'time_in').length
+  const timeOutCount = punches.filter((p) => p.punchType === 'time_out').length
+  /**
+   * Open session = more Time Ins than Time Outs today.
+   * This still allows Time Out after a double Time In (old logic only checked "last punch
+   * is Time In", which failed in some race / ordering edge cases).
+   */
+  const canTimeOut = timeInCount > timeOutCount
+  const openTimeIn = canTimeOut
+    ? [...punches].reverse().find((p) => p.punchType === 'time_in') ?? null
+    : null
   return {
     punches,
     lastPunch,
-    // One Time In per Manila day — after Time Out, wait until tomorrow
-    canTimeIn: !hasTimedInToday,
-    canTimeOut: Boolean(openTimeIn),
+    // One Time In start per Manila day — after any Time In, only Time Out until tomorrow
+    canTimeIn: timeInCount === 0,
+    canTimeOut,
     openTimeIn,
   }
 }

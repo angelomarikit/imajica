@@ -416,26 +416,35 @@ export function TimeClockPage() {
           )}
 
           {!livePreview && !pending ? (
-            <div className="flex flex-wrap gap-3">
-              <Button
-                type="button"
-                size="lg"
-                disabled={!status?.canTimeIn || loading}
-                onClick={() => void beginSession('time_in')}
-                className="min-w-[140px]"
-              >
-                Time In
-              </Button>
-              <Button
-                type="button"
-                size="lg"
-                variant="secondary"
-                disabled={!status?.canTimeOut || loading}
-                onClick={() => void beginSession('time_out')}
-                className="min-w-[140px]"
-              >
-                Time Out
-              </Button>
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-3 sm:max-w-md">
+                <Button
+                  type="button"
+                  size="lg"
+                  disabled={!status?.canTimeIn || loading}
+                  onClick={() => void beginSession('time_in')}
+                >
+                  Time In
+                </Button>
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="secondary"
+                  disabled={!status?.canTimeOut || loading}
+                  onClick={() => void beginSession('time_out')}
+                >
+                  Time Out
+                </Button>
+              </div>
+              {status && !status.canTimeIn && !status.canTimeOut ? (
+                <p className="rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-950">
+                  Attendance complete for today. Come back tomorrow for Time In.
+                </p>
+              ) : (
+                <p className="text-xs text-slate-ui">
+                  Tap Time In or Time Out, then take your selfie.
+                </p>
+              )}
             </div>
           ) : null}
 
