@@ -553,7 +553,7 @@ function EmployeeKpiTableRows({
                       </strong>
                       <span className="block text-[11px] text-slate-ui">
                         {row.milestoneReached
-                          ? '₱2M branch target hit — 1% pool split'
+                          ? '₱2M hit — one shared 1% pool spread by day among who timed in'
                           : 'Branch has not hit ₱2M milestone this month'}
                       </span>
                     </span>

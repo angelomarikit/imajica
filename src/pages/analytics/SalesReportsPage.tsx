@@ -26,8 +26,13 @@ import { clinicRecognizedAmount } from '@/services/salesService'
 import type { AnalyticsSaleType, Sale } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
+import { useBranch } from '@/contexts/BranchContext'
+import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { useAuth } from '@/contexts/AuthContext'
+import {
+  CLINIC_MANAGER_COMMISSION_RATE,
+  STAFF_SALES_COMMISSION_RATE,
+} from '@/constants/payrollIncentives'
 import { isFranchiseBranchOwner, isHqRole } from '@/utils/franchiseAccess'
 
 type TypeFilter = 'all' | AnalyticsSaleType
@@ -62,9 +67,14 @@ function defaultBranchSalesRange() {
 
 export function SalesReportsPage() {
   const { user } = useAuth()
+  const { selectedBranch } = useBranch()
   const forcedBranchId = useForcedBranchId()
+  const effectiveBranchId = useEffectiveBranchId()
   const franchiseOwner = isFranchiseBranchOwner(user)
   const isHq = isHqRole(user?.role)
+  /** CM locked to clinic; HQ uses header branch (or all). */
+  const reportBranchId =
+    forcedBranchId || (effectiveBranchId !== 'all' ? effectiveBranchId : undefined)
   const range = franchiseOwner ? defaultBranchSalesRange() : defaultAnalyticsRange()
   const [sales, setSales] = useState<Sale[]>([])
   const [dataReady, setDataReady] = useState(false)
@@ -84,7 +94,7 @@ export function SalesReportsPage() {
     void fetchAnalyticsSalesForRange({
       from,
       to,
-      branchId: forcedBranchId,
+      branchId: reportBranchId,
     })
       .then((rows) => {
         if (!cancelled) {
@@ -103,9 +113,18 @@ export function SalesReportsPage() {
     return () => {
       cancelled = true
     }
-  }, [from, to, forcedBranchId])
+  }, [from, to, reportBranchId])
 
-  const summary = useMemo(() => salesSummary(sales, from, to), [sales, from, to])
+  const summary = useMemo(
+    () => salesSummary(sales, from, to, { branchId: reportBranchId }),
+    [sales, from, to, reportBranchId],
+  )
+
+  const commissionScopeLabel = franchiseOwner
+    ? selectedBranch?.name || user?.branchName || 'your clinic'
+    : reportBranchId
+      ? selectedBranch?.name || 'selected branch'
+      : 'all branches'
 
   const filteredRows = useMemo(() => {
     return summary.rows.filter((s) => {
@@ -221,7 +240,14 @@ export function SalesReportsPage() {
           label="Gross Commission"
           value={formatPesoExact(summary.grossCommission)}
           footer={
-            <p className="text-[11px] text-slate-ui">Select a specific branch to view commission</p>
+            <p className="text-[11px] text-slate-ui">
+              {(STAFF_SALES_COMMISSION_RATE * 100).toFixed(1)}% staff +{' '}
+              {(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}% owner on paid sales ·{' '}
+              {commissionScopeLabel}
+              {summary.commissionSalesBase != null && summary.commissionSalesBase > 0
+                ? ` · base ${formatPesoExact(summary.commissionSalesBase)}`
+                : null}
+            </p>
           }
         />
         <KpiCard label="Total Bookings" value={summary.bookings.toFixed(2)} />

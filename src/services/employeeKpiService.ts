@@ -14,6 +14,7 @@ import {
 } from '@/services/planBIncentiveService'
 import {
   computeBranchMilestoneSplit,
+  computeEmployeeMilestoneShare,
   computeClinicManagerCommission,
   computeEmployeeStaffCommission,
   resolveEmployeeMatchNames,
@@ -319,9 +320,20 @@ export async function buildEmployeeKpiRows(opts?: {
     const attendance = computeMonthlyAttendanceIncentive(userPunches, monthFrom)
     const attendanceIncentive = attendance.amount
 
-    const milestone = computeBranchMilestoneSplit({
+    const branchPunches = emp.branchId
+      ? punches.filter((p) => p.branchId === emp.branchId)
+      : punches
+    const milestoneProgress = computeBranchMilestoneSplit({
       branchId: emp.branchId || null,
       periodMonth,
+      branchPunches,
+    })
+    const milestoneShare = computeEmployeeMilestoneShare({
+      branchId: emp.branchId || null,
+      periodMonth,
+      userId: emp.id,
+      linkedUserIds: [...linkedIds],
+      branchPunches,
     })
 
     const performanceScore = computePerformanceScore({
@@ -334,7 +346,10 @@ export async function buildEmployeeKpiRows(opts?: {
     })
 
     const totalIncentivePay = round2(
-      commission + planBAmount + attendanceIncentive + (milestone.milestoneReached ? milestone.milestoneShare : 0),
+      commission +
+        planBAmount +
+        attendanceIncentive +
+        (milestoneProgress.milestoneReached ? milestoneShare : 0),
     )
 
     return {
@@ -364,8 +379,8 @@ export async function buildEmployeeKpiRows(opts?: {
       planBNotes,
       attendance,
       attendanceIncentive,
-      milestoneShare: milestone.milestoneShare,
-      milestoneReached: milestone.milestoneReached,
+      milestoneShare,
+      milestoneReached: milestoneProgress.milestoneReached,
       performanceScore,
       totalIncentivePay,
     }

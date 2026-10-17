@@ -74,6 +74,7 @@ import { DashboardPage } from '@/pages/dashboard/DashboardPage'
 import { KioskTimeClockPage } from '@/pages/attendance/KioskTimeClockPage'
 import { MyAttendancePage } from '@/pages/attendance/MyAttendancePage'
 import { MyCommissionSalesPage } from '@/pages/staff/MyCommissionSalesPage'
+import { Milestone2MPage } from '@/pages/milestone/Milestone2MPage'
 import { MySalaryPage } from '@/pages/staff/MySalaryPage'
 import { MyLeavePage } from '@/pages/staff/MyLeavePage'
 import { MyTrainingPage } from '@/pages/staff/MyTrainingPage'
@@ -169,6 +170,7 @@ export default function App() {
                 <Route path="my-leave" element={<MyLeavePage />} />
                 <Route path="my-training" element={<MyTrainingPage />} />
                 <Route path="commission-sales" element={<MyCommissionSalesPage />} />
+                <Route path="milestone-2m" element={<Milestone2MPage />} />
                 <Route path="my-salary" element={<MySalaryPage />} />
                 <Route
                   path="plan-b-incentive"

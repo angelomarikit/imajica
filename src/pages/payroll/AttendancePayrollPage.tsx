@@ -21,10 +21,12 @@ import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { PAYROLL_DEFAULT_SHIFT } from '@/constants/payrollRosterSeed'
 import {
   formatManilaTime,
+  listAttendanceForBranches,
   listMyAttendance,
   manilaDateKey,
   subscribeAttendance,
 } from '@/services/attendanceService'
+import { getBranches } from '@/services/branchService'
 import {
   computeAttendancePayroll,
   scheduledMinutesPerDay,
@@ -64,8 +66,21 @@ function statusBadge(row: AttendancePayrollRow) {
   return <Badge variant="success">Ready</Badge>
 }
 
-function sumIncentives(row: AttendancePayrollRow, periodFrom: string, periodTo: string) {
-  const inc = gatherPayslipIncentives({ row, periodFrom, periodTo })
+function sumIncentives(
+  row: AttendancePayrollRow,
+  periodFrom: string,
+  periodTo: string,
+  branchAttendancePunches: AttendancePunch[] = [],
+) {
+  const branchId = row.employee.branchId
+  const inc = gatherPayslipIncentives({
+    row,
+    periodFrom,
+    periodTo,
+    branchAttendancePunches: branchId
+      ? branchAttendancePunches.filter((p) => p.branchId === branchId)
+      : branchAttendancePunches,
+  })
   const total =
     (inc.staffSalesCommission || 0) +
     (inc.managerCommission || 0) +
@@ -121,6 +136,7 @@ export function AttendancePayrollPage({
   const [rows, setRows] = useState<AttendancePayrollRow[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [salesTick, setSalesTick] = useState(0)
+  const [branchPunches, setBranchPunches] = useState<AttendancePunch[]>([])
 
   const branchKey = branchIds?.slice().sort().join(',') ?? ''
 
@@ -135,9 +151,29 @@ export function AttendancePayrollPage({
         if (prev && next.some((r) => r.employee.id === prev)) return prev
         return next[0]?.employee.id ?? null
       })
+      const punchBranchIds =
+        branchIds?.length
+          ? branchIds
+          : [
+              ...new Set(
+                next.map((r) => r.employee.branchId).filter(Boolean) as string[],
+              ),
+            ]
+      const ids =
+        punchBranchIds.length > 0
+          ? punchBranchIds
+          : getBranches()
+              .filter((b) => b.status === 'active' && b.branchType !== 'warehouse')
+              .map((b) => b.id)
+      try {
+        setBranchPunches(await listAttendanceForBranches(ids, from, to))
+      } catch {
+        setBranchPunches([])
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to compute payroll')
       setRows([])
+      setBranchPunches([])
     } finally {
       setLoading(false)
     }
@@ -179,10 +215,10 @@ export function AttendancePayrollPage({
   const payrollRows = useMemo(() => {
     void salesTick
     return rows.map((r) => {
-      const extras = sumIncentives(r, from, to)
+      const extras = sumIncentives(r, from, to, branchPunches)
       return { row: r, ...extras }
     })
-  }, [rows, from, to, salesTick])
+  }, [rows, from, to, salesTick, branchPunches])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -452,7 +488,12 @@ export function AttendancePayrollPage({
           {!selected ? (
             <p className="text-sm text-slate-ui">Select a staff member to preview the payslip.</p>
           ) : (
-            <HrPayslipPreview row={selected} periodFrom={from} periodTo={to} />
+            <HrPayslipPreview
+              row={selected}
+              periodFrom={from}
+              periodTo={to}
+              branchAttendancePunches={branchPunches}
+            />
           )}
         </Card>
       </div>
@@ -464,10 +505,12 @@ function HrPayslipPreview({
   row,
   periodFrom,
   periodTo,
+  branchAttendancePunches = [],
 }: {
   row: AttendancePayrollRow
   periodFrom: string
   periodTo: string
+  branchAttendancePunches?: AttendancePunch[]
 }) {
   const { user } = useAuth()
   const [punches, setPunches] = useState<AttendancePunch[]>([])
@@ -514,14 +557,18 @@ function HrPayslipPreview({
 
   const computed = useMemo(() => {
     void salesTick
+    const branchId = row.employee.branchId
     const incentives = gatherPayslipIncentives({
       row,
       periodFrom,
       periodTo,
       attendancePunches: punches,
+      branchAttendancePunches: branchId
+        ? branchAttendancePunches.filter((p) => p.branchId === branchId)
+        : branchAttendancePunches,
     })
     return buildPayslipDocument({ row, periodFrom, periodTo, incentives })
-  }, [row, periodFrom, periodTo, punches, salesTick])
+  }, [row, periodFrom, periodTo, punches, branchAttendancePunches, salesTick])
 
   // Identity of the auto-calc source — reset draft only when staff / period changes,
   // not when background sales ticks fire (that was wiping manual edits before send).

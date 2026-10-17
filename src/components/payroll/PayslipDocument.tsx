@@ -234,7 +234,7 @@ export function PayslipDocument({
                   className={manualFieldClass}
                 />
                 <span className={manualHintClass}>
-                  Populates 2M milestone team split — even if auto unlock is locked
+                  Day shares among who timed in — even if auto unlock is locked
                 </span>
               </label>
               <label className="block text-left">

@@ -1,5 +1,6 @@
 import { enrichFirstClientFlags } from '@/services/clientSalesProfileService'
 import { getExpenses } from '@/services/expenseService'
+import { computeGrossCommissionForPeriod } from '@/services/staffCommissionService'
 import {
   clinicRecognizedAmount,
   fetchOpsSalesForRange,
@@ -67,7 +68,12 @@ export function sumBranchExpenses(from: string, to: string) {
     .reduce((s, e) => s + e.amount, 0)
 }
 
-export function salesSummary(sales: Sale[], from: string, to: string) {
+export function salesSummary(
+  sales: Sale[],
+  from: string,
+  to: string,
+  opts?: { branchId?: string | null },
+) {
   const inRange = filterSalesByDate(sales, from, to)
   const productSales = inRange
     .filter((s) => s.itemType === 'product')
@@ -79,12 +85,21 @@ export function salesSummary(sales: Sale[], from: string, to: string) {
   const fees = inRange.reduce((s, x) => s + transactionFee(x), 0)
   const branchExpenses = sumBranchExpenses(from, to)
   const netSales = grossSales - branchExpenses - fees
+  const commission = computeGrossCommissionForPeriod({
+    from,
+    to,
+    branchId: opts?.branchId,
+    sales: inRange,
+  })
   return {
     bookings: inRange.length,
     grossSales,
     productSales,
     serviceSales,
-    grossCommission: 0,
+    grossCommission: commission.grossCommission,
+    staffCommission: commission.staffCommission,
+    managerCommission: commission.managerCommission,
+    commissionSalesBase: commission.branchSales,
     branchExpenses,
     fees,
     netSales,

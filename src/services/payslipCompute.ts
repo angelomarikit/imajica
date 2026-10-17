@@ -4,7 +4,6 @@ import {
   ATTENDANCE_INCENTIVE_AMOUNT,
   BRANCH_SALES_MILESTONE,
   CLINIC_MANAGER_COMMISSION_RATE,
-  MILESTONE_SPLIT_RATE,
   STAFF_SALES_COMMISSION_RATE,
 } from '@/constants/payrollIncentives'
 import { STANDARD_WORK_HOURS_PER_DAY } from '@/constants/payrollRosterSeed'
@@ -135,13 +134,10 @@ export function buildPayslipDocument(input: {
       id: 'milestone-split',
       kind: 'incentive',
       label: '2M milestone team split (1%)',
-      computation: `Branch hit ₱${(BRANCH_SALES_MILESTONE / 1_000_000).toFixed(0)}M · pool ${inc.milestonePool.toLocaleString(
+      computation: `Branch hit ₱${(BRANCH_SALES_MILESTONE / 1_000_000).toFixed(0)}M · one shared 1% pool ${inc.milestonePool.toLocaleString(
         'en-PH',
         { style: 'currency', currency: 'PHP' },
-      )} (${(MILESTONE_SPLIT_RATE * 100).toFixed(0)}% of ${inc.milestoneSales.toLocaleString('en-PH', {
-        style: 'currency',
-        currency: 'PHP',
-      })}) ÷ ${inc.milestoneTeamSize} teammates`,
+      )} spread by day among staff who timed in (not 1% each; absent days excluded)`,
       amount: round2(inc.milestoneShare),
     })
   } else {
@@ -154,7 +150,7 @@ export function buildPayslipDocument(input: {
       )} this month (now ${inc.milestoneSales.toLocaleString('en-PH', {
         style: 'currency',
         currency: 'PHP',
-      })})`,
+      })}). When unlocked, 1% is split by day among staff who timed in.`,
       amount: 0,
       includeInTotal: false,
     })

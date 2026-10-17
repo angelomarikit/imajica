@@ -8,10 +8,14 @@ import {
   MILESTONE_SPLIT_RATE,
   STAFF_SALES_COMMISSION_RATE,
 } from '@/constants/payrollIncentives'
-import { getBookingRows, type TodayBookingRow } from '@/services/salesService'
+import {
+  clinicRecognizedAmount,
+  getBookingRows,
+  type TodayBookingRow,
+} from '@/services/salesService'
 import { getDirectoryStaff, matchesStaffBranch } from '@/services/staffDirectoryService'
 import { getAccessUsers } from '@/services/userAccessService'
-import type { AccessUser } from '@/types'
+import type { AccessUser, AttendancePunch, Sale } from '@/types'
 
 function normalizePersonName(value: string | undefined | null) {
   return (value || '')
@@ -198,37 +202,384 @@ export function computeClinicManagerCommission(input: {
   }
 }
 
-/** Active branch teammates who share the 2M split (staff + clinic manager). */
-export function countBranchTeamShare(branchId: string | null | undefined): number {
-  if (!branchId) return 1
-  const ids = new Set<string>()
-  for (const s of getDirectoryStaff()) {
-    if (s.status !== 'active') continue
-    if (!matchesStaffBranch(s, branchId)) continue
-    ids.add(s.email?.trim().toLowerCase() || s.id)
+export type GrossCommissionBreakdown = {
+  /** Paid clinic-recognized sales in range (doctor’s procedure at 80%). */
+  branchSales: number
+  /** 0.5% staff pool on paid sales */
+  staffCommission: number
+  /** 1% clinic manager / owner pool on paid sales */
+  managerCommission: number
+  /** staff + manager — Sales Reports “Gross Commission” */
+  grossCommission: number
+  staffRate: number
+  managerRate: number
+}
+
+/**
+ * Gross commission for Sales Reports / owner view:
+ * staff 0.5% + clinic manager 1% on paid sales in the period.
+ * Pass `sales` from a fresh analytics fetch so the KPI matches the page table.
+ */
+export function computeGrossCommissionForPeriod(input: {
+  from: string
+  to: string
+  branchId?: string | null
+  sales?: Sale[]
+}): GrossCommissionBreakdown {
+  let branchSales = 0
+
+  if (input.sales && input.sales.length) {
+    const groups = new Map<string, Sale[]>()
+    for (const s of input.sales) {
+      const day = (s.createdAt || '').slice(0, 10)
+      if (input.from && day < input.from) continue
+      if (input.to && day > input.to) continue
+      if (input.branchId && s.branchId !== input.branchId) continue
+      if ((s.leadSource || '') === 'Migration') continue
+      const key = s.bookingRef || s.invoiceNumber || s.id
+      const list = groups.get(key) ?? []
+      list.push(s)
+      groups.set(key, list)
+    }
+    for (const lines of groups.values()) {
+      const paid = lines.every((l) => l.status === 'paid')
+      if (!paid) continue
+      branchSales += lines.reduce((sum, l) => sum + clinicRecognizedAmount(l), 0)
+    }
+    branchSales = round2(branchSales)
+  } else {
+    branchSales = round2(
+      getBookingRows(input.branchId ? { branchId: input.branchId } : undefined)
+        .filter((r) => {
+          if (!isPaidBooking(r)) return false
+          const day = saleDateKey(r.dateIso)
+          return day >= input.from && day <= input.to
+        })
+        .reduce((s, r) => s + (r.payment || 0), 0),
+    )
   }
+
+  const staffCommission = round2(branchSales * STAFF_SALES_COMMISSION_RATE)
+  const managerCommission = round2(branchSales * CLINIC_MANAGER_COMMISSION_RATE)
+  return {
+    branchSales,
+    staffCommission,
+    managerCommission,
+    grossCommission: round2(staffCommission + managerCommission),
+    staffRate: STAFF_SALES_COMMISSION_RATE,
+    managerRate: CLINIC_MANAGER_COMMISSION_RATE,
+  }
+}
+
+const MILESTONE_TEAM_ROLES = new Set([
+  'BRANCH_ADMIN',
+  'DOCTOR',
+  'NURSE',
+  'AESTHETICIAN',
+  'RECEPTIONIST',
+  'STAFF',
+])
+
+function milestoneMonthBounds(periodMonth: string) {
+  const monthFrom = `${periodMonth}-01`
+  const [y, m] = periodMonth.split('-').map(Number)
+  const lastDay = new Date(Date.UTC(y!, m!, 0)).getUTCDate()
+  const monthTo = `${periodMonth}-${String(lastDay).padStart(2, '0')}`
+  return { monthFrom, monthTo }
+}
+
+/** Access-user ids eligible for the branch 2M pool (clinic staff + clinic manager). */
+export function listBranchTeamUserIds(branchId: string | null | undefined): string[] {
+  if (!branchId) return []
+  const ids = new Set<string>()
   for (const u of getAccessUsers()) {
     if (u.status !== 'active') continue
     if (!u.branchId || !matchesStaffBranch(u, branchId)) continue
-    if (
-      u.role === 'BRANCH_ADMIN' ||
-      u.role === 'DOCTOR' ||
-      u.role === 'NURSE' ||
-      u.role === 'AESTHETICIAN' ||
-      u.role === 'RECEPTIONIST' ||
-      u.role === 'STAFF'
-    ) {
-      ids.add(u.email?.trim().toLowerCase() || u.id)
-    }
+    if (MILESTONE_TEAM_ROLES.has(u.role)) ids.add(u.id)
   }
-  return Math.max(1, ids.size)
+  for (const s of getDirectoryStaff()) {
+    if (s.status !== 'active') continue
+    if (!matchesStaffBranch(s, branchId)) continue
+    if (s.id) ids.add(s.id)
+  }
+  return [...ids]
 }
 
-/** Calendar-month ₱2M milestone + equal 1% team split. */
+/** Active branch teammates who share the 2M split (staff + clinic manager). */
+export function countBranchTeamShare(branchId: string | null | undefined): number {
+  return Math.max(1, listBranchTeamUserIds(branchId).length)
+}
+
+/** Paid booking totals by Manila day for one branch in a month. */
+export function paidSalesByDayForBranch(
+  branchId: string,
+  monthFrom: string,
+  monthTo: string,
+): Map<string, number> {
+  const byDay = new Map<string, number>()
+  for (const r of getBookingRows({ branchId })) {
+    if (!isPaidBooking(r)) continue
+    const day = saleDateKey(r.dateIso)
+    if (day < monthFrom || day > monthTo) continue
+    byDay.set(day, round2((byDay.get(day) || 0) + (r.payment || 0)))
+  }
+  return byDay
+}
+
+/** Manila day → user ids who Time In that day (branch punches). */
+export function presentUserIdsByDay(
+  punches: AttendancePunch[],
+  teamUserIds: Set<string>,
+): Map<string, Set<string>> {
+  const byDay = new Map<string, Set<string>>()
+  for (const p of punches) {
+    if (p.punchType !== 'time_in') continue
+    if (!teamUserIds.has(p.userId)) continue
+    const day = saleDateKey(p.punchedAt)
+    if (!day) continue
+    let set = byDay.get(day)
+    if (!set) {
+      set = new Set()
+      byDay.set(day, set)
+    }
+    set.add(p.userId)
+  }
+  return byDay
+}
+
+/**
+ * Day-weighted 1% pool: each day’s share split equally among team members
+ * who timed in that Manila day. Absentees get ₱0 for that day.
+ *
+ * When `projectIfLocked` is true and the branch is under ₱2M, still allocates using
+ * pool = 1% of ₱2M and current day-sales weights (estimate at unlock).
+ */
+export function computeMilestoneSharesByUser(input: {
+  branchId: string | null | undefined
+  periodMonth: string
+  /** Branch attendance punches for the month (all teammates). */
+  branchPunches: AttendancePunch[]
+  /** Estimate shares even before the branch hits ₱2M. */
+  projectIfLocked?: boolean
+}): {
+  milestoneSales: number
+  milestoneReached: boolean
+  milestonePool: number
+  milestoneTeamSize: number
+  monthFrom: string
+  monthTo: string
+  sharesByUserId: Map<string, number>
+  unallocatedPool: number
+  /** True when shares are a projection (branch has not unlocked yet). */
+  isProjected: boolean
+} {
+  const { monthFrom, monthTo } = milestoneMonthBounds(input.periodMonth)
+  const teamIds = listBranchTeamUserIds(input.branchId)
+  const teamSet = new Set(teamIds)
+  const milestoneTeamSize = Math.max(1, teamIds.length)
+
+  const salesByDay = input.branchId
+    ? paidSalesByDayForBranch(input.branchId, monthFrom, monthTo)
+    : new Map<string, number>()
+  let milestoneSales = 0
+  for (const amt of salesByDay.values()) milestoneSales = round2(milestoneSales + amt)
+
+  const milestoneReached = milestoneSales >= BRANCH_SALES_MILESTONE
+  const isProjected = !milestoneReached && Boolean(input.projectIfLocked)
+  const milestonePool = milestoneReached
+    ? round2(milestoneSales * MILESTONE_SPLIT_RATE)
+    : isProjected
+      ? round2(BRANCH_SALES_MILESTONE * MILESTONE_SPLIT_RATE)
+      : 0
+  const sharesByUserId = new Map<string, number>()
+  let unallocatedPool = 0
+
+  const canAllocate =
+    milestonePool > 0 && milestoneSales > 0 && (milestoneReached || isProjected)
+
+  if (!canAllocate) {
+    return {
+      milestoneSales,
+      milestoneReached,
+      milestonePool,
+      milestoneTeamSize,
+      monthFrom,
+      monthTo,
+      sharesByUserId,
+      unallocatedPool: 0,
+      isProjected: false,
+    }
+  }
+
+  const presentByDay = presentUserIdsByDay(input.branchPunches, teamSet)
+  /** For projection at ₱2M unlock, day weights stay based on sales so far. */
+  const weightBase = milestoneSales
+
+  for (const [day, daySales] of salesByDay) {
+    if (daySales <= 0) continue
+    const dayPool = round2((daySales / weightBase) * milestonePool)
+    const present = presentByDay.get(day)
+    if (!present || present.size === 0) {
+      unallocatedPool = round2(unallocatedPool + dayPool)
+      continue
+    }
+    const each = round2(dayPool / present.size)
+    for (const userId of present) {
+      sharesByUserId.set(userId, round2((sharesByUserId.get(userId) || 0) + each))
+    }
+  }
+
+  return {
+    milestoneSales,
+    milestoneReached,
+    milestonePool,
+    milestoneTeamSize,
+    monthFrom,
+    monthTo,
+    sharesByUserId,
+    unallocatedPool,
+    isProjected,
+  }
+}
+
+export type MilestoneTrackerMember = {
+  userId: string
+  fullName: string
+  role: string
+  branchId: string
+  branchName: string
+  employeeCode: string | null
+  daysTimedIn: number
+  share: number
+}
+
+/** Roster + day-share amounts for the 2M Milestone tracker page. */
+export function listBranchMilestoneTracker(input: {
+  branchId: string | null | undefined
+  periodMonth: string
+  branchPunches: AttendancePunch[]
+}): {
+  milestoneSales: number
+  milestoneReached: boolean
+  milestonePool: number
+  milestoneTeamSize: number
+  unallocatedPool: number
+  isProjected: boolean
+  monthFrom: string
+  monthTo: string
+  members: MilestoneTrackerMember[]
+} {
+  const result = computeMilestoneSharesByUser({
+    branchId: input.branchId,
+    periodMonth: input.periodMonth,
+    branchPunches: input.branchPunches,
+    projectIfLocked: true,
+  })
+
+  const teamIds = listBranchTeamUserIds(input.branchId)
+  const teamSet = new Set(teamIds)
+  const presentByDay = presentUserIdsByDay(input.branchPunches, teamSet)
+  const daysByUser = new Map<string, number>()
+  for (const present of presentByDay.values()) {
+    for (const id of present) {
+      daysByUser.set(id, (daysByUser.get(id) || 0) + 1)
+    }
+  }
+
+  const profileById = new Map<
+    string,
+    { fullName: string; role: string; branchId: string; branchName: string; employeeCode: string | null }
+  >()
+  for (const u of getAccessUsers()) {
+    if (!teamIds.includes(u.id)) continue
+    profileById.set(u.id, {
+      fullName: u.fullName,
+      role: u.role,
+      branchId: u.branchId || input.branchId || '',
+      branchName: u.branchName || '',
+      employeeCode: u.employeeCode ?? null,
+    })
+  }
+  for (const s of getDirectoryStaff()) {
+    if (!s.id || !teamIds.includes(s.id)) continue
+    if (profileById.has(s.id)) continue
+    profileById.set(s.id, {
+      fullName: s.fullName,
+      role: s.role || 'STAFF',
+      branchId: s.branchId || input.branchId || '',
+      branchName: s.branchName || '',
+      employeeCode: s.employeeCode ?? null,
+    })
+  }
+
+  const members: MilestoneTrackerMember[] = teamIds.map((userId) => {
+    const profile = profileById.get(userId)
+    return {
+      userId,
+      fullName: profile?.fullName || 'Teammate',
+      role: profile?.role || 'STAFF',
+      branchId: profile?.branchId || input.branchId || '',
+      branchName: profile?.branchName || '',
+      employeeCode: profile?.employeeCode ?? null,
+      daysTimedIn: daysByUser.get(userId) || 0,
+      share: result.sharesByUserId.get(userId) || 0,
+    }
+  })
+
+  members.sort((a, b) => b.share - a.share || a.fullName.localeCompare(b.fullName))
+
+  return {
+    milestoneSales: result.milestoneSales,
+    milestoneReached: result.milestoneReached,
+    milestonePool: result.milestonePool,
+    milestoneTeamSize: result.milestoneTeamSize,
+    unallocatedPool: result.unallocatedPool,
+    isProjected: result.isProjected,
+    monthFrom: result.monthFrom,
+    monthTo: result.monthTo,
+    members,
+  }
+}
+
+/** One employee’s milestone share (sum of daily equal splits on days they timed in). */
+export function computeEmployeeMilestoneShare(input: {
+  branchId: string | null | undefined
+  periodMonth: string
+  userId: string | null | undefined
+  /** Linked login ids for the same person (email / name aliases). */
+  linkedUserIds?: string[]
+  branchPunches: AttendancePunch[]
+}): number {
+  if (!input.userId && !input.linkedUserIds?.length) return 0
+  const result = computeMilestoneSharesByUser({
+    branchId: input.branchId,
+    periodMonth: input.periodMonth,
+    branchPunches: input.branchPunches,
+  })
+  if (!result.milestoneReached) return 0
+  const ids = new Set<string>([
+    ...(input.userId ? [input.userId] : []),
+    ...(input.linkedUserIds || []),
+  ])
+  let share = 0
+  for (const id of ids) {
+    share = round2(share + (result.sharesByUserId.get(id) || 0))
+  }
+  return share
+}
+
+/**
+ * Branch milestone progress for UI.
+ * `milestoneShare` is only filled when `forUserId` + `branchPunches` are provided;
+ * otherwise share is 0 (use {@link computeEmployeeMilestoneShare} for payslips).
+ */
 export function computeBranchMilestoneSplit(input: {
   branchId: string | null | undefined
   /** YYYY-MM */
   periodMonth: string
+  branchPunches?: AttendancePunch[]
+  forUserId?: string | null
+  linkedUserIds?: string[]
 }): {
   milestoneSales: number
   milestoneReached: boolean
@@ -237,36 +588,34 @@ export function computeBranchMilestoneSplit(input: {
   milestoneShare: number
   monthFrom: string
   monthTo: string
+  unallocatedPool: number
 } {
-  const periodMonth = input.periodMonth
-  const monthFrom = `${periodMonth}-01`
-  const [y, m] = periodMonth.split('-').map(Number)
-  const lastDay = new Date(Date.UTC(y!, m!, 0)).getUTCDate()
-  const monthTo = `${periodMonth}-${String(lastDay).padStart(2, '0')}`
-  const teamSize = countBranchTeamShare(input.branchId)
+  const punches = input.branchPunches || []
+  const detailed = computeMilestoneSharesByUser({
+    branchId: input.branchId,
+    periodMonth: input.periodMonth,
+    branchPunches: punches,
+  })
 
-  let milestoneSales = 0
-  if (input.branchId) {
-    milestoneSales = round2(
-      getBookingRows({ branchId: input.branchId })
-        .filter((r) => {
-          if (!isPaidBooking(r)) return false
-          const day = saleDateKey(r.dateIso)
-          return day >= monthFrom && day <= monthTo
-        })
-        .reduce((s, r) => s + (r.payment || 0), 0),
-    )
+  let milestoneShare = 0
+  if (input.forUserId || input.linkedUserIds?.length) {
+    milestoneShare = computeEmployeeMilestoneShare({
+      branchId: input.branchId,
+      periodMonth: input.periodMonth,
+      userId: input.forUserId,
+      linkedUserIds: input.linkedUserIds,
+      branchPunches: punches,
+    })
   }
-  const milestoneReached = milestoneSales >= BRANCH_SALES_MILESTONE
-  const milestonePool = milestoneReached ? round2(milestoneSales * MILESTONE_SPLIT_RATE) : 0
-  const milestoneShare = milestoneReached ? round2(milestonePool / teamSize) : 0
+
   return {
-    milestoneSales,
-    milestoneReached,
-    milestonePool,
-    milestoneTeamSize: teamSize,
+    milestoneSales: detailed.milestoneSales,
+    milestoneReached: detailed.milestoneReached,
+    milestonePool: detailed.milestonePool,
+    milestoneTeamSize: detailed.milestoneTeamSize,
     milestoneShare,
-    monthFrom,
-    monthTo,
+    monthFrom: detailed.monthFrom,
+    monthTo: detailed.monthTo,
+    unallocatedPool: detailed.unallocatedPool,
   }
 }

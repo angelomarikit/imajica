@@ -27,6 +27,7 @@ import {
   deleteGeneratedForm,
   downloadGeneratedPacket,
   getGeneratedForms,
+  openGeneratedFormPdf,
   subscribeGeneratedForms,
   type GeneratedFormRecord,
 } from '@/services/imajicaFormsService'
@@ -57,8 +58,16 @@ export function ImajicaFormsPage() {
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [viewing, setViewing] = useState<GeneratedFormRecord | null>(null)
+  const [viewPdfUrl, setViewPdfUrl] = useState<string | null>(null)
+  const [busyAction, setBusyAction] = useState<string | null>(null)
 
   const template = getFormTemplate(templateId) ?? IMAJICA_FORM_TEMPLATES[0]
+
+  useEffect(() => {
+    return () => {
+      if (viewPdfUrl) URL.revokeObjectURL(viewPdfUrl)
+    }
+  }, [viewPdfUrl])
 
   useEffect(() => subscribeGeneratedForms(() => setHistory(getGeneratedForms())), [])
 
@@ -92,7 +101,7 @@ export function ImajicaFormsPage() {
     setValues((prev) => ({ ...prev, [key]: value }))
   }
 
-  function handleGenerate() {
+  async function handleGenerate() {
     if (!template) return
     if (!patientName.trim()) {
       toast.error('Enter patient/client name for signature')
@@ -102,20 +111,61 @@ export function ImajicaFormsPage() {
       toast.error('Client signature is required')
       return
     }
-    const record = createGeneratedForm({
-      template,
-      clientName: patientName,
-      branch: user?.branchName ?? 'BR01',
-      fieldValues: values,
-      clientSignature: clientSig,
-      otherSignature: template.otherSignature ? otherSig || undefined : undefined,
-    })
-    toast.success(`Generated ${record.formType}`)
-    downloadGeneratedPacket(record)
-    setPatientName('')
-    setValues({})
-    setClientSig('')
-    setOtherSig('')
+    setBusyAction('generate')
+    try {
+      const record = createGeneratedForm({
+        template,
+        clientName: patientName,
+        branch: user?.branchName ?? 'BR01',
+        fieldValues: values,
+        clientSignature: clientSig,
+        otherSignature: template.otherSignature ? otherSig || undefined : undefined,
+      })
+      await downloadGeneratedPacket(record)
+      toast.success(`Generated ${record.formType} PDF`)
+      setPatientName('')
+      setValues({})
+      setClientSig('')
+      setOtherSig('')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to generate PDF')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function handleView(row: GeneratedFormRecord) {
+    setBusyAction(`view-${row.id}`)
+    try {
+      if (viewPdfUrl) URL.revokeObjectURL(viewPdfUrl)
+      const url = await openGeneratedFormPdf(row)
+      setViewPdfUrl(url)
+      setViewing(row)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to open PDF')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function handleDownload(row: GeneratedFormRecord) {
+    setBusyAction(`dl-${row.id}`)
+    try {
+      await downloadGeneratedPacket(row)
+      toast.success('PDF download started')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to download PDF')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  function closeView() {
+    setViewing(null)
+    if (viewPdfUrl) {
+      URL.revokeObjectURL(viewPdfUrl)
+      setViewPdfUrl(null)
+    }
   }
 
   function handleDelete(row: GeneratedFormRecord) {
@@ -244,8 +294,9 @@ export function ImajicaFormsPage() {
         </div>
 
         <div className="mt-4 flex justify-end">
-          <Button onClick={handleGenerate}>
-            <Settings2 className="h-4 w-4" /> Generate Final PDF
+          <Button onClick={() => void handleGenerate()} disabled={busyAction === 'generate'}>
+            <Settings2 className="h-4 w-4" />
+            {busyAction === 'generate' ? 'Generating PDF…' : 'Generate Final PDF'}
           </Button>
         </div>
       </Card>
@@ -302,18 +353,17 @@ export function ImajicaFormsPage() {
                     <div className="flex flex-wrap gap-1.5">
                       <button
                         type="button"
-                        onClick={() => setViewing(row)}
-                        className="inline-flex h-8 items-center gap-1 rounded-[8px] border border-border bg-white px-2.5 text-xs font-medium text-charcoal hover:bg-ivory-100"
+                        onClick={() => void handleView(row)}
+                        disabled={busyAction === `view-${row.id}`}
+                        className="inline-flex h-8 items-center gap-1 rounded-[8px] border border-border bg-white px-2.5 text-xs font-medium text-charcoal hover:bg-ivory-100 disabled:opacity-60"
                       >
                         <Eye className="h-3.5 w-3.5" /> View
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          downloadGeneratedPacket(row)
-                          toast.success('Download started')
-                        }}
-                        className="inline-flex h-8 items-center gap-1 rounded-[8px] bg-[#C5A059] px-2.5 text-xs font-medium text-white hover:brightness-105"
+                        onClick={() => void handleDownload(row)}
+                        disabled={busyAction === `dl-${row.id}`}
+                        className="inline-flex h-8 items-center gap-1 rounded-[8px] bg-[#C5A059] px-2.5 text-xs font-medium text-white hover:brightness-105 disabled:opacity-60"
                       >
                         <Download className="h-3.5 w-3.5" /> Download
                       </button>
@@ -341,46 +391,41 @@ export function ImajicaFormsPage() {
       </Card>
 
       {viewing ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-stretch justify-center p-2 sm:p-3">
           <button
             type="button"
-            className="absolute inset-0 bg-emerald-950/40"
+            className="absolute inset-0 bg-emerald-950/50"
             aria-label="Close"
-            onClick={() => setViewing(null)}
+            onClick={closeView}
           />
-          <div className="relative z-10 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-[14px] bg-white p-5 shadow-xl">
-            <h3 className="font-display text-2xl text-[#073D2C]">{viewing.formType}</h3>
-            <p className="text-sm text-slate-ui">
-              {viewing.clientName} · {viewing.branch} · {formatSubmitted(viewing.submittedAt)}
-            </p>
-            <iframe
-              title="Template"
-              src={formPdfUrl(viewing.templateFile)}
-              className="mt-4 h-72 w-full rounded-[10px] border border-border"
-            />
-            {viewing.clientSignature ? (
-              <div className="mt-4">
-                <p className="text-xs font-bold uppercase text-slate-ui">Client Signature</p>
-                <img
-                  src={viewing.clientSignature}
-                  alt="Client signature"
-                  className="mt-1 max-h-32 rounded border border-border"
-                />
+          <div className="relative z-10 flex h-[96vh] w-full max-w-[96vw] flex-col overflow-hidden rounded-[14px] bg-white p-3 shadow-xl sm:p-4">
+            <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="font-display text-xl text-[#073D2C] sm:text-2xl">
+                  {viewing.formType}
+                </h3>
+                <p className="text-sm text-slate-ui">
+                  {viewing.clientName} · {viewing.branch} · {formatSubmitted(viewing.submittedAt)}
+                </p>
               </div>
-            ) : null}
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setViewing(null)}>
-                Close
-              </Button>
-              <Button
-                onClick={() => {
-                  downloadGeneratedPacket(viewing)
-                  toast.success('Download started')
-                }}
-              >
-                <Download className="h-4 w-4" /> Download
-              </Button>
+              <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                <Button variant="secondary" onClick={closeView}>
+                  Close
+                </Button>
+                <Button onClick={() => void handleDownload(viewing)}>
+                  <Download className="h-4 w-4" /> Download PDF
+                </Button>
+              </div>
             </div>
+            {viewPdfUrl ? (
+              <iframe
+                title="Generated form PDF"
+                src={viewPdfUrl}
+                className="mt-3 min-h-0 w-full flex-1 rounded-[10px] border border-border bg-[#525659]"
+              />
+            ) : (
+              <p className="mt-4 text-sm text-slate-ui">Preparing PDF…</p>
+            )}
           </div>
         </div>
       ) : null}

@@ -48,6 +48,7 @@ import {
   TrendingUp,
   Stethoscope,
   CreditCard,
+  Flag,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import logo from '@/assets/logo-imajica.jpg'
@@ -106,9 +107,18 @@ function isNavGroup(node: NavNode): node is NavGroup {
   return 'children' in node && Array.isArray(node.children)
 }
 
+const MILESTONE_2M_NAV: NavLeaf = {
+  to: '/admin/milestone-2m',
+  label: '2M Milestone',
+  icon: Flag,
+}
+
 const hqNavSectionsBase: NavSection[] = [
   {
-    items: [{ to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
+    items: [
+      { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      MILESTONE_2M_NAV,
+    ],
   },
   {
     category: 'Scheduling',
@@ -308,6 +318,7 @@ function buildMarketingNavItems(): NavItem[] {
     { to: '/admin/marketing/ads', label: 'Ads', icon: Megaphone },
     { to: '/admin/marketing/sales', label: 'Sales & Goals', icon: TrendingUp },
     { to: '/admin/marketing/offers', label: 'Offers', icon: Gift },
+    MILESTONE_2M_NAV,
   ]
 }
 
@@ -416,6 +427,7 @@ function buildTimeclockStaffNavSections(handoffUnread = 0): NavSection[] {
         { to: '/admin/my-leave', label: 'My Leave', icon: CalendarOff },
         { to: '/admin/my-training', label: 'My Training', icon: GraduationCap },
         { to: '/admin/commission-sales', label: 'My Commission & Sales', icon: Wallet },
+        MILESTONE_2M_NAV,
         { to: '/admin/my-salary', label: 'My Salary', icon: Banknote },
       ],
     },
@@ -447,7 +459,7 @@ function shortBranchName(name: string) {
 function buildHrNavSections(clinics: Branch[]): NavSection[] {
   return [
     {
-      items: buildHrPeopleOpsNavItems(clinics),
+      items: [MILESTONE_2M_NAV, ...buildHrPeopleOpsNavItems(clinics)],
     },
     {
       items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
@@ -485,6 +497,7 @@ function buildFranchiseOwnerNavSections(
       { to: '/admin/my-leave', label: 'My Leave', icon: CalendarOff },
       { to: '/admin/my-training', label: 'My Training', icon: GraduationCap },
       { to: '/admin/commission-sales', label: 'My Commission & Sales', icon: Wallet },
+      MILESTONE_2M_NAV,
       { to: '/admin/hr/leave', label: 'Leave Approvals', icon: CalendarOff },
       { to: '/admin/my-salary', label: 'My Salary', icon: Banknote },
       ...clinicSalary,

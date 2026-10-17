@@ -35,7 +35,11 @@ import {
   Users,
   Wallet,
 } from 'lucide-react'
-import { listMyAttendance, subscribeAttendance } from '@/services/attendanceService'
+import {
+  listAttendanceForBranches,
+  listMyAttendance,
+  subscribeAttendance,
+} from '@/services/attendanceService'
 import {
   BRANCH_SALES_MILESTONE,
   CLINIC_MANAGER_COMMISSION_RATE,
@@ -151,6 +155,7 @@ export function MyCommissionSalesPage() {
   const [loading, setLoading] = useState(true)
   const [viewRow, setViewRow] = useState<TodayBookingRow | null>(null)
   const [attendancePunches, setAttendancePunches] = useState<AttendancePunch[]>([])
+  const [branchPunches, setBranchPunches] = useState<AttendancePunch[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -179,6 +184,36 @@ export function MyCommissionSalesPage() {
       void loadAttendance()
     })
   }, [user?.id])
+
+  const planBPeriodMonthEarly = useMemo(() => {
+    const anchor = to || from || currentPeriodMonth()
+    return anchor.slice(0, 7)
+  }, [from, to])
+
+  useEffect(() => {
+    if (!user?.branchId) {
+      setBranchPunches([])
+      return
+    }
+    let cancelled = false
+    const month = planBPeriodMonthEarly || currentPeriodMonth()
+    const [y, m] = month.split('-').map(Number)
+    const monthFrom = `${month}-01`
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate()
+    const monthTo = `${month}-${String(lastDay).padStart(2, '0')}`
+    async function loadBranch() {
+      try {
+        const rows = await listAttendanceForBranches([user!.branchId!], monthFrom, monthTo)
+        if (!cancelled) setBranchPunches(rows)
+      } catch {
+        if (!cancelled) setBranchPunches([])
+      }
+    }
+    void loadBranch()
+    return subscribeAttendance(() => {
+      void loadBranch()
+    })
+  }, [user?.branchId, planBPeriodMonthEarly])
 
   useEffect(() => {
     void preloadPlanBIncentives()
@@ -319,10 +354,7 @@ export function MyCommissionSalesPage() {
     return computeMonthlyAttendanceIncentive(attendancePunches, to || from)
   }, [attendancePunches, from, to])
 
-  const planBPeriodMonth = useMemo(() => {
-    const anchor = to || from || currentPeriodMonth()
-    return anchor.slice(0, 7)
-  }, [from, to])
+  const planBPeriodMonth = planBPeriodMonthEarly
 
   const planBAmount = useMemo(() => {
     void tick
@@ -334,7 +366,7 @@ export function MyCommissionSalesPage() {
     })
   }, [tick, user, planBPeriodMonth])
 
-  /** Whole-branch paid sales for the selected month vs ₱2M milestone + 1% team split. */
+  /** Whole-branch paid sales for the selected month vs ₱2M milestone + day-share by Time In. */
   const branchMilestone = useMemo(() => {
     void tick
     const branchId = user?.branchId
@@ -342,6 +374,8 @@ export function MyCommissionSalesPage() {
     const split = computeBranchMilestoneSplit({
       branchId,
       periodMonth: month || currentPeriodMonth(),
+      branchPunches,
+      forUserId: user?.id,
     })
     return {
       sales: split.milestoneSales,
@@ -357,7 +391,7 @@ export function MyCommissionSalesPage() {
       splitPool: split.milestonePool,
       splitShare: split.milestoneShare,
     }
-  }, [tick, user?.branchId, user?.branchName, planBPeriodMonth])
+  }, [tick, user?.branchId, user?.branchName, user?.id, planBPeriodMonth, branchPunches])
 
   const filterLabel = useMemo(() => {
     const dates = formatRangeLabel(from, to)
@@ -536,8 +570,8 @@ export function MyCommissionSalesPage() {
           value={formatPesoExact(branchMilestone.splitShare)}
           subtext={
             branchMilestone.reached
-              ? `1% of branch sales ÷ ${branchMilestone.teamSize} teammates · pool ${formatPesoExact(branchMilestone.splitPool)}`
-              : `Unlocks at ₱2M · 1% split for the whole team (incl. clinic manager)`
+              ? `Your piece of the shared 1% pool ${formatPesoExact(branchMilestone.splitPool)} · days you timed in`
+              : `Unlocks at ₱2M · one shared 1% pool spread among staff who timed in`
           }
           icon={<Users className="h-5 w-5" />}
           tone={branchMilestone.reached ? 'milestone' : 'incentiveMuted'}
@@ -781,7 +815,6 @@ function MilestoneCard({
   remaining,
   pct,
   reached,
-  teamSize,
   splitPool,
   splitShare,
 }: {
@@ -822,7 +855,7 @@ function MilestoneCard({
           <span>{pct}% of ₱2M</span>
           <span>
             {reached
-              ? 'Milestone reached — 1% team split unlocked!'
+              ? 'Milestone reached — day-share pool unlocked!'
               : `${formatPesoExact(remaining)} left to hit ₱2M`}
           </span>
         </div>
@@ -839,8 +872,8 @@ function MilestoneCard({
         </div>
         <p className="mt-2 text-xs text-[#6b5420]/90">
           {reached
-            ? `1% pool ${formatPesoExact(splitPool)} split across ${teamSize} teammates (incl. clinic manager) — your share ${formatPesoExact(splitShare)}.`
-            : 'Hit ₱2M and the branch unlocks a 1% commission pool split equally across the whole team, including the clinic manager.'}
+            ? `One shared 1% pool ${formatPesoExact(splitPool)} spread by day among staff who timed in (not 1% each) — your share ${formatPesoExact(splitShare)}.`
+            : 'Hit ₱2M and the branch unlocks one shared 1% pool spread by day among staff who timed in — not 1% per person.'}
         </p>
       </div>
     </div>

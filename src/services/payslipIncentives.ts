@@ -5,8 +5,10 @@ import { sumPlanBForStaff, listPlanBForStaff } from '@/services/planBIncentiveSe
 import {
   computeBranchMilestoneSplit,
   computeClinicManagerCommission,
+  computeEmployeeMilestoneShare,
   computeEmployeeStaffCommission,
   resolveEmployeeMatchNames,
+  staffNamesMatch,
 } from '@/services/staffCommissionService'
 import { getAccessUsers } from '@/services/userAccessService'
 import type { PayslipIncentiveBundle } from '@/services/payslipCompute'
@@ -38,9 +40,18 @@ export function gatherPayslipIncentives(input: {
   row: AttendancePayrollRow
   periodFrom: string
   periodTo: string
+  /** Employee punches — attendance incentive */
   attendancePunches?: AttendancePunch[]
+  /** Full branch punches for the period — 2M day-share by Time In */
+  branchAttendancePunches?: AttendancePunch[]
 }): PayslipIncentiveBundle {
-  const { row, periodFrom, periodTo, attendancePunches = [] } = input
+  const {
+    row,
+    periodFrom,
+    periodTo,
+    attendancePunches = [],
+    branchAttendancePunches = [],
+  } = input
   const name = row.employee.fullName
   const branchId = row.employee.branchId
   const periodMonth = periodMonthFromRange(periodFrom, periodTo)
@@ -70,9 +81,34 @@ export function gatherPayslipIncentives(input: {
     managerCommission = mgr.commission
   }
 
-  const milestone = computeBranchMilestoneSplit({
+  const linkedUserIds = new Set<string>()
+  if (row.matchedUserId) linkedUserIds.add(row.matchedUserId)
+  for (const u of getAccessUsers()) {
+    if (matchNames.some((n) => n && staffNamesMatch(n, u.fullName))) {
+      linkedUserIds.add(u.id)
+    }
+    const email = u.email.trim().toLowerCase()
+    if (
+      email &&
+      [row.employee.email, ...row.employee.matchEmails]
+        .map((e) => e.trim().toLowerCase())
+        .includes(email)
+    ) {
+      linkedUserIds.add(u.id)
+    }
+  }
+
+  const milestoneProgress = computeBranchMilestoneSplit({
     branchId,
     periodMonth,
+    branchPunches: branchAttendancePunches,
+  })
+  const milestoneShare = computeEmployeeMilestoneShare({
+    branchId,
+    periodMonth,
+    userId: row.matchedUserId,
+    linkedUserIds: [...linkedUserIds],
+    branchPunches: branchAttendancePunches,
   })
 
   const att = computeMonthlyAttendanceIncentive(attendancePunches, periodTo)
@@ -105,11 +141,11 @@ export function gatherPayslipIncentives(input: {
     managerBranchSales,
     managerCommission,
     isClinicManager,
-    milestoneSales: milestone.milestoneSales,
-    milestoneReached: milestone.milestoneReached,
-    milestonePool: milestone.milestonePool,
-    milestoneTeamSize: milestone.milestoneTeamSize,
-    milestoneShare: milestone.milestoneShare,
+    milestoneSales: milestoneProgress.milestoneSales,
+    milestoneReached: milestoneProgress.milestoneReached,
+    milestonePool: milestoneProgress.milestonePool,
+    milestoneTeamSize: milestoneProgress.milestoneTeamSize,
+    milestoneShare,
     attendanceIncentive,
     attendanceEligible,
     attendanceLateDays: lateDays,

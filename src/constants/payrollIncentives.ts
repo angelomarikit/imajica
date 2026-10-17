@@ -6,7 +6,7 @@ export const STAFF_SALES_COMMISSION_RATE = 0.005
 /** Clinic manager take on their clinic’s paid sales in the period */
 export const CLINIC_MANAGER_COMMISSION_RATE = 0.01
 
-/** When branch hits ₱2M paid sales in the month, 1% pool is split across the team */
+/** When branch hits ₱2M paid sales in the month, one shared 1% pool is spread across the team (not 1% each). */
 export const BRANCH_SALES_MILESTONE = 2_000_000
 export const MILESTONE_SPLIT_RATE = 0.01
 
