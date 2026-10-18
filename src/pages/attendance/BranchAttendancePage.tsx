@@ -33,14 +33,15 @@ import {
 } from '@/services/attendanceService'
 import { listAccessUsers } from '@/services/userAccessService'
 import {
-  TIMECLOCK_ROLES,
   canAccessHqOps,
   canAccessPeopleOps,
+  isAttendanceRosterRole,
   isBranchOwner,
+  isOperationsManagerRole,
 } from '@/utils/franchiseAccess'
 import { cn } from '@/utils/cn'
 import { formatRoleLabel } from '@/utils/roleLabels'
-import type { AccessUser, UserRole } from '@/types'
+import type { AccessUser } from '@/types'
 
 function defaultRange() {
   const to = manilaDateKey()
@@ -100,15 +101,21 @@ export function BranchAttendancePage() {
         listAccessUsers(),
       ])
 
-      // Strict: only this branch's timeclock staff (never other clinics)
-      const branchStaff = users.filter(
-        (u) =>
-          u.branchId === branchId &&
-          TIMECLOCK_ROLES.includes(u.role as UserRole),
-      )
-
+      // This clinic's staff + Clinic Manager + org-wide Operations Manager
       const peopleMap = new Map<string, AccessUser>()
-      for (const u of branchStaff) peopleMap.set(u.id, u)
+      for (const u of users) {
+        if (u.status === 'inactive') continue
+        if (!isAttendanceRosterRole(u.role)) continue
+        if (isOperationsManagerRole(u.role)) {
+          peopleMap.set(u.id, {
+            ...u,
+            branchId: u.branchId || branchId,
+            branchName: u.branchName || branchName,
+          })
+          continue
+        }
+        if (u.branchId === branchId) peopleMap.set(u.id, u)
+      }
 
       // Punches are already branch-scoped; attach unknown punchers only if
       // directory says they belong here (or directory has no branch conflict)
@@ -116,8 +123,14 @@ export function BranchAttendancePage() {
         if (peopleMap.has(punch.userId)) continue
         if (punch.branchId !== branchId) continue
         const known = users.find((u) => u.id === punch.userId)
-        if (known?.branchId && known.branchId !== branchId) continue
-        if (known && !TIMECLOCK_ROLES.includes(known.role as UserRole)) continue
+        if (
+          known?.branchId &&
+          known.branchId !== branchId &&
+          !isOperationsManagerRole(known.role)
+        ) {
+          continue
+        }
+        if (known && !isAttendanceRosterRole(known.role)) continue
         peopleMap.set(punch.userId, {
           id: punch.userId,
           fullName: known?.fullName ?? `Staff ${punch.userId.slice(0, 8)}`,
@@ -145,7 +158,9 @@ export function BranchAttendancePage() {
         })),
       ).filter((s) => {
         const person = peopleMap.get(s.userId)
-        return Boolean(person && person.branchId === branchId)
+        if (!person) return false
+        if (isOperationsManagerRole(person.role)) return true
+        return person.branchId === branchId
       })
 
       setSummaries(next)

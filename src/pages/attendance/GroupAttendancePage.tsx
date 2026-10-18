@@ -31,10 +31,14 @@ import {
   type StaffAttendanceSummary,
 } from '@/services/attendanceService'
 import { listAccessUsers } from '@/services/userAccessService'
-import { TIMECLOCK_ROLES, canAccessPeopleOps } from '@/utils/franchiseAccess'
+import {
+  canAccessPeopleOps,
+  isAttendanceRosterRole,
+  isOperationsManagerRole,
+} from '@/utils/franchiseAccess'
 import { cn } from '@/utils/cn'
 import { formatRoleLabel } from '@/utils/roleLabels'
-import type { AccessUser, UserRole } from '@/types'
+import type { AccessUser } from '@/types'
 
 function defaultRange() {
   const to = manilaDateKey()
@@ -114,22 +118,38 @@ export function GroupAttendancePage({
       const idSet = new Set(activeBranchIds)
       const branchNameById = new Map(branches.map((b) => [b.id, b.name]))
 
-      const branchStaff = users.filter(
-        (u) =>
-          Boolean(u.branchId) &&
-          idSet.has(u.branchId!) &&
-          TIMECLOCK_ROLES.includes(u.role as UserRole),
-      )
-
       const peopleMap = new Map<string, AccessUser>()
-      for (const u of branchStaff) peopleMap.set(u.id, u)
+      for (const u of users) {
+        if (u.status === 'inactive') continue
+        if (!isAttendanceRosterRole(u.role)) continue
+        // Org-wide OM: always on HR attendance (All Branches or any clinic filter)
+        if (isOperationsManagerRole(u.role)) {
+          const fallbackBranch = activeBranchIds[0] ?? null
+          peopleMap.set(u.id, {
+            ...u,
+            branchId: u.branchId && idSet.has(u.branchId) ? u.branchId : fallbackBranch,
+            branchName:
+              u.branchName ||
+              (fallbackBranch ? branchNameById.get(fallbackBranch) : null) ||
+              'All Branches',
+          })
+          continue
+        }
+        if (u.branchId && idSet.has(u.branchId)) peopleMap.set(u.id, u)
+      }
 
       for (const punch of punches) {
         if (!idSet.has(punch.branchId)) continue
         if (peopleMap.has(punch.userId)) continue
         const known = users.find((u) => u.id === punch.userId)
-        if (known?.branchId && !idSet.has(known.branchId)) continue
-        if (known && !TIMECLOCK_ROLES.includes(known.role as UserRole)) continue
+        if (
+          known?.branchId &&
+          !idSet.has(known.branchId) &&
+          !isOperationsManagerRole(known.role)
+        ) {
+          continue
+        }
+        if (known && !isAttendanceRosterRole(known.role)) continue
         peopleMap.set(punch.userId, {
           id: punch.userId,
           fullName: known?.fullName ?? `Staff ${punch.userId.slice(0, 8)}`,
@@ -162,7 +182,9 @@ export function GroupAttendancePage({
         })),
       ).filter((s) => {
         const person = peopleMap.get(s.userId)
-        return Boolean(person?.branchId && idSet.has(person.branchId))
+        if (!person) return false
+        if (isOperationsManagerRole(person.role)) return true
+        return Boolean(person.branchId && idSet.has(person.branchId))
       })
 
       setSummaries(next)

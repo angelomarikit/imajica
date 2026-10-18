@@ -124,6 +124,20 @@ export const TIMECLOCK_ROLES: UserRole[] = [
   'STAFF',
 ]
 
+/**
+ * Roles HR attendance / payroll should list for Time In–Out
+ * (clinic staff + Clinic Manager + Operations Manager).
+ */
+export const ATTENDANCE_ROSTER_ROLES: UserRole[] = [
+  ...TIMECLOCK_ROLES,
+  'BRANCH_ADMIN',
+  'OPERATIONS_MANAGER',
+]
+
+export function isAttendanceRosterRole(role: UserRole | string | null | undefined): boolean {
+  return Boolean(role && ATTENDANCE_ROSTER_ROLES.includes(role as UserRole))
+}
+
 export function isTimeclockStaff(user: AuthSessionUser | null | undefined): boolean {
   if (!user) return false
   if (!TIMECLOCK_ROLES.includes(user.role)) return false

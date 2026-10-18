@@ -111,6 +111,7 @@ export async function listBranchAccounts(): Promise<AccessUser[]> {
           Boolean(u.branchId) ||
           u.role === 'HR' ||
           u.role === 'MARKETING' ||
+          u.role === 'OPERATIONS_MANAGER' ||
           u.role === 'BRANCH_MARKETING',
       )
     }
@@ -121,6 +122,7 @@ export async function listBranchAccounts(): Promise<AccessUser[]> {
       Boolean(u.branchId) ||
       u.role === 'HR' ||
       u.role === 'MARKETING' ||
+      u.role === 'OPERATIONS_MANAGER' ||
       u.role === 'BRANCH_MARKETING',
   )
 }
@@ -154,7 +156,14 @@ export function subscribeAccessUsers(listener: () => void) {
 }
 
 const HQ_SENTINEL_ID = '00000000-0000-0000-0000-000000000001'
-const ORG_ROLES = new Set(['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'MARKETING', 'CLIENT'])
+const ORG_ROLES = new Set([
+  'SUPER_ADMIN',
+  'HQ_ADMIN',
+  'OPERATIONS_MANAGER',
+  'HR',
+  'MARKETING',
+  'CLIENT',
+])
 
 export async function createAccessUser(
   input: Omit<AccessUser, 'id'> & { id?: string; password?: string },
