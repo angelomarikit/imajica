@@ -39,7 +39,7 @@ export function isAnyMarketingRole(role: UserRole | undefined | null): boolean {
 }
 
 /** Operations Manager — org-wide clinic ops + HQ warehouse/orders (not full HQ). */
-export function isOperationsManagerRole(role: UserRole | undefined | null): boolean {
+export function isOperationsManagerRole(role: UserRole | string | null | undefined): boolean {
   return role === 'OPERATIONS_MANAGER'
 }
 
