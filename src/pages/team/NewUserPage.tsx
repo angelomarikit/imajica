@@ -17,6 +17,7 @@ import { formatRoleLabel } from '@/utils/roleLabels'
 const ROLE_OPTIONS = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
+  'OPERATIONS_MANAGER',
   'HR',
   'MARKETING',
   'BRANCH_MARKETING',
@@ -60,7 +61,7 @@ export function NewUserPage() {
     const orgWide = isOrgWideRole(role)
     if (isSupabaseConfigured && !orgWide && !branchId) {
       toast.error(
-        'Select a clinic branch for this role, or choose HR / Marketing / HQ for All Branches. Branch Marketing needs a clinic.',
+        'Select a clinic branch for this role, or choose OM / HR / Marketing / HQ for All Branches. Branch Marketing needs a clinic.',
       )
       return
     }
@@ -171,7 +172,8 @@ export function NewUserPage() {
                 ))}
               </select>
               <p className="mt-1.5 text-xs text-slate-ui">
-                <strong>Marketing</strong> = All Branches (leader).{' '}
+                <strong>Operations Manager</strong> / <strong>Marketing</strong> /{' '}
+                <strong>HR</strong> = All Branches.{' '}
                 <strong>Branch Marketing</strong> = one clinic only.
               </p>
             </label>
@@ -197,7 +199,7 @@ export function NewUserPage() {
               >
                 <option value="">Select clinic branch</option>
                 <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
-                  All Branches (organization) — HR / Marketing
+                  All Branches (organization) — OM / HR / Marketing
                 </option>
                 {branches.map((b) => (
                   <option key={b.id} value={b.id} className="text-[#073D2C]">

@@ -81,6 +81,7 @@ const STAFF_ROLES: UserRole[] = [
   'HR',
   'MARKETING',
   'BRANCH_MARKETING',
+  'OPERATIONS_MANAGER',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -92,6 +93,7 @@ const STAFF_ROLES: UserRole[] = [
 const ROLE_PRIORITY: UserRole[] = [
   'SUPER_ADMIN',
   'HQ_ADMIN',
+  'OPERATIONS_MANAGER',
   'HR',
   'MARKETING',
   'BRANCH_MARKETING',
@@ -147,7 +149,11 @@ async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthS
   const role = roleIds.length > 0 ? pickHighestRole(roleIds) : meta.role ?? 'CLIENT'
   // Org-wide roles — never attach a clinic branch (e.g. San Mateo) from user_roles.
   const staffBranch =
-    role === 'SUPER_ADMIN' || role === 'HQ_ADMIN' || role === 'HR' || role === 'MARKETING'
+    role === 'SUPER_ADMIN' ||
+    role === 'HQ_ADMIN' ||
+    role === 'HR' ||
+    role === 'MARKETING' ||
+    role === 'OPERATIONS_MANAGER'
       ? undefined
       : (roleRows ?? []).find(
           (r) => r.branch_id && r.branch_id !== '00000000-0000-0000-0000-000000000001',

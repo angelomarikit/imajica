@@ -44,7 +44,7 @@ import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
 import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { resolveClinicBranchId } from '@/services/branchService'
-import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
+import { isBranchOwner, isHqRole, isOperationsManagerRole } from '@/utils/franchiseAccess'
 
 
 function initials(name: string) {
@@ -91,7 +91,7 @@ export function ClientsPage() {
   const forcedBranchId = useForcedBranchId()
   const effectiveBranchId = useEffectiveBranchId()
   const branchScoped = isBranchOwner(user) || Boolean(forcedBranchId)
-  const hqView = isHqRole(user?.role)
+  const hqView = isHqRole(user?.role) || isOperationsManagerRole(user?.role)
 
   useEffect(() => {
     const refresh = () => {

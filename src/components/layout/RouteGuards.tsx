@@ -51,6 +51,7 @@ export function RequireStaff({ children }: { children?: React.ReactNode }) {
     'HR',
     'MARKETING',
     'BRANCH_MARKETING',
+    'OPERATIONS_MANAGER',
     'BRANCH_ADMIN',
     'DOCTOR',
     'NURSE',
@@ -61,9 +62,18 @@ export function RequireStaff({ children }: { children?: React.ReactNode }) {
   return <RequireRole roles={staffRoles}>{children}</RequireRole>
 }
 
-/** HQ-only admin surfaces (User Access, Branches, org warehouse, etc.) */
+/** HQ-only admin surfaces (User Access, Branches directory CRUD, etc.) */
 export function RequireHqAdmin({ children }: { children?: React.ReactNode }) {
   return <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN']}>{children}</RequireRole>
+}
+
+/** HQ or Operations Manager — warehouse, stock transfers, franchise ops admin. */
+export function RequireOperationsAdmin({ children }: { children?: React.ReactNode }) {
+  return (
+    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'OPERATIONS_MANAGER']}>
+      {children}
+    </RequireRole>
+  )
 }
 
 /** HQ or HR — people ops across all clinics (attendance, payroll, staff, LMS). */

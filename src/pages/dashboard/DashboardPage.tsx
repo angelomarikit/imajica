@@ -53,7 +53,7 @@ import { getDirectoryStaff } from '@/services/staffDirectoryService'
 import type { Appointment, Client, OperationalExpense, Sale, Staff } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
+import { isBranchOwner, isHqRole, isOperationsManagerRole } from '@/utils/franchiseAccess'
 
 const COMMISSION_RATE = 0.05
 
@@ -502,7 +502,7 @@ function BranchOpsDashboard() {
   const { branches, selectedBranchId, setSelectedBranchId, branchLocked } = useBranch()
   const forcedBranchId = useForcedBranchId()
   const branchOwner = isBranchOwner(user)
-  const hqView = isHqRole(user?.role)
+  const hqView = isHqRole(user?.role) || isOperationsManagerRole(user?.role)
   // HQ aggregates every clinic when All Branches is selected (default after HQ login).
   const scopeBranchId = forcedBranchId ?? (selectedBranchId === 'all' ? undefined : selectedBranchId)
 

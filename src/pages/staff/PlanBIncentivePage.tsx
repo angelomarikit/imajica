@@ -22,7 +22,11 @@ import { matchesStaffBranch } from '@/services/staffDirectoryService'
 import { getAccessUsers } from '@/services/userAccessService'
 import type { PlanBIncentive } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
-import { canAccessPeopleOps, isFranchiseBranchOwner } from '@/utils/franchiseAccess'
+import {
+  canAccessHqOps,
+  canAccessPeopleOps,
+  isFranchiseBranchOwner,
+} from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
 
 type Recipient = {
@@ -40,7 +44,7 @@ function monthInputValue(periodMonth: string) {
 export function PlanBIncentivePage() {
   const { user } = useAuth()
   const forcedBranchId = useForcedBranchId()
-  const isHq = canAccessPeopleOps(user)
+  const isHq = canAccessPeopleOps(user) || canAccessHqOps(user)
   const branchOwner = isFranchiseBranchOwner(user)
   const [tick, setTick] = useState(0)
   const [loading, setLoading] = useState(true)

@@ -60,6 +60,7 @@ import {
   isFranchiseBranchOwner,
   isHrRole,
   isAnyMarketingRole,
+  isOperationsManagerRole,
   isTimeclockStaff,
 } from '@/utils/franchiseAccess'
 import { Button } from '@/components/ui/Button'
@@ -635,6 +636,169 @@ function buildFranchiseOwnerNavSections(
 ]
 }
 
+/**
+ * Operations Manager — org-wide: employee My* + Clinic Manager modules + HQ warehouse/stock.
+ * No HR people-ops ownership, marketing campaigns, or User Access / Branches CRUD.
+ */
+function buildOperationsManagerNavSections(handoffUnread = 0): NavSection[] {
+  return [
+    {
+      items: [
+        { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        {
+          to: '/admin/marketing/handoffs',
+          label: 'Marketing Handoffs',
+          icon: MessageCircle,
+          badgeCount: handoffUnread,
+        },
+        { to: '/admin/attendance', label: 'My Attendance', icon: Clock },
+        { to: '/admin/my-leave', label: 'My Leave', icon: CalendarOff },
+        { to: '/admin/my-training', label: 'My Training', icon: GraduationCap },
+        { to: '/admin/commission-sales', label: 'My Commission & Sales', icon: Wallet },
+        MILESTONE_2M_NAV,
+        { to: '/admin/hr/leave', label: 'Leave Approvals', icon: CalendarOff },
+        { to: '/admin/my-salary', label: 'My Salary', icon: Banknote },
+      ],
+    },
+    {
+      category: 'Scheduling',
+      items: [
+        { to: '/admin/appointments', label: 'Client Scheduling', icon: CalendarDays },
+        { to: '/admin/booking', label: 'Booking', icon: ShoppingBag },
+      ],
+    },
+    {
+      category: 'Sales',
+      items: [
+        { to: '/admin/payments', label: 'Franchise Sales', icon: Wallet },
+        { to: '/admin/doctors-fee', label: 'Doctors Fee', icon: Stethoscope },
+      ],
+    },
+    {
+      category: 'Catalog',
+      items: [
+        {
+          label: 'Services & Packages',
+          icon: Package,
+          children: [
+            { to: '/admin/catalog/services/new', label: 'New Service', icon: Plus },
+            { to: '/admin/catalog/services', label: 'Services List', icon: List, end: true },
+            { to: '/admin/catalog/packages', label: 'Packages List', icon: Boxes, end: true },
+          ],
+        },
+        {
+          label: 'Products',
+          icon: ShoppingCart,
+          children: [
+            { to: '/admin/catalog/products', label: 'Products', icon: Box, end: true },
+            { to: '/admin/catalog/products/new', label: 'Add Product', icon: Plus },
+            { to: '/admin/catalog/consumables', label: 'Consumables', icon: FlaskConical, end: true },
+          ],
+        },
+        {
+          label: 'Promotions',
+          icon: Ticket,
+          children: [
+            { to: '/admin/catalog/promotions/new', label: 'New Coupon', icon: Plus },
+            { to: '/admin/catalog/promotions', label: 'Coupon List', icon: List, end: true },
+          ],
+        },
+      ],
+    },
+    {
+      category: 'Customers',
+      items: [
+        {
+          label: 'Customers',
+          icon: Users,
+          children: [
+            { to: '/admin/clients/new', label: 'New Customer', icon: UserPlus },
+            { to: '/admin/clients', label: 'Customer List', icon: Users, end: true },
+          ],
+        },
+      ],
+    },
+    {
+      category: 'Administration',
+      items: [
+        {
+          label: 'Operations',
+          icon: Settings,
+          children: [
+            { to: '/admin/operations/expenses', label: 'Expenses', icon: Receipt, end: true },
+            {
+              to: '/admin/operations/branch-orders',
+              label: 'Branch Orders',
+              icon: ClipboardList,
+              end: true,
+            },
+            {
+              to: '/admin/operations/franchise-orders',
+              label: 'Franchise Orders',
+              icon: FileText,
+              end: true,
+            },
+            { to: '/admin/operations/waste', label: 'Waste', icon: TriangleAlert, end: true },
+            {
+              to: '/admin/catalog/products',
+              label: 'Branch Stock',
+              icon: ShoppingBasket,
+              end: true,
+            },
+            { to: '/admin/operations/warehouse', label: 'Warehouse', icon: ShoppingBasket, end: true },
+            {
+              to: '/admin/operations/stock-transfers',
+              label: 'Stock Transfers',
+              icon: ArrowLeftRight,
+              end: true,
+            },
+          ],
+        },
+        {
+          label: 'Forms',
+          icon: FileText,
+          children: [
+            { to: '/admin/forms/imajica', label: 'Imajica Forms', icon: ClipboardList, end: true },
+          ],
+        },
+      ],
+    },
+    {
+      category: 'Team',
+      items: [
+        {
+          label: 'Staff',
+          icon: User,
+          children: [
+            { to: '/admin/staff/new', label: 'New Staff', icon: UserPlus },
+            { to: '/admin/staff', label: 'Staff List', icon: Users, end: true },
+          ],
+        },
+        { to: '/admin/plan-b-incentive', label: 'Plan B Incentive', icon: Award },
+      ],
+    },
+    {
+      category: 'Reports',
+      items: [
+        { to: '/admin/analytics/sales-reports', label: 'Branch Sales', icon: PieChart },
+        {
+          to: '/admin/analytics/payment-channels',
+          label: 'Payment Channels Report',
+          icon: CreditCard,
+        },
+        {
+          to: '/admin/reports/branch-attendance',
+          label: 'Branch Attendance',
+          icon: Clock,
+        },
+      ],
+    },
+    {
+      items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
+    },
+  ]
+}
+
 function linkClass(isActive: boolean) {
   return cn(
     'relative flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] transition-colors',
@@ -825,6 +989,9 @@ export function AdminSidebar({
         branchId: user?.branchId,
         branchName: user?.branchName,
       })
+    }
+    if (isOperationsManagerRole(user?.role)) {
+      return buildOperationsManagerNavSections(handoffUnread)
     }
     if (isHrRole(user?.role)) return buildHrNavSections(hrClinics)
     if (isAnyMarketingRole(user?.role)) return buildMarketingNavSections()

@@ -33,7 +33,11 @@ import {
   CLINIC_MANAGER_COMMISSION_RATE,
   STAFF_SALES_COMMISSION_RATE,
 } from '@/constants/payrollIncentives'
-import { isFranchiseBranchOwner, isHqRole } from '@/utils/franchiseAccess'
+import {
+  isFranchiseBranchOwner,
+  isHqRole,
+  isOperationsManagerRole,
+} from '@/utils/franchiseAccess'
 
 type TypeFilter = 'all' | AnalyticsSaleType
 
@@ -71,7 +75,7 @@ export function SalesReportsPage() {
   const forcedBranchId = useForcedBranchId()
   const effectiveBranchId = useEffectiveBranchId()
   const franchiseOwner = isFranchiseBranchOwner(user)
-  const isHq = isHqRole(user?.role)
+  const isHq = isHqRole(user?.role) || isOperationsManagerRole(user?.role)
   /** CM locked to clinic; HQ uses header branch (or all). */
   const reportBranchId =
     forcedBranchId || (effectiveBranchId !== 'all' ? effectiveBranchId : undefined)

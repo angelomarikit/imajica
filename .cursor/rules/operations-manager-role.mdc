@@ -1,0 +1,25 @@
+---
+description: Operations Manager (OM) is org-wide clinic ops + HQ warehouse/orders, with employee My* features
+alwaysApply: true
+---
+
+# Operations Manager (OM) role
+
+| Product name | DB role id | Branch assignment |
+|---|---|---|
+| **Operations Manager** | `OPERATIONS_MANAGER` | HQ sentinel → **All Branches (organization)** |
+
+## Access
+
+- Can use header **All Branches** + filter to one clinic
+- **Employee (My*)**: My Attendance, My Leave, My Training, My Commission & Sales, My Salary, 2M Milestone
+- **Clinic ops** (same modules as Clinic Manager): Dashboard, Scheduling, Sales, Catalog, Customers, Forms, Leave Approvals, Staff list, Plan B, Branch Sales / Payment Channels / Branch Attendance
+- **HQ operations extras**: Warehouse, Stock Transfers (plus franchise/branch orders, expenses, waste already in CM ops)
+- **Not** full HQ: no User Access CRUD, no Branches directory CRUD, no Marketing campaigns admin
+- **Not** HR people-ops owner: no Recruitment / New Hires / Exits / org Salary / KPIs / Deductions modules
+
+## Implementation notes
+
+- Frontend: `isOperationsManagerRole`, `canAccessClinicOps`, `canAccessHqOps`, `RequireOperationsAdmin`, `buildOperationsManagerNavSections`
+- Create account: role `OPERATIONS_MANAGER` → branch locks to **All Branches (organization)**
+- Migration: `20261018000092_operations_manager_role.sql`

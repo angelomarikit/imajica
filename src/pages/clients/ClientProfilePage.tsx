@@ -28,7 +28,7 @@ import { getClinicBranches, resolveClinicBranchId } from '@/services/branchServi
 import type { Client } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
+import { isBranchOwner, isHqRole, isOperationsManagerRole } from '@/utils/franchiseAccess'
 
 const fieldLabel =
   'mb-1.5 block text-[11px] font-bold uppercase tracking-[0.12em] text-charcoal'
@@ -94,7 +94,7 @@ export function ClientProfilePage() {
 
   const canViewClient = useMemo(() => {
     if (!client) return true
-    if (isHqRole(user?.role)) return true
+    if (isHqRole(user?.role) || isOperationsManagerRole(user?.role)) return true
     if (!isBranchOwner(user) && !forcedBranchId) return true
     const branchId = forcedBranchId ?? user?.branchId
     const clinicId = resolveClinicBranchId(branchId) || resolveClinicBranchId(user?.branchName)

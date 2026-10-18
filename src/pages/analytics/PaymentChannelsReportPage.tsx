@@ -19,6 +19,7 @@ import {
   HQ_SENTINEL_BRANCH_ID,
   isFranchiseBranchOwner,
   isHqRole,
+  isOperationsManagerRole,
 } from '@/utils/franchiseAccess'
 
 const inputClass =
@@ -49,7 +50,7 @@ export function PaymentChannelsReportPage() {
   const { selectedBranchId, setSelectedBranchId, selectedBranch } = useBranch()
   const forcedBranchId = useForcedBranchId()
   const clinicOnly = isFranchiseBranchOwner(user)
-  const hqUser = isHqRole(user?.role)
+  const hqUser = isHqRole(user?.role) || isOperationsManagerRole(user?.role)
   const range = currentMonthRange()
 
   const clinicBranches = useMemo(

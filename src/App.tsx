@@ -9,6 +9,7 @@ import {
   RequireClient,
   RequireHqAdmin,
   RequireMarketing,
+  RequireOperationsAdmin,
   RequirePeopleOps,
   RequireRole,
   RequireStaff,
@@ -17,7 +18,12 @@ import { AuthProvider, isStaffRole, useAuth } from '@/contexts/AuthContext'
 import { BranchProvider } from '@/contexts/BranchContext'
 import { SalesDataBootstrap } from '@/components/SalesDataBootstrap'
 import { queryClient } from '@/lib/queryClient'
-import { getStaffHomePath, isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
+import {
+  getStaffHomePath,
+  isBranchOwner,
+  isHqRole,
+  isOperationsManagerRole,
+} from '@/utils/franchiseAccess'
 import { ForgotPasswordPage, ResetPasswordPage } from '@/pages/auth/ForgotPasswordPage'
 import { LoginPage } from '@/pages/auth/LoginPage'
 import { RegisterPage } from '@/pages/auth/RegisterPage'
@@ -121,9 +127,14 @@ function HomeRedirect() {
 
 function AdminDashboardGate() {
   const { user } = useAuth()
-  // HQ sees org-wide dashboard; clinic manager sees their store only.
+  // HQ / OM see org-wide dashboard; clinic manager sees their store only.
   // HR uses people-ops home (attendance), not the sales dashboard.
-  if (user && !isHqRole(user.role) && !isBranchOwner(user)) {
+  if (
+    user &&
+    !isHqRole(user.role) &&
+    !isOperationsManagerRole(user.role) &&
+    !isBranchOwner(user)
+  ) {
     return <Navigate to={getStaffHomePath(user)} replace />
   }
   return <DashboardPage />
@@ -175,7 +186,9 @@ export default function App() {
                 <Route
                   path="plan-b-incentive"
                   element={
-                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'BRANCH_ADMIN']}>
+                    <RequireRole
+                      roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'OPERATIONS_MANAGER', 'BRANCH_ADMIN']}
+                    >
                       <PlanBIncentivePage />
                     </RequireRole>
                   }
@@ -183,7 +196,9 @@ export default function App() {
                 <Route
                   path="reports/branch-attendance"
                   element={
-                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'BRANCH_ADMIN']}>
+                    <RequireRole
+                      roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'OPERATIONS_MANAGER', 'BRANCH_ADMIN']}
+                    >
                       <BranchAttendancePage />
                     </RequireRole>
                   }
@@ -223,7 +238,9 @@ export default function App() {
                 <Route
                   path="hr/salary/:branchId"
                   element={
-                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'BRANCH_ADMIN']}>
+                    <RequireRole
+                      roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'OPERATIONS_MANAGER', 'BRANCH_ADMIN']}
+                    >
                       <HrClinicSalaryPage />
                     </RequireRole>
                   }
@@ -255,7 +272,9 @@ export default function App() {
                 <Route
                   path="hr/leave"
                   element={
-                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'BRANCH_ADMIN']}>
+                    <RequireRole
+                      roles={['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'OPERATIONS_MANAGER', 'BRANCH_ADMIN']}
+                    >
                       <HrLeavePage />
                     </RequireRole>
                   }
@@ -455,7 +474,9 @@ export default function App() {
                 <Route
                   path="analytics/payment-channels"
                   element={
-                    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'BRANCH_ADMIN']}>
+                    <RequireRole
+                      roles={['SUPER_ADMIN', 'HQ_ADMIN', 'OPERATIONS_MANAGER', 'BRANCH_ADMIN']}
+                    >
                       <PaymentChannelsReportPage />
                     </RequireRole>
                   }
@@ -503,6 +524,7 @@ export default function App() {
                       roles={[
                         'SUPER_ADMIN',
                         'HQ_ADMIN',
+                        'OPERATIONS_MANAGER',
                         'BRANCH_ADMIN',
                         'RECEPTIONIST',
                         'STAFF',
@@ -584,29 +606,36 @@ export default function App() {
                   element={<NewFranchiseOrderPage />}
                 />
                 <Route path="operations/waste" element={<WasteInventoryPage />} />
-                <Route path="operations/warehouse" element={<WarehousePage />} />
+                <Route
+                  path="operations/warehouse"
+                  element={
+                    <RequireOperationsAdmin>
+                      <WarehousePage />
+                    </RequireOperationsAdmin>
+                  }
+                />
                 <Route
                   path="operations/warehouse/new"
                   element={
-                    <RequireHqAdmin>
+                    <RequireOperationsAdmin>
                       <AddWarehouseItemPage />
-                    </RequireHqAdmin>
+                    </RequireOperationsAdmin>
                   }
                 />
                 <Route
                   path="operations/stock-transfers"
                   element={
-                    <RequireHqAdmin>
+                    <RequireOperationsAdmin>
                       <StockTransfersPage />
-                    </RequireHqAdmin>
+                    </RequireOperationsAdmin>
                   }
                 />
                 <Route
                   path="operations/stock-transfers/new"
                   element={
-                    <RequireHqAdmin>
+                    <RequireOperationsAdmin>
                       <NewStockTransferPage />
-                    </RequireHqAdmin>
+                    </RequireOperationsAdmin>
                   }
                 />
                 <Route path="forms/imajica" element={<ImajicaFormsPage />} />

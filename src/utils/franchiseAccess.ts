@@ -3,7 +3,14 @@ import { getBranches } from '@/services/branchService'
 
 const HQ_ROLES: UserRole[] = ['SUPER_ADMIN', 'HQ_ADMIN']
 /** Org-wide roles land on the HQ sentinel branch (not a clinic). */
-export const ORG_WIDE_ROLES: UserRole[] = ['SUPER_ADMIN', 'HQ_ADMIN', 'HR', 'MARKETING', 'CLIENT']
+export const ORG_WIDE_ROLES: UserRole[] = [
+  'SUPER_ADMIN',
+  'HQ_ADMIN',
+  'HR',
+  'MARKETING',
+  'OPERATIONS_MANAGER',
+  'CLIENT',
+]
 export const HQ_SENTINEL_BRANCH_ID = '00000000-0000-0000-0000-000000000001'
 
 /** HQ / org-wide admins (full system) */
@@ -31,6 +38,11 @@ export function isAnyMarketingRole(role: UserRole | undefined | null): boolean {
   return isMarketingRole(role) || isBranchMarketingRole(role)
 }
 
+/** Operations Manager — org-wide clinic ops + HQ warehouse/orders (not full HQ). */
+export function isOperationsManagerRole(role: UserRole | undefined | null): boolean {
+  return role === 'OPERATIONS_MANAGER'
+}
+
 /** HQ or any Marketing role — marketing tools. */
 export function canAccessMarketing(user: AuthSessionUser | null | undefined): boolean {
   return isHqRole(user?.role) || isAnyMarketingRole(user?.role)
@@ -42,15 +54,31 @@ export function canAccessPeopleOps(user: AuthSessionUser | null | undefined): bo
 }
 
 /**
+ * Clinic Manager or Operations Manager — clinic ops modules
+ * (scheduling, sales, catalog, customers, forms, etc.).
+ */
+export function canAccessClinicOps(user: AuthSessionUser | null | undefined): boolean {
+  return isBranchOwner(user) || isOperationsManagerRole(user?.role)
+}
+
+/**
+ * HQ or Operations Manager — warehouse, stock transfers, franchise ops admin.
+ * Does not include Super Admin–only user-access / branch directory CRUD.
+ */
+export function canAccessHqOps(user: AuthSessionUser | null | undefined): boolean {
+  return isHqRole(user?.role) || isOperationsManagerRole(user?.role)
+}
+
+/**
  * Who may approve / designate leave:
- * HR + HQ now; clinic managers for their own branch (ready for that rollout).
+ * HR + HQ + OM; clinic managers for their own branch.
  */
 export function canApproveLeave(
   user: AuthSessionUser | null | undefined,
   leaveBranchId?: string | null,
 ): boolean {
   if (!user) return false
-  if (canAccessPeopleOps(user)) return true
+  if (canAccessPeopleOps(user) || isOperationsManagerRole(user.role)) return true
   if (!isBranchOwner(user)) return false
   if (!leaveBranchId) return true
   return user.branchId === leaveBranchId
@@ -114,13 +142,13 @@ export function canAccessHqAdmin(user: AuthSessionUser | null | undefined): bool
   return isHqRole(user?.role)
 }
 
-/** Post-login / default admin home. HQ + clinic managers → Dashboard; HR → attendance; clinical staff → attendance. */
+/** Post-login / default admin home. HQ + OM + clinic managers → Dashboard; HR → salary; clinical staff → attendance. */
 export function getStaffHomePath(user: AuthSessionUser | null | undefined): string {
   if (!user) return '/login'
   if (isHrRole(user.role)) return '/admin/hr/salary'
   if (isAnyMarketingRole(user.role)) return '/admin/marketing/dashboard'
   if (isTimeclockStaff(user)) return '/admin/attendance'
-  if (isBranchOwner(user)) return '/admin/dashboard'
+  if (isOperationsManagerRole(user.role) || isBranchOwner(user)) return '/admin/dashboard'
   if (isStaffRoleLike(user.role)) return '/admin/dashboard'
   return '/client/dashboard'
 }

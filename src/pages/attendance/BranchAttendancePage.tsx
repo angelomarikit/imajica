@@ -32,7 +32,12 @@ import {
   type StaffAttendanceSummary,
 } from '@/services/attendanceService'
 import { listAccessUsers } from '@/services/userAccessService'
-import { TIMECLOCK_ROLES, canAccessPeopleOps, isBranchOwner } from '@/utils/franchiseAccess'
+import {
+  TIMECLOCK_ROLES,
+  canAccessHqOps,
+  canAccessPeopleOps,
+  isBranchOwner,
+} from '@/utils/franchiseAccess'
 import { cn } from '@/utils/cn'
 import { formatRoleLabel } from '@/utils/roleLabels'
 import type { AccessUser, UserRole } from '@/types'
@@ -54,7 +59,7 @@ export function BranchAttendancePage() {
   const { branches } = useBranch()
   const forcedBranchId = useForcedBranchId()
   const effectiveBranchId = useEffectiveBranchId()
-  const allowed = isBranchOwner(user) || canAccessPeopleOps(user)
+  const allowed = isBranchOwner(user) || canAccessPeopleOps(user) || canAccessHqOps(user)
 
   // Branch admins are always locked to their clinic; HQ must pick a branch (not "all")
   const branchId =

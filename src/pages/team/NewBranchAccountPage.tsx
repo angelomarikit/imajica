@@ -15,6 +15,7 @@ import {
 import { formatRoleLabel } from '@/utils/roleLabels'
 
 const BRANCH_ROLE_OPTIONS = [
+  'OPERATIONS_MANAGER',
   'HR',
   'MARKETING',
   'BRANCH_MARKETING',
@@ -192,7 +193,8 @@ export function NewBranchAccountPage() {
                 ))}
               </select>
               <p className="mt-1.5 text-xs text-slate-ui">
-                <strong>Marketing</strong> = org leader (All Branches).{' '}
+                <strong>Operations Manager</strong> / <strong>Marketing</strong> /{' '}
+                <strong>HR</strong> = All Branches.{' '}
                 <strong>Branch Marketing</strong> = one clinic only (pick the branch below).
               </p>
             </label>
@@ -220,7 +222,7 @@ export function NewBranchAccountPage() {
                   Select branch from directory
                 </option>
                 <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
-                  All Branches (organization) — HR / Marketing
+                  All Branches (organization) — OM / HR / Marketing
                 </option>
                 {branches.map((b) => (
                   <option key={b.id} value={b.id} className="text-[#073D2C]">
