@@ -216,12 +216,6 @@ function pickPrimaryUserId(userIds: string[], punches: AttendancePunch[]): strin
   return best
 }
 
-function prorateMonthly(amount: number, scheduledInPeriod: number): number {
-  const base = PAYROLL_DEFAULT_SHIFT.mbsDaysPerMonth
-  if (scheduledInPeriod <= 0) return 0
-  return Math.round(((amount * scheduledInPeriod) / base) * 100) / 100
-}
-
 function computeDay(
   dateKey: string,
   session: AttendanceSession | undefined,
