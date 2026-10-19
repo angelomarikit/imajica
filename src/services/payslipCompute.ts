@@ -126,6 +126,26 @@ export function buildPayslipDocument(input: {
     })
   }
 
+  const sl = row.sickLeaveDays || 0
+  const vl = row.vacationLeaveDays || 0
+  if (sl + vl > 0 || (row.leavePay || 0) > 0) {
+    const parts: string[] = []
+    if (sl > 0) parts.push(`${sl} SL`)
+    if (vl > 0) parts.push(`${vl} VL`)
+    lines.push({
+      id: 'leave-sl-vl',
+      kind: 'earning',
+      label: 'SL / VL pay',
+      computation: `${parts.join(' + ') || 'Leave'} × ${e.salaryPerDay.toLocaleString('en-PH', {
+        style: 'currency',
+        currency: 'PHP',
+      })}/day (1 leave day = 1 regular full day)${
+        row.leaveManualOverride ? ' · HR manual' : ' · approved leave'
+      }`,
+      amount: round2(row.leavePay || (sl + vl) * e.salaryPerDay),
+    })
+  }
+
   if (inc.incentivesDeferredToSecondCut) {
     lines.push({
       id: 'incentives-deferred',
@@ -357,7 +377,9 @@ export function buildPayslipDocument(input: {
     })
   }
 
-  const grossEarnings = round2(row.grossPay + (row.overtimePay || 0) + (row.allowance || 0))
+  const grossEarnings = round2(
+    row.grossPay + (row.overtimePay || 0) + (row.leavePay || 0) + (row.allowance || 0),
+  )
   const totalIncentives = round2(
     (inc.staffSalesCommission || 0) +
       (inc.isClinicManager || inc.isOperationsManager ? inc.managerCommission || 0 : 0) +

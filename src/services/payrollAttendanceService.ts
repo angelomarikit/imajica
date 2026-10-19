@@ -25,6 +25,13 @@ import {
   listPayrollProfilesForHr,
   type PayrollProfileRecord,
 } from '@/services/payrollProfileService'
+import {
+  countApprovedLeaveInPeriod,
+  findPayrollLeaveAdjustment,
+  leaveYear,
+  listLeaveRequests,
+  preloadPayrollLeaveAdjustments,
+} from '@/services/payrollLeaveService'
 
 export const ATTENDANCE_INCENTIVE_AMOUNT = ATTENDANCE_INCENTIVE_AMOUNT_CONST
 
@@ -110,7 +117,7 @@ export function scheduledDateKeys(from: string, to: string): string[] {
 
 export type PayrollDayDetail = {
   dateKey: string
-  status: 'present' | 'absent' | 'open' | 'off'
+  status: 'present' | 'absent' | 'open' | 'off' | 'leave_sl' | 'leave_vl'
   timeIn: string | null
   timeOut: string | null
   lateMinutes: number
@@ -132,6 +139,14 @@ export type AttendancePayrollRow = {
   lateMinutes: number
   undertimeMinutes: number
   overtimeMinutes: number
+  /** Sick leave days paid this period (1 day = 1 full daily rate) */
+  sickLeaveDays: number
+  /** Vacation leave days paid this period */
+  vacationLeaveDays: number
+  /** (SL + VL) × salary/day */
+  leavePay: number
+  /** True when HR saved a manual SL/VL override for this period */
+  leaveManualOverride: boolean
   /** daysPresent × salary/day */
   grossPay: number
   lateDeduction: number
@@ -294,6 +309,12 @@ function buildRow(
   punches: AttendancePunch[],
   from: string,
   to: string,
+  leaveOpts?: {
+    leaveDateKeys?: Map<string, 'sick' | 'vacation'>
+    sickLeaveDays?: number
+    vacationLeaveDays?: number
+    leaveManualOverride?: boolean
+  },
 ): AttendancePayrollRow {
   const matchedIds = resolveUserIds(employee)
   const idSet = new Set(matchedIds)
@@ -309,13 +330,32 @@ function buildRow(
     if (!prev || (!prev.timeOut && s.timeOut)) byDate.set(s.dateKey, s)
   }
 
+  const leaveDateKeys = leaveOpts?.leaveDateKeys || new Map<string, 'sick' | 'vacation'>()
   const scheduleKeys = scheduledDateKeys(from, to)
-  const dayDetails = scheduleKeys.map((key) =>
-    computeDay(key, byDate.get(key), employee.salaryPerDay),
-  )
+  const dayDetails = scheduleKeys.map((key) => {
+    const session = byDate.get(key)
+    const leaveKind = leaveDateKeys.get(key)
+    // On leave with no punch → paid leave day (not absent)
+    if (leaveKind && !session) {
+      return {
+        dateKey: key,
+        status: leaveKind === 'sick' ? ('leave_sl' as const) : ('leave_vl' as const),
+        timeIn: null,
+        timeOut: null,
+        lateMinutes: 0,
+        undertimeMinutes: 0,
+        overtimeMinutes: 0,
+        lateDeduction: 0,
+        undertimeDeduction: 0,
+        overtimePay: 0,
+        hours: null,
+      }
+    }
+    return computeDay(key, session, employee.salaryPerDay)
+  })
 
   const daysPresent = dayDetails.filter((d) => d.status === 'present' || d.status === 'open').length
-  const daysAbsent = dayDetails.filter((d) => d.status === 'absent').length
+  let daysAbsent = dayDetails.filter((d) => d.status === 'absent').length
   const daysOpen = dayDetails.filter((d) => d.status === 'open').length
   const lateMinutes = dayDetails.reduce((sum, d) => sum + d.lateMinutes, 0)
   const undertimeMinutes = dayDetails.reduce((sum, d) => sum + d.undertimeMinutes, 0)
@@ -323,12 +363,31 @@ function buildRow(
   const lateDeduction = dayDetails.reduce((sum, d) => sum + d.lateDeduction, 0)
   const undertimeDeduction = dayDetails.reduce((sum, d) => sum + d.undertimeDeduction, 0)
   const overtimePay = dayDetails.reduce((sum, d) => sum + d.overtimePay, 0)
+
+  // Auto from approved filings (date-tagged) — HR manual override replaces totals
+  const autoSl = dayDetails.filter((d) => d.status === 'leave_sl').length
+  const autoVl = dayDetails.filter((d) => d.status === 'leave_vl').length
+  const leaveManualOverride = Boolean(leaveOpts?.leaveManualOverride)
+  const sickLeaveDays = leaveManualOverride
+    ? Math.max(0, Number(leaveOpts?.sickLeaveDays) || 0)
+    : autoSl
+  const vacationLeaveDays = leaveManualOverride
+    ? Math.max(0, Number(leaveOpts?.vacationLeaveDays) || 0)
+    : autoVl
+
+  // Manual days beyond dated filings: convert remaining absences into paid leave
+  if (leaveManualOverride) {
+    const extra = Math.max(0, sickLeaveDays + vacationLeaveDays - (autoSl + autoVl))
+    daysAbsent -= Math.min(daysAbsent, extra)
+  }
+
+  const leavePay = Math.round((sickLeaveDays + vacationLeaveDays) * employee.salaryPerDay * 100) / 100
   const absenceDeduction = daysAbsent * employee.salaryPerDay
   const grossPay = daysPresent * employee.salaryPerDay
 
   const scheduledCount = scheduleKeys.length
   const isSecondCut = shouldApplyMonthlyBenefits(from, to)
-  // 1st cut (1–15): pure basic − late/undertime + OT. No statutory / allowance / benefits.
+  // 1st cut (1–15): pure basic − late/undertime + OT + SL/VL. No statutory / allowance / benefits.
   // 2nd cut (16–end): full monthly statutory, allowance, benefits (not prorated across cuts).
   const sssDeduction = isSecondCut
     ? Math.round((employee.sssEmployee + employee.mpfEmployee) * 100) / 100
@@ -357,10 +416,10 @@ function buildRow(
   const attendanceDeductions = lateDeduction + undertimeDeduction + absenceDeduction
   const totalDeductions =
     statutoryTotal + lateDeduction + undertimeDeduction + benefitsDeduction
-  // Absences reduce gross (not paid) — do not double-count in net
+  // Absences reduce gross (not paid) — SL/VL pay at full daily rate
   const netPay = Math.max(
     0,
-    Math.round((grossPay + overtimePay + allowance - totalDeductions) * 100) / 100,
+    Math.round((grossPay + overtimePay + leavePay + allowance - totalDeductions) * 100) / 100,
   )
 
   return {
@@ -373,6 +432,10 @@ function buildRow(
     lateMinutes,
     undertimeMinutes,
     overtimeMinutes,
+    sickLeaveDays,
+    vacationLeaveDays,
+    leavePay,
+    leaveManualOverride,
     grossPay,
     lateDeduction,
     undertimeDeduction,
@@ -454,10 +517,13 @@ export async function computeAttendancePayroll(
   const scopeIds =
     opts?.branchIds?.length ? opts.branchIds : ALL_CLINIC_BRANCH_IDS
   const allowed = new Set(scopeIds)
-  const [punches, profiles] = await Promise.all([
+  const year = Number(from.slice(0, 4)) || leaveYear()
+  const [punches, profiles, leaveRequests] = await Promise.all([
     listAttendanceForBranches(scopeIds, from, to),
     listPayrollProfilesForHr(),
+    listLeaveRequests({ status: 'approved', year }),
   ])
+  await preloadPayrollLeaveAdjustments()
 
   let roster = profiles
     .filter((p) => p.status !== 'inactive')
@@ -477,7 +543,56 @@ export async function computeAttendancePayroll(
   }
 
   return roster
-    .map((employee) => buildRow(employee, punches, from, to))
+    .map((employee) => {
+      const userIds = resolveUserIds(employee)
+      const emails = [employee.email, ...employee.matchEmails]
+      const auto = countApprovedLeaveInPeriod({
+        userIds,
+        employeeName: employee.fullName,
+        employeeEmail: employee.email,
+        employeeEmails: emails,
+        requests: leaveRequests,
+        periodFrom: from,
+        periodTo: to,
+      })
+      let overrideAlt = findPayrollLeaveAdjustment({
+        userId: employee.id,
+        matchKey: employee.email,
+        email: employee.email,
+        periodFrom: from,
+        periodTo: to,
+      })
+      if (!overrideAlt) {
+        for (const em of emails) {
+          const key = em.trim().toLowerCase()
+          if (!key) continue
+          overrideAlt = findPayrollLeaveAdjustment({
+            matchKey: key,
+            email: key,
+            periodFrom: from,
+            periodTo: to,
+          })
+          if (overrideAlt) break
+        }
+      }
+      if (
+        !overrideAlt &&
+        employee.fullName.toLowerCase().includes('veronica')
+      ) {
+        overrideAlt = findPayrollLeaveAdjustment({
+          matchKey: 'veronnemay@gmail.com',
+          periodFrom: from,
+          periodTo: to,
+        })
+      }
+
+      return buildRow(employee, punches, from, to, {
+        leaveDateKeys: auto.leaveDateKeys,
+        sickLeaveDays: overrideAlt?.sickDays,
+        vacationLeaveDays: overrideAlt?.vacationDays,
+        leaveManualOverride: Boolean(overrideAlt),
+      })
+    })
     .sort((a, b) => a.employee.fullName.localeCompare(b.employee.fullName))
 }
 

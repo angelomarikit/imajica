@@ -15,6 +15,7 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { Dialog } from '@/components/ui/Dialog'
 import { PayslipDocument } from '@/components/payroll/PayslipDocument'
 import { useAuth } from '@/contexts/AuthContext'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
@@ -31,6 +32,10 @@ import {
   computeAttendancePayroll,
   type AttendancePayrollRow,
 } from '@/services/payrollAttendanceService'
+import {
+  savePayrollLeaveAdjustment,
+  subscribePayrollLeaveAdjustments,
+} from '@/services/payrollLeaveService'
 import { subscribeEmployeeHr } from '@/services/staffDirectoryService'
 import { subscribePayrollProfiles } from '@/services/payrollProfileService'
 import { buildPayslipDocument, type BuiltPayslip } from '@/services/payslipCompute'
@@ -150,8 +155,13 @@ export function AttendancePayrollPage({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [salesTick, setSalesTick] = useState(0)
   const [branchPunches, setBranchPunches] = useState<AttendancePunch[]>([])
+  const [leaveEditRow, setLeaveEditRow] = useState<AttendancePayrollRow | null>(null)
+  const [leaveSlDraft, setLeaveSlDraft] = useState('0')
+  const [leaveVlDraft, setLeaveVlDraft] = useState('0')
+  const [leaveSaving, setLeaveSaving] = useState(false)
 
   const branchKey = branchIds?.slice().sort().join(',') ?? ''
+  const canEditLeave = canAccessPeopleOps(user)
 
   async function load() {
     setLoading(true)
@@ -213,10 +223,14 @@ export function AttendancePayrollPage({
     const unsubPayroll = subscribePayrollProfiles(() => {
       void load()
     })
+    const unsubLeave = subscribePayrollLeaveAdjustments(() => {
+      void load()
+    })
     return () => {
       unsubAttendance()
       unsubHr()
       unsubPayroll()
+      unsubLeave()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, branchKey])
@@ -301,6 +315,9 @@ export function AttendancePayrollPage({
           'Salary/Day',
           'Days Present',
           'Days Absent',
+          'SL',
+          'VL',
+          'SL/VL Pay',
           'Late (min)',
           'OT (min)',
           'OT Pay',
@@ -323,6 +340,9 @@ export function AttendancePayrollPage({
           r.employee.salaryPerDay,
           r.daysPresent,
           r.daysAbsent,
+          r.sickLeaveDays || 0,
+          r.vacationLeaveDays || 0,
+          r.leavePay || 0,
           r.lateMinutes,
           r.overtimeMinutes || 0,
           r.overtimePay || 0,
@@ -478,22 +498,24 @@ export function AttendancePayrollPage({
             ) : filtered.length === 0 ? (
               <p className="p-4 text-sm text-slate-ui">No roster staff match this filter.</p>
             ) : (
-              <table className="w-full min-w-[720px] table-fixed text-left text-sm">
+              <table className="w-full min-w-[800px] table-fixed text-left text-sm">
                 <colgroup>
-                  <col className="w-[22%]" />
-                  <col className="w-[8%]" />
+                  <col className="w-[20%]" />
                   <col className="w-[7%]" />
-                  <col className="w-[11%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[6%]" />
                   <col className="w-[10%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[9%]" />
                   <col className="w-[12%]" />
                 </colgroup>
                 <thead className="bg-ivory-50 text-[11px] uppercase tracking-wide text-slate-ui">
                   <tr>
                     <th className="px-2 py-2.5 font-semibold">Staff</th>
                     <th className="px-2 py-2.5 font-semibold">Present</th>
+                    <th className="px-2 py-2.5 font-semibold">SL / VL</th>
                     <th className="px-2 py-2.5 font-semibold">Late</th>
                     <th className="px-2 py-2.5 font-semibold">OT</th>
                     <th className="px-2 py-2.5 font-semibold">Gross</th>
@@ -508,6 +530,8 @@ export function AttendancePayrollPage({
                     const active = r.employee.id === selectedId
                     const otMin = r.overtimeMinutes || 0
                     const otPay = r.overtimePay || 0
+                    const sl = r.sickLeaveDays || 0
+                    const vl = r.vacationLeaveDays || 0
                     return (
                       <tr
                         key={r.employee.id}
@@ -526,6 +550,37 @@ export function AttendancePayrollPage({
                         </td>
                         <td className="whitespace-nowrap px-2 py-3 tabular-nums">
                           {r.daysPresent}/{r.daysScheduled}
+                        </td>
+                        <td className="px-2 py-3">
+                          <button
+                            type="button"
+                            className={cn(
+                              'rounded-md px-1.5 py-0.5 text-left transition',
+                              canEditLeave
+                                ? 'hover:bg-emerald-100/80 focus:outline-none focus:ring-2 focus:ring-emerald-700/30'
+                                : '',
+                            )}
+                            title={
+                              canEditLeave
+                                ? 'Edit SL / VL days (1 day = full daily rate)'
+                                : 'SL / VL days'
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (!canEditLeave) return
+                              setLeaveEditRow(r)
+                              setLeaveSlDraft(String(sl))
+                              setLeaveVlDraft(String(vl))
+                            }}
+                          >
+                            <p className="font-medium tabular-nums text-[#073D2C]">
+                              {sl} / {vl}
+                            </p>
+                            <p className="text-[10px] text-slate-ui">
+                              {r.leavePay > 0 ? formatPeso(r.leavePay) : '—'}
+                              {r.leaveManualOverride ? ' · HR' : ''}
+                            </p>
+                          </button>
                         </td>
                         <td className="whitespace-nowrap px-2 py-3 tabular-nums">{r.lateMinutes}m</td>
                         <td className="px-2 py-3">
@@ -565,6 +620,85 @@ export function AttendancePayrollPage({
           )}
         </Card>
       </div>
+
+      <Dialog
+        open={Boolean(leaveEditRow)}
+        onClose={() => {
+          if (leaveSaving) return
+          setLeaveEditRow(null)
+        }}
+        title="SL / VL days"
+        description={
+          leaveEditRow
+            ? `${leaveEditRow.employee.fullName} · ${from} – ${to}. Each SL/VL day pays 1 full daily rate (₱${leaveEditRow.employee.salaryPerDay}). Approved leave filings auto-fill; save here to override for this cut.`
+            : undefined
+        }
+        confirmLabel={leaveSaving ? 'Saving…' : 'Save SL / VL'}
+        onConfirm={() => {
+          if (!leaveEditRow || leaveSaving) return
+          const sickDays = Math.max(0, Math.round(Number(leaveSlDraft) || 0))
+          const vacationDays = Math.max(0, Math.round(Number(leaveVlDraft) || 0))
+          setLeaveSaving(true)
+          void savePayrollLeaveAdjustment({
+            userId: leaveEditRow.matchedUserId || leaveEditRow.employee.id,
+            matchKey: leaveEditRow.employee.email,
+            email: leaveEditRow.employee.email,
+            employeeName: leaveEditRow.employee.fullName,
+            periodFrom: from,
+            periodTo: to,
+            sickDays,
+            vacationDays,
+          })
+            .then(() => {
+              toast.success(
+                `Saved ${sickDays} SL / ${vacationDays} VL for ${leaveEditRow.employee.fullName}`,
+              )
+              setLeaveEditRow(null)
+              void load()
+            })
+            .catch((err) => {
+              toast.error(err instanceof Error ? err.message : 'Could not save SL/VL')
+            })
+            .finally(() => setLeaveSaving(false))
+        }}
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block text-xs font-medium text-slate-ui">
+            Sick leave (SL)
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={leaveSlDraft}
+              onChange={(e) => setLeaveSlDraft(e.target.value)}
+              className="mt-1 w-full rounded-[10px] border border-border bg-white px-3 py-2 text-sm text-charcoal"
+            />
+          </label>
+          <label className="block text-xs font-medium text-slate-ui">
+            Vacation leave (VL)
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={leaveVlDraft}
+              onChange={(e) => setLeaveVlDraft(e.target.value)}
+              className="mt-1 w-full rounded-[10px] border border-border bg-white px-3 py-2 text-sm text-charcoal"
+            />
+          </label>
+        </div>
+        {leaveEditRow ? (
+          <p className="mt-3 text-xs text-slate-ui">
+            Leave pay preview:{' '}
+            <span className="font-semibold text-[#073D2C]">
+              {formatPeso(
+                (Math.max(0, Math.round(Number(leaveSlDraft) || 0)) +
+                  Math.max(0, Math.round(Number(leaveVlDraft) || 0))) *
+                  leaveEditRow.employee.salaryPerDay,
+              )}
+            </span>
+          </p>
+        ) : null}
+      </Dialog>
     </div>
   )
 }
@@ -640,7 +774,7 @@ function HrPayslipPreview({
 
   // Identity of the auto-calc source — reset draft only when staff / period changes,
   // not when background sales ticks fire (that was wiping manual edits before send).
-  const computeKey = `${row.employee.id}|${periodFrom}|${periodTo}|${row.daysPresent}|${row.employee.salaryPerDay}|${row.lateMinutes}`
+  const computeKey = `${row.employee.id}|${periodFrom}|${periodTo}|${row.daysPresent}|${row.employee.salaryPerDay}|${row.lateMinutes}|${row.sickLeaveDays}|${row.vacationLeaveDays}|${row.leavePay}`
 
   useEffect(() => {
     setDraft(computed)
