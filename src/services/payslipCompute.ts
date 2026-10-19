@@ -5,6 +5,9 @@ import {
   BRANCH_SALES_MILESTONE,
   CLINIC_MANAGER_COMMISSION_RATE,
   MILESTONE_PAYOUT_DAY,
+  OVERTIME_START_HOUR,
+  OVERTIME_START_MINUTE,
+  PAID_WORKDAY_MINUTES,
   STAFF_SALES_COMMISSION_RATE,
 } from '@/constants/payrollIncentives'
 import { STANDARD_WORK_HOURS_PER_DAY } from '@/constants/payrollRosterSeed'
@@ -51,6 +54,8 @@ export type PayslipIncentiveBundle = {
   attendanceAbsentDays: number
   planBAmount: number
   planBNotes: string
+  /** 1st cut (1–15): incentives/commission deferred to 16–end */
+  incentivesDeferredToSecondCut: boolean
 }
 
 export type BuiltPayslip = {
@@ -109,113 +114,137 @@ export function buildPayslipDocument(input: {
     amount: round2(row.grossPay),
   })
 
-  // Always show staff commission so HR can see the same base as My Commission (even ₱0)
-  lines.push({
-    id: 'staff-commission',
-    kind: inc.staffSalesCommission > 0 ? 'incentive' : 'info',
-    label: 'Staff sales commission (0.5%)',
-    computation:
-      inc.staffSalesAmount > 0
-        ? `${inc.staffSalesAmount.toLocaleString('en-PH', {
-            style: 'currency',
-            currency: 'PHP',
-          })} tagged paid sales (My Commission) × ${(STAFF_SALES_COMMISSION_RATE * 100).toFixed(1)}%`
-        : `No tagged paid sales in this period × ${(STAFF_SALES_COMMISSION_RATE * 100).toFixed(1)}%`,
-    amount: round2(inc.staffSalesCommission),
-    includeInTotal: inc.staffSalesCommission > 0,
-  })
-
-  if (inc.isClinicManager) {
+  if (row.overtimePay > 0 || row.overtimeMinutes > 0) {
+    const perMin = latePerMinuteRate(e.salaryPerDay)
+    const otLabel = `${OVERTIME_START_HOUR % 12 || 12}:${String(OVERTIME_START_MINUTE).padStart(2, '0')} ${OVERTIME_START_HOUR >= 12 ? 'PM' : 'AM'}`
     lines.push({
-      id: 'manager-commission',
-      kind: 'incentive',
-      label: 'Clinic manager commission (1%)',
-      computation: `${inc.managerBranchSales.toLocaleString('en-PH', {
-        style: 'currency',
-        currency: 'PHP',
-      })} branch paid sales × ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}%`,
-      amount: round2(inc.managerCommission),
-    })
-  } else if (inc.isOperationsManager) {
-    lines.push({
-      id: 'om-commission',
-      kind: 'incentive',
-      label: 'Operations manager commission (1%)',
-      computation: `${inc.managerBranchSales.toLocaleString('en-PH', {
-        style: 'currency',
-        currency: 'PHP',
-      })} all-clinic paid sales × ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}%`,
-      amount: round2(inc.managerCommission),
+      id: 'overtime',
+      kind: 'earning',
+      label: 'Overtime pay',
+      computation: `(₱${e.salaryPerDay.toLocaleString('en-PH')} ÷ ${PAID_WORKDAY_MINUTES} min) × ${row.overtimeMinutes} OT min after ${otLabel} = ₱${perMin.toFixed(4)}/min`,
+      amount: round2(row.overtimePay),
     })
   }
 
-  if (inc.milestoneExcluded) {
+  if (inc.incentivesDeferredToSecondCut) {
     lines.push({
-      id: 'milestone-locked',
+      id: 'incentives-deferred',
       kind: 'info',
-      label: '2M milestone team split',
+      label: 'Incentives & commission (deferred)',
       computation:
-        'Not included — Operations Manager is paid via 1% org commission, not the clinic 2M team split',
-      amount: 0,
-      includeInTotal: false,
-    })
-  } else if (inc.milestoneReached && inc.milestonePayoutEligible && inc.milestoneShare > 0) {
-    lines.push({
-      id: 'milestone-split',
-      kind: 'incentive',
-      label: '2M milestone team split (1%)',
-      computation: `Paid on the ${MILESTONE_PAYOUT_DAY}th · branch hit ₱${(BRANCH_SALES_MILESTONE / 1_000_000).toFixed(0)}M · shared 1% pool ${inc.milestonePool.toLocaleString(
-        'en-PH',
-        { style: 'currency', currency: 'PHP' },
-      )} spread by day among staff who timed in`,
-      amount: round2(inc.milestoneShare),
-    })
-  } else if (inc.milestoneReached && !inc.milestonePayoutEligible) {
-    lines.push({
-      id: 'milestone-locked',
-      kind: 'info',
-      label: '2M milestone team split',
-      computation: `Branch unlocked ₱2M this month, but share is paid only on the ${MILESTONE_PAYOUT_DAY}th (${inc.milestonePayoutDate}) — not on the 1st–15th cut`,
+        '1st cut (1–15) is basic pay only (− late/absent + OT). Commission, Plan B, attendance incentive, 2M split, and allowance pay on the 2nd cut (16–30/31)',
       amount: 0,
       includeInTotal: false,
     })
   } else {
+    // Always show staff commission so HR can see the same base as My Commission (even ₱0)
     lines.push({
-      id: 'milestone-locked',
-      kind: 'info',
-      label: '2M milestone team split',
-      computation: `Unlocks when branch paid sales ≥ ₱${BRANCH_SALES_MILESTONE.toLocaleString(
-        'en-PH',
-      )} this month (now ${inc.milestoneSales.toLocaleString('en-PH', {
-        style: 'currency',
-        currency: 'PHP',
-      })}). Share is paid once on the ${MILESTONE_PAYOUT_DAY}th among staff who timed in.`,
-      amount: 0,
-      includeInTotal: false,
+      id: 'staff-commission',
+      kind: inc.staffSalesCommission > 0 ? 'incentive' : 'info',
+      label: 'Staff sales commission (0.5%)',
+      computation:
+        inc.staffSalesAmount > 0
+          ? `${inc.staffSalesAmount.toLocaleString('en-PH', {
+              style: 'currency',
+              currency: 'PHP',
+            })} tagged paid sales this month (My Commission) × ${(STAFF_SALES_COMMISSION_RATE * 100).toFixed(1)}%`
+          : `No tagged paid sales this month × ${(STAFF_SALES_COMMISSION_RATE * 100).toFixed(1)}%`,
+      amount: round2(inc.staffSalesCommission),
+      includeInTotal: inc.staffSalesCommission > 0,
     })
-  }
 
-  lines.push({
-    id: 'attendance-incentive',
-    kind: inc.attendanceEligible ? 'incentive' : 'info',
-    label: 'Attendance incentive',
-    computation: inc.attendanceEligible
-      ? `₱${ATTENDANCE_INCENTIVE_AMOUNT.toLocaleString('en-PH')} — no lates and no absences this month`
-      : `Not earned (${inc.attendanceLateDays} late day(s), ${inc.attendanceAbsentDays} absent) — requires ₱${ATTENDANCE_INCENTIVE_AMOUNT.toLocaleString(
+    if (inc.isClinicManager) {
+      lines.push({
+        id: 'manager-commission',
+        kind: 'incentive',
+        label: 'Clinic manager commission (1%)',
+        computation: `${inc.managerBranchSales.toLocaleString('en-PH', {
+          style: 'currency',
+          currency: 'PHP',
+        })} branch paid sales this month × ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}%`,
+        amount: round2(inc.managerCommission),
+      })
+    } else if (inc.isOperationsManager) {
+      lines.push({
+        id: 'om-commission',
+        kind: 'incentive',
+        label: 'Operations manager commission (1%)',
+        computation: `${inc.managerBranchSales.toLocaleString('en-PH', {
+          style: 'currency',
+          currency: 'PHP',
+        })} all-clinic paid sales this month × ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}%`,
+        amount: round2(inc.managerCommission),
+      })
+    }
+
+    if (inc.milestoneExcluded) {
+      lines.push({
+        id: 'milestone-locked',
+        kind: 'info',
+        label: '2M milestone team split',
+        computation:
+          'Not included — Operations Manager is paid via 1% org commission, not the clinic 2M team split',
+        amount: 0,
+        includeInTotal: false,
+      })
+    } else if (inc.milestoneReached && inc.milestonePayoutEligible && inc.milestoneShare > 0) {
+      lines.push({
+        id: 'milestone-split',
+        kind: 'incentive',
+        label: '2M milestone team split (1%)',
+        computation: `Paid on the ${MILESTONE_PAYOUT_DAY}th · branch hit ₱${(BRANCH_SALES_MILESTONE / 1_000_000).toFixed(0)}M · shared 1% pool ${inc.milestonePool.toLocaleString(
           'en-PH',
-        )} perfect attendance`,
-    amount: round2(inc.attendanceIncentive),
-    includeInTotal: inc.attendanceEligible,
-  })
+          { style: 'currency', currency: 'PHP' },
+        )} spread by day among staff who timed in`,
+        amount: round2(inc.milestoneShare),
+      })
+    } else if (inc.milestoneReached && !inc.milestonePayoutEligible) {
+      lines.push({
+        id: 'milestone-locked',
+        kind: 'info',
+        label: '2M milestone team split',
+        computation: `Branch unlocked ₱2M this month, but share is paid only on the ${MILESTONE_PAYOUT_DAY}th (${inc.milestonePayoutDate})`,
+        amount: 0,
+        includeInTotal: false,
+      })
+    } else {
+      lines.push({
+        id: 'milestone-locked',
+        kind: 'info',
+        label: '2M milestone team split',
+        computation: `Unlocks when branch paid sales ≥ ₱${BRANCH_SALES_MILESTONE.toLocaleString(
+          'en-PH',
+        )} this month (now ${inc.milestoneSales.toLocaleString('en-PH', {
+          style: 'currency',
+          currency: 'PHP',
+        })}). Share is paid once on the ${MILESTONE_PAYOUT_DAY}th among staff who timed in.`,
+        amount: 0,
+        includeInTotal: false,
+      })
+    }
 
-  if (inc.planBAmount > 0) {
     lines.push({
-      id: 'plan-b',
-      kind: 'incentive',
-      label: 'Plan B incentive',
-      computation: inc.planBNotes || 'KPI / Plan B amount entered by clinic manager or HQ',
-      amount: round2(inc.planBAmount),
+      id: 'attendance-incentive',
+      kind: inc.attendanceEligible ? 'incentive' : 'info',
+      label: 'Attendance incentive',
+      computation: inc.attendanceEligible
+        ? `₱${ATTENDANCE_INCENTIVE_AMOUNT.toLocaleString('en-PH')} — no lates and no absences this month`
+        : `Not earned (${inc.attendanceLateDays} late day(s), ${inc.attendanceAbsentDays} absent) — requires ₱${ATTENDANCE_INCENTIVE_AMOUNT.toLocaleString(
+            'en-PH',
+          )} perfect attendance`,
+      amount: round2(inc.attendanceIncentive),
+      includeInTotal: inc.attendanceEligible,
     })
+
+    if (inc.planBAmount > 0) {
+      lines.push({
+        id: 'plan-b',
+        kind: 'incentive',
+        label: 'Plan B incentive',
+        computation: inc.planBNotes || 'KPI / Plan B amount entered by clinic manager or HQ',
+        amount: round2(inc.planBAmount),
+      })
+    }
   }
 
   const perMin = latePerMinuteRate(e.salaryPerDay)
@@ -233,34 +262,46 @@ export function buildPayslipDocument(input: {
     computation: `${row.undertimeMinutes} min × (daily wage ÷ ${STANDARD_WORK_HOURS_PER_DAY} hrs ÷ 60)`,
     amount: -round2(row.undertimeDeduction),
   })
-  lines.push({
-    id: 'sss',
-    kind: 'deduction',
-    label: 'SSS + MPF (employee share)',
-    computation: 'Prorated from monthly sheet contribution for days in period',
-    amount: -round2(row.sssDeduction),
-  })
-  lines.push({
-    id: 'pagibig',
-    kind: 'deduction',
-    label: 'Pag-IBIG (employee share)',
-    computation: 'Prorated from monthly sheet contribution for days in period',
-    amount: -round2(row.pagibigDeduction),
-  })
-  lines.push({
-    id: 'philhealth',
-    kind: 'deduction',
-    label: 'PhilHealth (employee share)',
-    computation: 'Prorated from monthly sheet contribution for days in period',
-    amount: -round2(row.philhealthDeduction),
-  })
-  if (row.otherDeduction > 0) {
+
+  if (row.isSecondCut) {
     lines.push({
-      id: 'other-deduction',
+      id: 'sss',
       kind: 'deduction',
-      label: 'Other recurring deduction',
-      computation: 'HR-set monthly other deduction, prorated for days in period',
-      amount: -round2(row.otherDeduction),
+      label: 'SSS + MPF (employee share)',
+      computation: 'Full monthly employee share — deducted on 2nd cut (16–30/31)',
+      amount: -round2(row.sssDeduction),
+    })
+    lines.push({
+      id: 'pagibig',
+      kind: 'deduction',
+      label: 'Pag-IBIG (employee share)',
+      computation: 'Full monthly employee share — deducted on 2nd cut (16–30/31)',
+      amount: -round2(row.pagibigDeduction),
+    })
+    lines.push({
+      id: 'philhealth',
+      kind: 'deduction',
+      label: 'PhilHealth (employee share)',
+      computation: 'Full monthly employee share — deducted on 2nd cut (16–30/31)',
+      amount: -round2(row.philhealthDeduction),
+    })
+    if (row.otherDeduction > 0) {
+      lines.push({
+        id: 'other-deduction',
+        kind: 'deduction',
+        label: 'Other recurring deduction',
+        computation: 'HR-set monthly other deduction — 2nd cut',
+        amount: -round2(row.otherDeduction),
+      })
+    }
+  } else {
+    lines.push({
+      id: 'statutory-deferred',
+      kind: 'info',
+      label: 'SSS / Pag-IBIG / PhilHealth',
+      computation: 'Deferred to 2nd cut (16–30/31) — 1st cut is basic pay only',
+      amount: 0,
+      includeInTotal: false,
     })
   }
 
@@ -288,24 +329,35 @@ export function buildPayslipDocument(input: {
         label: 'Monthly benefits (Employee Database)',
         computation: `₱${benefitsMonthlyTotal.toLocaleString('en-PH', {
           minimumFractionDigits: 2,
-        })} total — pay is twice a month; full benefits deduct only on the 2nd cut (period ending day ≥ 16), not on this slip`,
+        })} total — deducted only on the 2nd cut (16–30/31)`,
         amount: 0,
         includeInTotal: false,
       })
     }
   }
 
-  if (row.allowance > 0) {
+  if (row.isSecondCut && row.allowance > 0) {
     lines.push({
       id: 'allowance',
       kind: 'earning',
       label: 'Recurring allowance',
-      computation: 'HR-set monthly allowance / benefit, prorated for days in period',
+      computation: 'HR-set monthly allowance — paid on 2nd cut (16–30/31)',
       amount: round2(row.allowance),
+    })
+  } else if (!row.isSecondCut && (e.allowance || 0) > 0) {
+    lines.push({
+      id: 'allowance-deferred',
+      kind: 'info',
+      label: 'Recurring allowance',
+      computation: `₱${Number(e.allowance || 0).toLocaleString('en-PH', {
+        minimumFractionDigits: 2,
+      })} — paid on 2nd cut (16–30/31), not on this 1st-cut slip`,
+      amount: 0,
+      includeInTotal: false,
     })
   }
 
-  const grossEarnings = round2(row.grossPay + (row.allowance || 0))
+  const grossEarnings = round2(row.grossPay + (row.overtimePay || 0) + (row.allowance || 0))
   const totalIncentives = round2(
     (inc.staffSalesCommission || 0) +
       (inc.isClinicManager || inc.isOperationsManager ? inc.managerCommission || 0 : 0) +

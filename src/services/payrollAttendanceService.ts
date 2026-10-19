@@ -4,7 +4,12 @@ import {
   monthlyBasicSalary,
   type PayrollRosterEmployee,
 } from '@/constants/payrollRosterSeed'
-import { ATTENDANCE_INCENTIVE_AMOUNT as ATTENDANCE_INCENTIVE_AMOUNT_CONST } from '@/constants/payrollIncentives'
+import {
+  ATTENDANCE_INCENTIVE_AMOUNT as ATTENDANCE_INCENTIVE_AMOUNT_CONST,
+  OVERTIME_START_HOUR,
+  OVERTIME_START_MINUTE,
+  isSecondSemiMonthlyCut,
+} from '@/constants/payrollIncentives'
 import {
   buildAttendanceSessions,
   listAttendanceForBranches,
@@ -72,19 +77,16 @@ export function latePerMinuteRate(salaryPerDay: number): number {
 }
 
 /**
- * Benefits deduct once per month on the 2nd semi-monthly cut (period ending day ≥ 16),
- * or when the selected range covers a full calendar month. First cut (1–15) skips them.
+ * Benefits, allowance, statutory, incentives & commission pay on the 2nd cut (16–end).
+ * 1st cut (1–15) is pure basic − late/absent + OT only.
  */
 export function shouldApplyMonthlyBenefits(periodFrom: string, periodTo: string): boolean {
-  const from = new Date(`${periodFrom}T12:00:00+08:00`)
-  const to = new Date(`${periodTo}T12:00:00+08:00`)
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return false
-  const sameMonth =
-    from.getFullYear() === to.getFullYear() && from.getMonth() === to.getMonth()
-  const dayFrom = from.getDate()
-  const dayTo = to.getDate()
-  if (sameMonth && dayFrom <= 1 && dayTo >= 28) return true
-  return dayTo >= 16
+  return isSecondSemiMonthlyCut(periodFrom, periodTo)
+}
+
+/** @deprecated alias — use isSecondSemiMonthlyCut from payrollIncentives */
+export function isIncentivePayoutCut(periodFrom: string, periodTo: string): boolean {
+  return isSecondSemiMonthlyCut(periodFrom, periodTo)
 }
 
 export function isScheduledWorkday(dateKey: string): boolean {
@@ -113,8 +115,10 @@ export type PayrollDayDetail = {
   timeOut: string | null
   lateMinutes: number
   undertimeMinutes: number
+  overtimeMinutes: number
   lateDeduction: number
   undertimeDeduction: number
+  overtimePay: number
   hours: number | null
 }
 
@@ -127,20 +131,25 @@ export type AttendancePayrollRow = {
   daysOpen: number
   lateMinutes: number
   undertimeMinutes: number
+  overtimeMinutes: number
   /** daysPresent × salary/day */
   grossPay: number
   lateDeduction: number
   undertimeDeduction: number
+  overtimePay: number
   absenceDeduction: number
-  /** Prorated monthly statutory (SSS+MPF + Pag-IBIG + PhilHealth employee) */
+  /** Prorated monthly statutory — 2nd cut only */
   sssDeduction: number
   pagibigDeduction: number
   philhealthDeduction: number
   otherDeduction: number
+  /** Allowance — 2nd cut only (full monthly, not split) */
   allowance: number
   /** Full monthly itemized benefits — applied only on 2nd semi-monthly cut */
   benefitsDeduction: number
   benefitsAppliedThisPeriod: boolean
+  /** True when period is 16–end (incentives / commission / allowance cut) */
+  isSecondCut: boolean
   statutoryTotal: number
   attendanceDeductions: number
   totalDeductions: number
@@ -226,8 +235,10 @@ function computeDay(
       timeOut: null,
       lateMinutes: 0,
       undertimeMinutes: 0,
+      overtimeMinutes: 0,
       lateDeduction: 0,
       undertimeDeduction: 0,
+      overtimePay: 0,
       hours: null,
     }
   }
@@ -239,8 +250,10 @@ function computeDay(
       timeOut: null,
       lateMinutes: 0,
       undertimeMinutes: 0,
+      overtimeMinutes: 0,
       lateDeduction: 0,
       undertimeDeduction: 0,
+      overtimePay: 0,
       hours: null,
     }
   }
@@ -248,20 +261,24 @@ function computeDay(
   const scheduleStart =
     PAYROLL_DEFAULT_SHIFT.startHour * 60 + PAYROLL_DEFAULT_SHIFT.startMinute
   const scheduleEnd = PAYROLL_DEFAULT_SHIFT.endHour * 60 + PAYROLL_DEFAULT_SHIFT.endMinute
-  // Money formula uses 8 paid hours (screenshot): (daily / 8 / 60) × minutes
+  // OT clock: after 7:30 PM only. Pay = (daily basic ÷ 480) × OT minutes
+  const overtimeStart = OVERTIME_START_HOUR * 60 + OVERTIME_START_MINUTE
   const perMinute = latePerMinuteRate(salaryPerDay)
 
   const inMin = manilaMinutesOfDay(session.timeIn.punchedAt)
   const lateMinutes = Math.max(0, inMin - scheduleStart)
 
   let undertimeMinutes = 0
+  let overtimeMinutes = 0
   if (session.timeOut) {
     const outMin = manilaMinutesOfDay(session.timeOut.punchedAt)
     undertimeMinutes = Math.max(0, scheduleEnd - outMin)
+    overtimeMinutes = Math.max(0, outMin - overtimeStart)
   }
 
   const lateDeduction = Math.round(lateMinutes * perMinute * 100) / 100
   const undertimeDeduction = Math.round(undertimeMinutes * perMinute * 100) / 100
+  const overtimePay = Math.round(overtimeMinutes * perMinute * 100) / 100
 
   return {
     dateKey,
@@ -270,8 +287,10 @@ function computeDay(
     timeOut: session.timeOut?.punchedAt ?? null,
     lateMinutes,
     undertimeMinutes,
+    overtimeMinutes,
     lateDeduction,
     undertimeDeduction,
+    overtimePay,
     hours: session.hours,
   }
 }
@@ -306,21 +325,33 @@ function buildRow(
   const daysOpen = dayDetails.filter((d) => d.status === 'open').length
   const lateMinutes = dayDetails.reduce((sum, d) => sum + d.lateMinutes, 0)
   const undertimeMinutes = dayDetails.reduce((sum, d) => sum + d.undertimeMinutes, 0)
+  const overtimeMinutes = dayDetails.reduce((sum, d) => sum + d.overtimeMinutes, 0)
   const lateDeduction = dayDetails.reduce((sum, d) => sum + d.lateDeduction, 0)
   const undertimeDeduction = dayDetails.reduce((sum, d) => sum + d.undertimeDeduction, 0)
+  const overtimePay = dayDetails.reduce((sum, d) => sum + d.overtimePay, 0)
   const absenceDeduction = daysAbsent * employee.salaryPerDay
   const grossPay = daysPresent * employee.salaryPerDay
 
   const scheduledCount = scheduleKeys.length
-  const sssDeduction = prorateMonthly(
-    employee.sssEmployee + employee.mpfEmployee,
-    scheduledCount,
-  )
-  const pagibigDeduction = prorateMonthly(employee.pagibigEmployee, scheduledCount)
-  const philhealthDeduction = prorateMonthly(employee.philhealthEmployee, scheduledCount)
-  const otherDeduction = prorateMonthly(employee.otherDeduction || 0, scheduledCount)
-  const allowance = prorateMonthly(employee.allowance || 0, scheduledCount)
-  const benefitsAppliedThisPeriod = shouldApplyMonthlyBenefits(from, to)
+  const isSecondCut = shouldApplyMonthlyBenefits(from, to)
+  // 1st cut (1–15): pure basic − late/undertime + OT. No statutory / allowance / benefits.
+  // 2nd cut (16–end): full monthly statutory, allowance, benefits (not prorated across cuts).
+  const sssDeduction = isSecondCut
+    ? Math.round((employee.sssEmployee + employee.mpfEmployee) * 100) / 100
+    : 0
+  const pagibigDeduction = isSecondCut
+    ? Math.round((employee.pagibigEmployee || 0) * 100) / 100
+    : 0
+  const philhealthDeduction = isSecondCut
+    ? Math.round((employee.philhealthEmployee || 0) * 100) / 100
+    : 0
+  const otherDeduction = isSecondCut
+    ? Math.round((employee.otherDeduction || 0) * 100) / 100
+    : 0
+  const allowance = isSecondCut
+    ? Math.round((employee.allowance || 0) * 100) / 100
+    : 0
+  const benefitsAppliedThisPeriod = isSecondCut
   const benefitsMonthly = (employee.benefits ?? []).reduce(
     (s, b) => s + Math.max(0, Number(b.monthlyCost) || 0),
     0,
@@ -332,10 +363,10 @@ function buildRow(
   const attendanceDeductions = lateDeduction + undertimeDeduction + absenceDeduction
   const totalDeductions =
     statutoryTotal + lateDeduction + undertimeDeduction + benefitsDeduction
-  // Absences reduce gross (not paid) — do not double-count in net; allowance adds to take-home
+  // Absences reduce gross (not paid) — do not double-count in net
   const netPay = Math.max(
     0,
-    Math.round((grossPay + allowance - totalDeductions) * 100) / 100,
+    Math.round((grossPay + overtimePay + allowance - totalDeductions) * 100) / 100,
   )
 
   return {
@@ -347,9 +378,11 @@ function buildRow(
     daysOpen,
     lateMinutes,
     undertimeMinutes,
+    overtimeMinutes,
     grossPay,
     lateDeduction,
     undertimeDeduction,
+    overtimePay,
     absenceDeduction,
     sssDeduction,
     pagibigDeduction,
@@ -358,6 +391,7 @@ function buildRow(
     allowance,
     benefitsDeduction,
     benefitsAppliedThisPeriod,
+    isSecondCut,
     statutoryTotal,
     attendanceDeductions,
     totalDeductions: totalDeductions + absenceDeduction,

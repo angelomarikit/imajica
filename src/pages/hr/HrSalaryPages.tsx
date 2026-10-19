@@ -28,7 +28,7 @@ export function HrAllSalaryPage() {
   return (
     <AttendancePayrollPage
       title="All Salary"
-      description="Payroll across every company-owned and franchise clinic — rates, attendance hours, and statutory deductions. Send payslips to each employee from the preview."
+      description="1–15: basic pay only (− late/absent + OT). 16–30/31: salary + all incentives, commission, and allowance. Send payslips from the preview."
       branchIds={branchIds}
     />
   )
@@ -58,7 +58,7 @@ export function HrClinicSalaryPage() {
   return (
     <AttendancePayrollPage
       title={`${short} Salary`}
-      description={`Payroll for ${branch.name} — based on registered staff attendance. Review rates, hours, deductions, then send payslips to employees.`}
+      description={`Payroll for ${branch.name}. 1–15 basic only; 16–end adds incentives, commission, and allowance. Review then send payslips.`}
       branchIds={[branch.id]}
     />
   )

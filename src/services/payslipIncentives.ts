@@ -1,7 +1,9 @@
 import {
   ATTENDANCE_INCENTIVE_AMOUNT,
   MILESTONE_PAYOUT_DAY,
+  isSecondSemiMonthlyCut,
   milestonePayoutDateKey,
+  monthBoundsForPeriod,
   periodIncludesMilestonePayout,
 } from '@/constants/payrollIncentives'
 import type { AttendancePayrollRow } from '@/services/payrollAttendanceService'
@@ -75,6 +77,11 @@ export function gatherPayslipIncentives(input: {
   const name = row.employee.fullName
   const branchId = row.employee.branchId
   const periodMonth = periodMonthFromRange(periodFrom, periodTo)
+  const secondCut = isSecondSemiMonthlyCut(periodFrom, periodTo)
+  // 2nd cut pays the whole month’s commissions/incentives; 1st cut pays none of them
+  const salesRange = secondCut
+    ? monthBoundsForPeriod(periodTo)
+    : { from: periodFrom, to: periodTo }
 
   const matchNames = resolveEmployeeMatchNames({
     matchedUserId: row.matchedUserId,
@@ -84,8 +91,8 @@ export function gatherPayslipIncentives(input: {
 
   const staff = computeEmployeeStaffCommission({
     matchNames,
-    from: periodFrom,
-    to: periodTo,
+    from: salesRange.from,
+    to: salesRange.to,
   })
 
   const isClinicManager = isClinicManagerForEmployee(row)
@@ -95,15 +102,15 @@ export function gatherPayslipIncentives(input: {
   if (isClinicManager) {
     const mgr = computeClinicManagerCommission({
       branchId,
-      from: periodFrom,
-      to: periodTo,
+      from: salesRange.from,
+      to: salesRange.to,
     })
     managerBranchSales = mgr.branchSales
     managerCommission = mgr.commission
   } else if (isOperationsManager) {
     const mgr = computeOperationsManagerCommission({
-      from: periodFrom,
-      to: periodTo,
+      from: salesRange.from,
+      to: salesRange.to,
       // OM is org-wide; still honor a clinic-scoped salary view when the row has a branch
       branchId: null,
     })
@@ -157,16 +164,21 @@ export function gatherPayslipIncentives(input: {
   // count every past workday as absent (that zeroed incentives for the whole HR table).
   let lateDays = 0
   let absentDays = 0
+  let presentDaysForIncentive = row.daysPresent
   if (attendancePunches.length > 0) {
     const att = computeMonthlyAttendanceIncentive(attendancePunches, periodTo)
     lateDays = att.lateDays
     absentDays = att.absentDays
+    presentDaysForIncentive = att.presentDays
   } else {
     lateDays = row.lateMinutes > 0 ? 1 : 0
     absentDays = row.daysAbsent
   }
   const attendanceEligible =
-    Boolean(row.matchedUserId) && lateDays === 0 && absentDays === 0 && row.daysPresent > 0
+    Boolean(row.matchedUserId) &&
+    lateDays === 0 &&
+    absentDays === 0 &&
+    presentDaysForIncentive > 0
   const attendanceIncentive = attendanceEligible ? ATTENDANCE_INCENTIVE_AMOUNT : 0
 
   const planBRows = listPlanBForStaff({
@@ -185,6 +197,34 @@ export function gatherPayslipIncentives(input: {
     .map((r) => r.notes)
     .filter(Boolean)
     .join(' · ')
+
+  // 1st cut (1–15): basic ± late/absent/OT only — defer all incentives to 16–end
+  if (!secondCut) {
+    return {
+      staffSalesAmount: staff.salesAmount,
+      staffSalesCommission: 0,
+      managerBranchSales,
+      managerCommission: 0,
+      isClinicManager,
+      isOperationsManager,
+      milestoneSales: milestoneProgress.milestoneSales,
+      milestoneReached: milestoneProgress.milestoneReached,
+      milestonePool: milestoneProgress.milestonePool,
+      milestoneTeamSize: milestoneProgress.milestoneTeamSize,
+      milestoneShare: 0,
+      milestoneExcluded,
+      milestonePayoutEligible: false,
+      milestonePayoutDate: milestonePayoutDateKey(periodMonth),
+      milestonePayoutDay: MILESTONE_PAYOUT_DAY,
+      attendanceIncentive: 0,
+      attendanceEligible: false,
+      attendanceLateDays: lateDays,
+      attendanceAbsentDays: absentDays,
+      planBAmount: 0,
+      planBNotes: planBNotes || 'Pass the KPI set by the branch',
+      incentivesDeferredToSecondCut: true,
+    }
+  }
 
   return {
     staffSalesAmount: staff.salesAmount,
@@ -208,5 +248,6 @@ export function gatherPayslipIncentives(input: {
     attendanceAbsentDays: absentDays,
     planBAmount,
     planBNotes: planBNotes || 'Pass the KPI set by the branch',
+    incentivesDeferredToSecondCut: false,
   }
 }

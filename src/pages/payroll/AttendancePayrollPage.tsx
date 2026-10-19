@@ -51,12 +51,20 @@ import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import type { AttendancePunch } from '@/types'
 
+/** Default filter = current semi-monthly cut (1–15 or 16–end). */
 function defaultMonthRange() {
-  const to = manilaDateKey()
-  const d = new Date(`${to}T12:00:00+08:00`)
-  d.setDate(1)
-  const from = manilaDateKey(d)
-  return { from, to }
+  const today = manilaDateKey()
+  const [y, m, dayStr] = today.split('-')
+  const day = Number(dayStr)
+  const month = `${y}-${m}`
+  const lastDay = new Date(Date.UTC(Number(y), Number(m), 0)).getUTCDate()
+  if (day <= 15) {
+    return { from: `${month}-01`, to: `${month}-15` }
+  }
+  return {
+    from: `${month}-16`,
+    to: `${month}-${String(lastDay).padStart(2, '0')}`,
+  }
 }
 
 function statusBadge(row: AttendancePayrollRow) {
@@ -113,7 +121,7 @@ function sumIncentives(
 export function AttendancePayrollPage({
   title = 'Payroll',
   description =
-    'Daily rates & benefits from Employee Database, attendance hours, late ((daily÷8÷60)×min), and statutory deductions. Benefits deduct once/month on the 2nd semi-monthly cut.',
+    '1st cut (1–15): basic pay − late/absent + OT. 2nd cut (16–30/31): salary + commissions, incentives, allowance, and monthly statutory/benefits.',
   branchIds,
 }: {
   title?: string
@@ -172,7 +180,16 @@ export function AttendancePayrollPage({
               .filter((b) => b.status === 'active' && b.branchType !== 'warehouse')
               .map((b) => b.id)
       try {
-        setBranchPunches(await listAttendanceForBranches(ids, from, to))
+        // 2nd cut needs full-month punches for attendance incentive + 2M day-share
+        const month = to.slice(0, 7)
+        const [yy, mm] = month.split('-').map(Number)
+        const monthLast = new Date(Date.UTC(yy!, mm!, 0)).getUTCDate()
+        const punchFrom = Number(to.slice(8, 10)) >= 16 ? `${month}-01` : from
+        const punchTo =
+          Number(to.slice(8, 10)) >= 16
+            ? `${month}-${String(monthLast).padStart(2, '0')}`
+            : to
+        setBranchPunches(await listAttendanceForBranches(ids, punchFrom, punchTo))
       } catch {
         setBranchPunches([])
       }
@@ -246,6 +263,8 @@ export function AttendancePayrollPage({
     return {
       staff: payrollRows.length,
       gross: payrollRows.reduce((s, r) => s + r.row.grossPay, 0),
+      overtime: payrollRows.reduce((s, r) => s + (r.row.overtimePay || 0), 0),
+      overtimeMin: payrollRows.reduce((s, r) => s + (r.row.overtimeMinutes || 0), 0),
       incentives: payrollRows.reduce((s, r) => s + r.incentives, 0),
       deductions: payrollRows.reduce((s, r) => s + r.netDeductions, 0),
       net: payrollRows.reduce((s, r) => s + r.netWithIncentives, 0),
@@ -284,8 +303,10 @@ export function AttendancePayrollPage({
           'Days Present',
           'Days Absent',
           'Late (min)',
+          'OT (min)',
+          'OT Pay',
           'Undertime (min)',
-          'Gross',
+          'Gross (basic)',
           'Incentives',
           'Staff Commission 0.5%',
           'Late Deduction',
@@ -294,7 +315,7 @@ export function AttendancePayrollPage({
           'Pag-IBIG',
           'PhilHealth',
           'Total Deductions',
-          'Net Pay (incl. incentives)',
+          'Net Pay (incl. OT + incentives)',
         ],
         ...payrollRows.map(({ row: r, incentives, staffCommission, netDeductions, netWithIncentives }) => [
           r.employee.fullName,
@@ -304,6 +325,8 @@ export function AttendancePayrollPage({
           r.daysPresent,
           r.daysAbsent,
           r.lateMinutes,
+          r.overtimeMinutes || 0,
+          r.overtimePay || 0,
           r.undertimeMinutes,
           r.grossPay,
           incentives,
@@ -320,7 +343,19 @@ export function AttendancePayrollPage({
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(summary), 'Payroll')
 
       const detail: (string | number)[][] = [
-        ['Staff', 'Date', 'Status', 'Time In', 'Time Out', 'Late (min)', 'Undertime (min)', 'Late ₱', 'Undertime ₱'],
+        [
+          'Staff',
+          'Date',
+          'Status',
+          'Time In',
+          'Time Out',
+          'Late (min)',
+          'OT (min)',
+          'Undertime (min)',
+          'Late ₱',
+          'OT ₱',
+          'Undertime ₱',
+        ],
       ]
       for (const { row: r } of payrollRows) {
         for (const d of r.dayDetails) {
@@ -331,8 +366,10 @@ export function AttendancePayrollPage({
             d.timeIn ? formatManilaTime(d.timeIn) : '',
             d.timeOut ? formatManilaTime(d.timeOut) : '',
             d.lateMinutes,
+            d.overtimeMinutes || 0,
             d.undertimeMinutes,
             d.lateDeduction,
+            d.overtimePay || 0,
             d.undertimeDeduction,
           ])
         }
@@ -368,12 +405,21 @@ export function AttendancePayrollPage({
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <Kpi label="Staff on roster" value={String(totals.staff)} icon={Wallet} />
         <Kpi label="Gross pay" value={formatPeso(totals.gross)} icon={Wallet} />
+        <Kpi
+          label="OT pay"
+          value={formatPeso(totals.overtime)}
+          icon={Clock}
+        />
         <Kpi label="Incentives" value={formatPeso(totals.incentives)} icon={Wallet} />
         <Kpi label="Deductions" value={formatPeso(totals.deductions)} icon={Clock} />
-        <Kpi label="Late minutes" value={String(totals.lateMin)} icon={Clock} />
+        <Kpi
+          label="Late / OT min"
+          value={`${totals.lateMin} / ${totals.overtimeMin}`}
+          icon={Clock}
+        />
       </div>
 
       <Card className="p-4 sm:p-5">
@@ -401,8 +447,7 @@ export function AttendancePayrollPage({
             Apply
           </Button>
           <p className="text-xs text-slate-ui lg:ml-auto lg:self-center">
-            Late = (daily ÷ 8 hrs ÷ 60) × min · Shift {scheduledMinutesPerDay()} min · MBS =
-            salary/day ×{' '}
+            Late / OT = (daily ÷ 480 min) × minutes · OT after 7:30 PM · MBS = salary/day ×{' '}
             {PAYROLL_DEFAULT_SHIFT.mbsDaysPerMonth}
           </p>
         </div>
@@ -414,7 +459,7 @@ export function AttendancePayrollPage({
             <div>
               <p className="text-sm font-semibold text-[#073D2C]">Staff payroll</p>
               <p className="text-[11px] text-slate-ui">
-                Net includes My Commission incentives (0.5% tagged sales + other incentives)
+                1–15 = basic only · 16–end includes My Commission + incentives + allowance
               </p>
             </div>
             <div className="relative w-full max-w-xs">
@@ -440,6 +485,7 @@ export function AttendancePayrollPage({
                     <th className="px-3 py-2.5 font-semibold">Staff</th>
                     <th className="px-3 py-2.5 font-semibold">Present</th>
                     <th className="px-3 py-2.5 font-semibold">Late</th>
+                    <th className="px-3 py-2.5 font-semibold">OT</th>
                     <th className="px-3 py-2.5 font-semibold">Gross</th>
                     <th className="px-3 py-2.5 font-semibold">Incentives</th>
                     <th className="px-3 py-2.5 font-semibold">Deductions</th>
@@ -450,6 +496,8 @@ export function AttendancePayrollPage({
                 <tbody className="divide-y divide-border/70">
                   {filtered.map(({ row: r, incentives, netDeductions, netWithIncentives }) => {
                     const active = r.employee.id === selectedId
+                    const otMin = r.overtimeMinutes || 0
+                    const otPay = r.overtimePay || 0
                     return (
                       <tr
                         key={r.employee.id}
@@ -470,6 +518,10 @@ export function AttendancePayrollPage({
                           {r.daysPresent}/{r.daysScheduled}
                         </td>
                         <td className="whitespace-nowrap px-3 py-3">{r.lateMinutes}m</td>
+                        <td className="whitespace-nowrap px-3 py-3">
+                          <p className="font-medium text-[#073D2C]">{formatPeso(otPay)}</p>
+                          <p className="text-[11px] text-slate-ui">{otMin}m after 7:30</p>
+                        </td>
                         <td className="whitespace-nowrap px-3 py-3">{formatPeso(r.grossPay)}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-[#6b5420]">
                           {formatPeso(incentives)}
