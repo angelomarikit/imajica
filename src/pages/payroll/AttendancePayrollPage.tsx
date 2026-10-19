@@ -452,8 +452,8 @@ export function AttendancePayrollPage({
         </div>
       </Card>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <Card className="overflow-hidden p-0">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(280px,0.7fr)]">
+        <Card className="min-w-0 overflow-hidden p-0">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
             <div>
               <p className="text-sm font-semibold text-[#073D2C]">Staff payroll</p>
@@ -478,18 +478,29 @@ export function AttendancePayrollPage({
             ) : filtered.length === 0 ? (
               <p className="p-4 text-sm text-slate-ui">No roster staff match this filter.</p>
             ) : (
-              <table className="min-w-full text-left text-sm">
+              <table className="w-full min-w-[720px] table-fixed text-left text-sm">
+                <colgroup>
+                  <col className="w-[22%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[11%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[12%]" />
+                </colgroup>
                 <thead className="bg-ivory-50 text-[11px] uppercase tracking-wide text-slate-ui">
                   <tr>
-                    <th className="px-3 py-2.5 font-semibold">Staff</th>
-                    <th className="px-3 py-2.5 font-semibold">Present</th>
-                    <th className="px-3 py-2.5 font-semibold">Late</th>
-                    <th className="px-3 py-2.5 font-semibold">OT</th>
-                    <th className="px-3 py-2.5 font-semibold">Gross</th>
-                    <th className="px-3 py-2.5 font-semibold">Incentives</th>
-                    <th className="px-3 py-2.5 font-semibold">Deductions</th>
-                    <th className="px-3 py-2.5 font-semibold">Net</th>
-                    <th className="px-3 py-2.5 font-semibold">Status</th>
+                    <th className="px-2 py-2.5 font-semibold">Staff</th>
+                    <th className="px-2 py-2.5 font-semibold">Present</th>
+                    <th className="px-2 py-2.5 font-semibold">Late</th>
+                    <th className="px-2 py-2.5 font-semibold">OT</th>
+                    <th className="px-2 py-2.5 font-semibold">Gross</th>
+                    <th className="px-2 py-2.5 font-semibold">Incentives</th>
+                    <th className="px-2 py-2.5 font-semibold">Deductions</th>
+                    <th className="px-2 py-2.5 font-semibold">Net</th>
+                    <th className="px-2 py-2.5 font-semibold">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/70">
@@ -506,32 +517,32 @@ export function AttendancePayrollPage({
                         )}
                         onClick={() => setSelectedId(r.employee.id)}
                       >
-                        <td className="px-3 py-3">
-                          <p className="font-semibold text-charcoal">{r.employee.fullName}</p>
-                          <p className="text-[11px] text-slate-ui">
+                        <td className="px-2 py-3">
+                          <p className="truncate font-semibold text-charcoal">{r.employee.fullName}</p>
+                          <p className="truncate text-[11px] text-slate-ui">
                             {r.employee.jobTitle} · {r.employee.branchLabel} · ₱
                             {r.employee.salaryPerDay}/day
                           </p>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3">
+                        <td className="whitespace-nowrap px-2 py-3 tabular-nums">
                           {r.daysPresent}/{r.daysScheduled}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3">{r.lateMinutes}m</td>
-                        <td className="whitespace-nowrap px-3 py-3">
-                          <p className="font-medium text-[#073D2C]">{formatPeso(otPay)}</p>
-                          <p className="text-[11px] text-slate-ui">{otMin}m after 7:30</p>
+                        <td className="whitespace-nowrap px-2 py-3 tabular-nums">{r.lateMinutes}m</td>
+                        <td className="px-2 py-3">
+                          <p className="font-medium tabular-nums text-[#073D2C]">{formatPeso(otPay)}</p>
+                          <p className="text-[10px] text-slate-ui">{otMin}m · 7:30+</p>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3">{formatPeso(r.grossPay)}</td>
-                        <td className="whitespace-nowrap px-3 py-3 text-[#6b5420]">
+                        <td className="whitespace-nowrap px-2 py-3 tabular-nums">{formatPeso(r.grossPay)}</td>
+                        <td className="whitespace-nowrap px-2 py-3 tabular-nums text-[#6b5420]">
                           {formatPeso(incentives)}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 text-amber-800">
+                        <td className="whitespace-nowrap px-2 py-3 tabular-nums text-amber-800">
                           {formatPeso(netDeductions)}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-[#073D2C]">
+                        <td className="whitespace-nowrap px-2 py-3 font-semibold tabular-nums text-[#073D2C]">
                           {formatPeso(netWithIncentives)}
                         </td>
-                        <td className="px-3 py-3">{statusBadge(r)}</td>
+                        <td className="px-2 py-3">{statusBadge(r)}</td>
                       </tr>
                     )
                   })}
@@ -541,7 +552,7 @@ export function AttendancePayrollPage({
           </div>
         </Card>
 
-        <Card className="p-4 sm:p-5 lg:col-span-1 lg:max-w-none">
+        <Card className="min-w-0 p-3 sm:p-4 xl:max-w-md xl:justify-self-end">
           {!selected ? (
             <p className="text-sm text-slate-ui">Select a staff member to preview the payslip.</p>
           ) : (
