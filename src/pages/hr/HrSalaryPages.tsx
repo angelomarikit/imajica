@@ -1,6 +1,10 @@
 import { Navigate, useParams } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
+import {
+  COMPANY_OWNED_BRANCH_IDS,
+  FRANCHISE_CLINIC_BRANCH_IDS,
+} from '@/constants/teamAccountsSeed'
 import { AttendancePayrollPage } from '@/pages/payroll/AttendancePayrollPage'
 import { canAccessPeopleOps, isBranchOwner } from '@/utils/franchiseAccess'
 
@@ -8,12 +12,19 @@ function shortBranchName(name: string) {
   return name.split(',')[0]?.trim() || name
 }
 
-/** HR: salary / payroll across every active clinic. */
+/** @deprecated Prefer Branch Salary — kept so /admin/hr/salary redirects cleanly. */
 export function HrAllSalaryPage() {
   const { user } = useAuth()
-  const { branches } = useBranch()
+  if (isBranchOwner(user) && user?.branchId) {
+    return <Navigate to={`/admin/hr/salary/${user.branchId}`} replace />
+  }
+  return <Navigate to="/admin/hr/salary/branches" replace />
+}
 
-  // Clinic managers only get their own clinic salary page
+/** HR: San Mateo, Pasig, Lipa, Cainta (company-owned). */
+export function HrBranchSalaryPage() {
+  const { user } = useAuth()
+
   if (isBranchOwner(user) && user?.branchId) {
     return <Navigate to={`/admin/hr/salary/${user.branchId}`} replace />
   }
@@ -21,15 +32,31 @@ export function HrAllSalaryPage() {
     return <Navigate to="/admin/dashboard" replace />
   }
 
-  const branchIds = branches
-    .filter((b) => b.status === 'active' && b.branchType !== 'warehouse')
-    .map((b) => b.id)
+  return (
+    <AttendancePayrollPage
+      title="Branch Salary"
+      description="Company-owned clinics: San Mateo, Pasig, Lipa, and Cainta. 1–15 basic only; 16–end adds incentives, commission, and allowance."
+      branchIds={[...COMPANY_OWNED_BRANCH_IDS]}
+    />
+  )
+}
+
+/** HR: Dasmariñas & Bacoor (franchise). */
+export function HrFranchiseSalaryPage() {
+  const { user } = useAuth()
+
+  if (isBranchOwner(user) && user?.branchId) {
+    return <Navigate to={`/admin/hr/salary/${user.branchId}`} replace />
+  }
+  if (!canAccessPeopleOps(user)) {
+    return <Navigate to="/admin/dashboard" replace />
+  }
 
   return (
     <AttendancePayrollPage
-      title="All Salary"
-      description="1–15: basic pay only (− late/absent + OT). 16–30/31: salary + all incentives, commission, and allowance. Send payslips from the preview."
-      branchIds={branchIds}
+      title="Franchise Salary"
+      description="Franchise clinics: Dasmariñas and Bacoor. 1–15 basic only; 16–end adds incentives, commission, and allowance."
+      branchIds={[...FRANCHISE_CLINIC_BRANCH_IDS]}
     />
   )
 }
@@ -50,7 +77,7 @@ export function HrClinicSalaryPage() {
     if (clinicManager && user?.branchId) {
       return <Navigate to={`/admin/hr/salary/${user.branchId}`} replace />
     }
-    return <Navigate to="/admin/hr/salary" replace />
+    return <Navigate to="/admin/hr/salary/branches" replace />
   }
 
   const short = shortBranchName(branch.name)

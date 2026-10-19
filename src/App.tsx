@@ -97,7 +97,12 @@ import {
   HrAllBranchesAttendancePage,
   HrClinicAttendancePage,
 } from '@/pages/hr/HrAttendancePages'
-import { HrAllSalaryPage, HrClinicSalaryPage } from '@/pages/hr/HrSalaryPages'
+import {
+  HrAllSalaryPage,
+  HrBranchSalaryPage,
+  HrClinicSalaryPage,
+  HrFranchiseSalaryPage,
+} from '@/pages/hr/HrSalaryPages'
 import { HrRecruitmentPage } from '@/pages/hr/HrRecruitmentPage'
 import { HrNewHiresPage } from '@/pages/hr/HrNewHiresPage'
 import { HrExitsPage } from '@/pages/hr/HrExitsPage'
@@ -232,6 +237,22 @@ export default function App() {
                   element={
                     <RequirePeopleOps>
                       <HrAllSalaryPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/salary/branches"
+                  element={
+                    <RequirePeopleOps>
+                      <HrBranchSalaryPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/salary/franchise"
+                  element={
+                    <RequirePeopleOps>
+                      <HrFranchiseSalaryPage />
                     </RequirePeopleOps>
                   }
                 />

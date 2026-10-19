@@ -302,6 +302,62 @@ function sourceKey(p: { id: string; email?: string | null }) {
 }
 
 /**
+ * Shared clinic / marketing logins — not real employees on salary.
+ * (Also matches display names like "cainta", "lipa", "marketing cainta".)
+ */
+const SALARY_EXCLUDED_EMAILS = new Set([
+  'cainta@imajica.com',
+  'lipa@imajica.com',
+  'pasig@imajica.com',
+  'pasi@imajica.com',
+  'sanmateo@imajica.com',
+])
+
+const SALARY_EXCLUDED_NAME_KEYS = new Set([
+  'cainta',
+  'lipa',
+  'pasig',
+  'pasi',
+  'sanmateo',
+  'san mateo',
+  'marketing cainta',
+  'cainta marketing',
+])
+
+function isExcludedFromSalaryRoster(person: {
+  email?: string | null
+  fullName?: string | null
+  role?: string | null
+}): boolean {
+  const role = (person.role || '').trim().toUpperCase()
+  if (role === 'BRANCH_MARKETING' || role === 'MARKETING') return true
+
+  const email = (person.email || '').trim().toLowerCase()
+  if (email && SALARY_EXCLUDED_EMAILS.has(email)) return true
+  // Any *@imajica.com clinic shortcut that is exactly the branch local-part
+  const local = email.split('@')[0] || ''
+  if (
+    email.endsWith('@imajica.com') &&
+    (local === 'cainta' ||
+      local === 'lipa' ||
+      local === 'pasig' ||
+      local === 'pasi' ||
+      local === 'sanmateo')
+  ) {
+    return true
+  }
+
+  const name = (person.fullName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.,]/g, ' ')
+    .replace(/\s+/g, ' ')
+  if (name && SALARY_EXCLUDED_NAME_KEYS.has(name)) return true
+  if (name.includes('marketing') && name.includes('cainta')) return true
+  return false
+}
+
+/**
  * Live salary roster sources: Branches Accounts ∪ Staff list.
  * Only Time In / Time Out roles (clinic staff, Clinic Manager, OM).
  */
@@ -313,6 +369,7 @@ function buildCanonicalSalaryPeople(
 
   const upsert = (person: SalarySourcePerson) => {
     if (!isAttendanceRosterRole(person.role)) return
+    if (isExcludedFromSalaryRoster(person)) return
     const key = sourceKey(person)
     const prev = canonical.get(key)
     if (!prev) {

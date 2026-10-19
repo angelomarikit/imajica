@@ -353,18 +353,32 @@ function buildHrPeopleOpsNavItems(clinics: Branch[]): NavNode[] {
     })),
   ]
 
+  const companyClinics = clinics.filter((b) => b.branchType !== 'franchise')
+  const franchiseClinics = clinics.filter((b) => b.branchType === 'franchise')
+
   return [
     {
       label: 'Salary',
       icon: Banknote,
       children: [
         {
-          to: '/admin/hr/salary',
-          label: 'All Salary',
+          to: '/admin/hr/salary/branches',
+          label: 'Branch Salary',
           icon: Banknote,
           end: true,
         },
-        ...clinics.map((b) => ({
+        {
+          to: '/admin/hr/salary/franchise',
+          label: 'Franchise Salary',
+          icon: Banknote,
+          end: true,
+        },
+        ...companyClinics.map((b) => ({
+          to: `/admin/hr/salary/${b.id}`,
+          label: `${shortBranchName(b.name)} Salary`,
+          icon: Banknote,
+        })),
+        ...franchiseClinics.map((b) => ({
           to: `/admin/hr/salary/${b.id}`,
           label: `${shortBranchName(b.name)} Salary`,
           icon: Banknote,

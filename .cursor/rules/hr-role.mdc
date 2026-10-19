@@ -14,7 +14,7 @@ alwaysApply: true
 - Can use header **All Branches** + filter to one clinic
 - Sidebar (exact order): Salary, Employee Database, KPI's and Performance, Attendance (All Branches + each clinic), Leave Management, Deductions & Benefits, Recruitment, New Hires, Resignation / Exits, Training
 - Attendance: `/admin/hr/attendance` (all clinics) and `/admin/hr/attendance/:branchId` (e.g. San Mateo Attendance)
-- Salary: `/admin/hr/salary` (All Salary) and `/admin/hr/salary/:branchId` (e.g. San Mateo Salary)
+- Salary: `/admin/hr/salary/branches` (Branch Salary — San Mateo, Pasig, Lipa, Cainta), `/admin/hr/salary/franchise` (Franchise Salary — Dasmariñas, Bacoor), and `/admin/hr/salary/:branchId` (single clinic)
 - Wired today: Salary → payroll, Employee Database → real employees + HR profiles, KPI's and Performance → `/admin/hr/kpis`, Leave Management → `/admin/hr/leave`, Deductions & Benefits → `/admin/hr/deductions` (recurring SSS/Pag-IBIG/PhilHealth + allowances; feeds salary), My Leave → `/admin/my-leave`, Attendance → HR attendance pages, Recruitment → `/admin/hr/recruitment` (applicants + interview pipeline + status), New Hires → `/admin/hr/new-hires` (auto from Hired + onboarding checklist), Resignation / Exits → `/admin/hr/exits` (exit interview + turnover checklist), Training → `/admin/hr/training` (upload materials + assign all/selected employees; employee completion on My Training for staff/clinic manager)
 - Not full HQ (no marketing, warehouse, branch directory CRUD, user-access admin unless HQ)
 

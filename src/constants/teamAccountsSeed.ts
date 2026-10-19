@@ -14,6 +14,20 @@ export const BRANCH_IDS = {
   bacoor: '22222222-2222-2222-2222-222222222206',
 } as const
 
+/** Company-owned clinics — Branch Salary / Branches Attendance */
+export const COMPANY_OWNED_BRANCH_IDS = [
+  BRANCH_IDS.sanMateo,
+  BRANCH_IDS.pasig,
+  BRANCH_IDS.lipa,
+  BRANCH_IDS.cainta,
+] as const
+
+/** Franchise clinics — Franchise Salary / Franchise Attendance */
+export const FRANCHISE_CLINIC_BRANCH_IDS = [
+  BRANCH_IDS.dasma,
+  BRANCH_IDS.bacoor,
+] as const
+
 export type TeamAccountSeed = {
   id: string
   fullName: string
