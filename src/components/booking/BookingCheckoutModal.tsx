@@ -145,16 +145,43 @@ export function BookingCheckoutModal({
       setStaffOptions([])
       return
     }
-    setStaffOptions(getActiveStaffForBooking(branchId))
+    const withSignedIn = (staff: Staff[]) => {
+      // Ensure the logged-in seller can tag themselves (e.g. Operations Manager)
+      if (!user?.id || !user.fullName) return staff
+      if (staff.some((s) => s.id === user.id)) return staff
+      return [
+        {
+          id: user.id,
+          profileId: user.id,
+          code: `EMP-${user.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`,
+          fullName: user.fullName,
+          email: user.email || '',
+          phone: '',
+          role: (user.role as Staff['role']) || 'STAFF',
+          title: user.role || 'Staff',
+          branchId: branchId,
+          branchName: branchName || '',
+          status: 'active' as const,
+          specializations: [],
+          hireDate: '',
+          employmentType: 'Full-time',
+          rating: 0,
+          reviewCount: 0,
+          baseSalary: 0,
+        },
+        ...staff,
+      ]
+    }
+    setStaffOptions(withSignedIn(getActiveStaffForBooking(branchId)))
     let cancelled = false
     void listActiveStaffForBooking(branchId).then((staff) => {
       if (cancelled) return
-      setStaffOptions(staff)
+      setStaffOptions(withSignedIn(staff))
     })
     return () => {
       cancelled = true
     }
-  }, [open, branchId])
+  }, [open, branchId, branchName, user?.id, user?.fullName, user?.email, user?.role])
 
   const referrers = useMemo(() => {
     let list = getClients().filter((c) => c.id !== patient.id && c.status !== 'inactive')

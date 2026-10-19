@@ -4,6 +4,7 @@ import {
   ATTENDANCE_INCENTIVE_AMOUNT,
   BRANCH_SALES_MILESTONE,
   CLINIC_MANAGER_COMMISSION_RATE,
+  MILESTONE_PAYOUT_DAY,
   STAFF_SALES_COMMISSION_RATE,
 } from '@/constants/payrollIncentives'
 import { STANDARD_WORK_HOURS_PER_DAY } from '@/constants/payrollRosterSeed'
@@ -31,11 +32,19 @@ export type PayslipIncentiveBundle = {
   managerBranchSales: number
   managerCommission: number
   isClinicManager: boolean
+  /** Operations Manager 1% on org-wide (or scoped) paid sales */
+  isOperationsManager: boolean
   milestoneSales: number
   milestoneReached: boolean
   milestonePool: number
   milestoneTeamSize: number
   milestoneShare: number
+  /** Operations Manager (and similar) are not in the clinic 2M pool */
+  milestoneExcluded: boolean
+  /** Pay period covers the monthly payout day (30th) */
+  milestonePayoutEligible: boolean
+  milestonePayoutDate: string
+  milestonePayoutDay: number
   attendanceIncentive: number
   attendanceEligible: boolean
   attendanceLateDays: number
@@ -127,18 +136,48 @@ export function buildPayslipDocument(input: {
       })} branch paid sales × ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}%`,
       amount: round2(inc.managerCommission),
     })
+  } else if (inc.isOperationsManager) {
+    lines.push({
+      id: 'om-commission',
+      kind: 'incentive',
+      label: 'Operations manager commission (1%)',
+      computation: `${inc.managerBranchSales.toLocaleString('en-PH', {
+        style: 'currency',
+        currency: 'PHP',
+      })} all-clinic paid sales × ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}%`,
+      amount: round2(inc.managerCommission),
+    })
   }
 
-  if (inc.milestoneReached) {
+  if (inc.milestoneExcluded) {
+    lines.push({
+      id: 'milestone-locked',
+      kind: 'info',
+      label: '2M milestone team split',
+      computation:
+        'Not included — Operations Manager is paid via 1% org commission, not the clinic 2M team split',
+      amount: 0,
+      includeInTotal: false,
+    })
+  } else if (inc.milestoneReached && inc.milestonePayoutEligible && inc.milestoneShare > 0) {
     lines.push({
       id: 'milestone-split',
       kind: 'incentive',
       label: '2M milestone team split (1%)',
-      computation: `Branch hit ₱${(BRANCH_SALES_MILESTONE / 1_000_000).toFixed(0)}M · one shared 1% pool ${inc.milestonePool.toLocaleString(
+      computation: `Paid on the ${MILESTONE_PAYOUT_DAY}th · branch hit ₱${(BRANCH_SALES_MILESTONE / 1_000_000).toFixed(0)}M · shared 1% pool ${inc.milestonePool.toLocaleString(
         'en-PH',
         { style: 'currency', currency: 'PHP' },
-      )} spread by day among staff who timed in (not 1% each; absent days excluded)`,
+      )} spread by day among staff who timed in`,
       amount: round2(inc.milestoneShare),
+    })
+  } else if (inc.milestoneReached && !inc.milestonePayoutEligible) {
+    lines.push({
+      id: 'milestone-locked',
+      kind: 'info',
+      label: '2M milestone team split',
+      computation: `Branch unlocked ₱2M this month, but share is paid only on the ${MILESTONE_PAYOUT_DAY}th (${inc.milestonePayoutDate}) — not on the 1st–15th cut`,
+      amount: 0,
+      includeInTotal: false,
     })
   } else {
     lines.push({
@@ -150,7 +189,7 @@ export function buildPayslipDocument(input: {
       )} this month (now ${inc.milestoneSales.toLocaleString('en-PH', {
         style: 'currency',
         currency: 'PHP',
-      })}). When unlocked, 1% is split by day among staff who timed in.`,
+      })}). Share is paid once on the ${MILESTONE_PAYOUT_DAY}th among staff who timed in.`,
       amount: 0,
       includeInTotal: false,
     })
@@ -269,7 +308,7 @@ export function buildPayslipDocument(input: {
   const grossEarnings = round2(row.grossPay + (row.allowance || 0))
   const totalIncentives = round2(
     (inc.staffSalesCommission || 0) +
-      (inc.managerCommission || 0) +
+      (inc.isClinicManager || inc.isOperationsManager ? inc.managerCommission || 0 : 0) +
       (inc.milestoneShare || 0) +
       (inc.attendanceIncentive || 0) +
       (inc.planBAmount || 0),

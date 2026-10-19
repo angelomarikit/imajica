@@ -1,12 +1,19 @@
-import { ATTENDANCE_INCENTIVE_AMOUNT } from '@/constants/payrollIncentives'
+import {
+  ATTENDANCE_INCENTIVE_AMOUNT,
+  MILESTONE_PAYOUT_DAY,
+  milestonePayoutDateKey,
+  periodIncludesMilestonePayout,
+} from '@/constants/payrollIncentives'
 import type { AttendancePayrollRow } from '@/services/payrollAttendanceService'
 import { computeMonthlyAttendanceIncentive } from '@/services/payrollAttendanceService'
 import { sumPlanBForStaff, listPlanBForStaff } from '@/services/planBIncentiveService'
 import {
   computeBranchMilestoneSplit,
   computeClinicManagerCommission,
+  computeOperationsManagerCommission,
   computeEmployeeMilestoneShare,
   computeEmployeeStaffCommission,
+  isExcludedFromMilestoneShare,
   resolveEmployeeMatchNames,
   staffNamesMatch,
 } from '@/services/staffCommissionService'
@@ -18,18 +25,31 @@ function periodMonthFromRange(from: string, to: string) {
   return (to || from).slice(0, 7)
 }
 
-function isClinicManagerForEmployee(row: AttendancePayrollRow): boolean {
+function resolveEmployeeRole(row: AttendancePayrollRow): string | null {
   const emails = new Set(
-    [row.employee.email, ...row.employee.matchEmails].map((e) => e.trim().toLowerCase()).filter(Boolean),
+    [row.employee.email, ...row.employee.matchEmails]
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
   )
   const users = getAccessUsers()
-  const match = users.find((u) => emails.has(u.email.trim().toLowerCase()))
-  if (match?.role === 'BRANCH_ADMIN') return true
   if (row.matchedUserId) {
     const byId = users.find((u) => u.id === row.matchedUserId)
-    if (byId?.role === 'BRANCH_ADMIN') return true
+    if (byId?.role) return byId.role
   }
+  const match = users.find((u) => emails.has(u.email.trim().toLowerCase()))
+  return match?.role ?? null
+}
+
+function isClinicManagerForEmployee(row: AttendancePayrollRow): boolean {
+  const role = resolveEmployeeRole(row)
+  if (role === 'BRANCH_ADMIN') return true
   return /clinic manager|branch manager|branch admin/i.test(row.employee.jobTitle)
+}
+
+function isOperationsManagerForEmployee(row: AttendancePayrollRow): boolean {
+  const role = resolveEmployeeRole(row)
+  if (role === 'OPERATIONS_MANAGER') return true
+  return /operations manager/i.test(row.employee.jobTitle)
 }
 
 /**
@@ -69,6 +89,7 @@ export function gatherPayslipIncentives(input: {
   })
 
   const isClinicManager = isClinicManagerForEmployee(row)
+  const isOperationsManager = !isClinicManager && isOperationsManagerForEmployee(row)
   let managerBranchSales = 0
   let managerCommission = 0
   if (isClinicManager) {
@@ -76,6 +97,15 @@ export function gatherPayslipIncentives(input: {
       branchId,
       from: periodFrom,
       to: periodTo,
+    })
+    managerBranchSales = mgr.branchSales
+    managerCommission = mgr.commission
+  } else if (isOperationsManager) {
+    const mgr = computeOperationsManagerCommission({
+      from: periodFrom,
+      to: periodTo,
+      // OM is org-wide; still honor a clinic-scoped salary view when the row has a branch
+      branchId: null,
     })
     managerBranchSales = mgr.branchSales
     managerCommission = mgr.commission
@@ -103,17 +133,38 @@ export function gatherPayslipIncentives(input: {
     periodMonth,
     branchPunches: branchAttendancePunches,
   })
-  const milestoneShare = computeEmployeeMilestoneShare({
-    branchId,
+  const milestoneExcluded = isOperationsManager ||
+    isExcludedFromMilestoneShare(row.matchedUserId, [...linkedUserIds])
+  const milestonePayoutEligible = periodIncludesMilestonePayout(
+    periodFrom,
+    periodTo,
     periodMonth,
-    userId: row.matchedUserId,
-    linkedUserIds: [...linkedUserIds],
-    branchPunches: branchAttendancePunches,
-  })
+  )
+  const rawMilestoneShare = milestoneExcluded
+    ? 0
+    : computeEmployeeMilestoneShare({
+        branchId,
+        periodMonth,
+        userId: row.matchedUserId,
+        linkedUserIds: [...linkedUserIds],
+        branchPunches: branchAttendancePunches,
+      })
+  // Only pay the 2M share on the monthly payout day (30th) — not on the 1st–15th cut
+  const milestoneShare =
+    milestonePayoutEligible && milestoneProgress.milestoneReached ? rawMilestoneShare : 0
 
-  const att = computeMonthlyAttendanceIncentive(attendancePunches, periodTo)
-  const lateDays = att.lateDays || (row.lateMinutes > 0 ? 1 : 0)
-  const absentDays = att.absentDays || row.daysAbsent
+  // Prefer real punches for the monthly ₱1,000 rule. Empty punches must NOT
+  // count every past workday as absent (that zeroed incentives for the whole HR table).
+  let lateDays = 0
+  let absentDays = 0
+  if (attendancePunches.length > 0) {
+    const att = computeMonthlyAttendanceIncentive(attendancePunches, periodTo)
+    lateDays = att.lateDays
+    absentDays = att.absentDays
+  } else {
+    lateDays = row.lateMinutes > 0 ? 1 : 0
+    absentDays = row.daysAbsent
+  }
   const attendanceEligible =
     Boolean(row.matchedUserId) && lateDays === 0 && absentDays === 0 && row.daysPresent > 0
   const attendanceIncentive = attendanceEligible ? ATTENDANCE_INCENTIVE_AMOUNT : 0
@@ -141,11 +192,16 @@ export function gatherPayslipIncentives(input: {
     managerBranchSales,
     managerCommission,
     isClinicManager,
+    isOperationsManager,
     milestoneSales: milestoneProgress.milestoneSales,
     milestoneReached: milestoneProgress.milestoneReached,
     milestonePool: milestoneProgress.milestonePool,
     milestoneTeamSize: milestoneProgress.milestoneTeamSize,
     milestoneShare,
+    milestoneExcluded,
+    milestonePayoutEligible,
+    milestonePayoutDate: milestonePayoutDateKey(periodMonth),
+    milestonePayoutDay: MILESTONE_PAYOUT_DAY,
     attendanceIncentive,
     attendanceEligible,
     attendanceLateDays: lateDays,

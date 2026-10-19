@@ -43,16 +43,22 @@ import {
 import {
   BRANCH_SALES_MILESTONE,
   CLINIC_MANAGER_COMMISSION_RATE,
+  MILESTONE_PAYOUT_DAY,
+  OPERATIONS_MANAGER_COMMISSION_RATE,
   STAFF_SALES_COMMISSION_RATE,
+  isMilestonePayoutReleased,
+  milestonePayoutDateKey,
 } from '@/constants/payrollIncentives'
 import {
   computeBranchMilestoneSplit,
   computeClinicManagerCommission,
+  computeOperationsManagerCommission,
   listEmployeeTaggedBookings,
   resolveEmployeeMatchNames,
   saleDateKey,
 } from '@/services/staffCommissionService'
-import { isBranchOwner } from '@/utils/franchiseAccess'
+import { preloadAccessUsers } from '@/services/userAccessService'
+import { isBranchOwner, isOperationsManagerRole } from '@/utils/franchiseAccess'
 import {
   ATTENDANCE_INCENTIVE_AMOUNT,
   computeMonthlyAttendanceIncentive,
@@ -142,6 +148,8 @@ type ProductSoldRow = {
 export function MyCommissionSalesPage() {
   const { user } = useAuth()
   const clinicManager = isBranchOwner(user)
+  const operationsManager = isOperationsManagerRole(user?.role)
+  const onePercentManager = clinicManager || operationsManager
   const initialRange = defaultMonthRange()
   const rate = STAFF_COMMISSION_RATE
   const ownerName = user?.fullName?.trim() || 'Your account'
@@ -159,7 +167,7 @@ export function MyCommissionSalesPage() {
 
   useEffect(() => {
     let cancelled = false
-    void preloadSalesData().then(() => {
+    void Promise.all([preloadSalesData(), preloadAccessUsers()]).then(() => {
       if (!cancelled) {
         setTick((n) => n + 1)
         setLoading(false)
@@ -258,7 +266,9 @@ export function MyCommissionSalesPage() {
   }, [staffBookings, from, to, product])
 
   const summary = useMemo(() => {
-    const paidRows = filteredBookings.filter((r) => r.status === 'Paid')
+    const isPaid = (r: TodayBookingRow) =>
+      r.status === 'Paid' || r.status === 'paid' || r.status.toLowerCase() === 'paid'
+    const paidRows = filteredBookings.filter(isPaid)
     const paidSales = paidRows.reduce((sum, r) => sum + creditedAmount(r, product), 0)
     const commission = Math.round(paidSales * rate * 100) / 100
     const productBookings = filteredBookings.filter((r) => r.products !== 'N/A').length
@@ -267,13 +277,18 @@ export function MyCommissionSalesPage() {
       paidSales,
       commission,
       productBookings,
-      pendingCount: filteredBookings.filter((r) => r.status === 'Pending').length,
+      pendingCount: filteredBookings.filter(
+        (r) => r.status === 'Pending' || r.status.toLowerCase() === 'pending',
+      ).length,
     }
   }, [filteredBookings, product, rate])
 
-  /** Clinic manager 1% on whole-clinic paid sales — personal page only (not branch dashboard). */
+  /** Clinic manager 1% per clinic; Operations Manager 1% across all clinics. */
   const managerCommission = useMemo(() => {
     void tick
+    if (operationsManager) {
+      return computeOperationsManagerCommission({ from, to, branchId: null })
+    }
     if (!clinicManager || !user?.branchId) {
       return { branchSales: 0, commission: 0 }
     }
@@ -282,12 +297,12 @@ export function MyCommissionSalesPage() {
       from,
       to,
     })
-  }, [clinicManager, user?.branchId, from, to, tick])
+  }, [clinicManager, operationsManager, user?.branchId, from, to, tick])
 
   const chartData = useMemo(() => {
     const map = new Map<string, { date: string; mySales: number; myCommission: number }>()
     for (const row of filteredBookings) {
-      if (row.status !== 'Paid') continue
+      if (row.status !== 'Paid' && row.status !== 'paid') continue
       const key = saleDateKey(row.dateIso)
       if (!key) continue
       if (from && key < from) continue
@@ -369,14 +384,32 @@ export function MyCommissionSalesPage() {
   /** Whole-branch paid sales for the selected month vs ₱2M milestone + day-share by Time In. */
   const branchMilestone = useMemo(() => {
     void tick
+    const month = planBPeriodMonth || currentPeriodMonth()
+    // OM is not in the clinic 2M pool (paid via 1% org commission instead)
+    if (operationsManager) {
+      return {
+        sales: 0,
+        remaining: BRANCH_SALES_MILESTONE,
+        pct: 0,
+        reached: false,
+        monthLabel: formatPeriodMonthLabel(month),
+        branchName: 'Not applicable',
+        teamSize: 0,
+        splitPool: 0,
+        splitShare: 0,
+        excluded: true as const,
+        payoutReleased: false,
+        payoutDate: milestonePayoutDateKey(month),
+      }
+    }
     const branchId = user?.branchId
-    const month = planBPeriodMonth
     const split = computeBranchMilestoneSplit({
       branchId,
-      periodMonth: month || currentPeriodMonth(),
+      periodMonth: month,
       branchPunches,
       forUserId: user?.id,
     })
+    const payoutReleased = isMilestonePayoutReleased(month, manilaTodayKey())
     return {
       sales: split.milestoneSales,
       remaining: Math.max(0, BRANCH_SALES_MILESTONE - split.milestoneSales),
@@ -385,13 +418,25 @@ export function MyCommissionSalesPage() {
         Math.round((split.milestoneSales / BRANCH_SALES_MILESTONE) * 1000) / 10,
       ),
       reached: split.milestoneReached,
-      monthLabel: formatPeriodMonthLabel(month || currentPeriodMonth()),
+      monthLabel: formatPeriodMonthLabel(month),
       branchName: user?.branchName || 'Your branch',
       teamSize: split.milestoneTeamSize,
       splitPool: split.milestonePool,
-      splitShare: split.milestoneShare,
+      // Share only after the 30th (payout day)
+      splitShare: payoutReleased && split.milestoneReached ? split.milestoneShare : 0,
+      excluded: false as const,
+      payoutReleased,
+      payoutDate: milestonePayoutDateKey(month),
     }
-  }, [tick, user?.branchId, user?.branchName, user?.id, planBPeriodMonth, branchPunches])
+  }, [
+    tick,
+    operationsManager,
+    user?.branchId,
+    user?.branchName,
+    user?.id,
+    planBPeriodMonth,
+    branchPunches,
+  ])
 
   const filterLabel = useMemo(() => {
     const dates = formatRangeLabel(from, to)
@@ -425,9 +470,11 @@ export function MyCommissionSalesPage() {
       <AdminPageBanner
         title="My Commission & Sales"
         description={
-          clinicManager
-            ? `Your staff commission plus clinic manager ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}% on clinic sales — filter by date and product.`
-            : `Your tagged checkout sales with ${(STAFF_COMMISSION_RATE * 100).toFixed(1)}% staff commission — filter by date and product.`
+          operationsManager
+            ? `Your staff commission plus operations manager ${(OPERATIONS_MANAGER_COMMISSION_RATE * 100).toFixed(0)}% on all-clinic paid sales — filter by date and product.`
+            : clinicManager
+              ? `Your staff commission plus clinic manager ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}% on clinic sales — filter by date and product.`
+              : `Your tagged checkout sales with ${(STAFF_COMMISSION_RATE * 100).toFixed(1)}% staff commission — filter by date and product.`
         }
       />
 
@@ -497,7 +544,7 @@ export function MyCommissionSalesPage() {
       <div
         className={cn(
           'grid gap-3 sm:grid-cols-2',
-          clinicManager ? 'xl:grid-cols-3' : 'xl:grid-cols-5',
+          onePercentManager ? 'xl:grid-cols-3' : 'xl:grid-cols-5',
         )}
       >
         <StatCard
@@ -519,6 +566,15 @@ export function MyCommissionSalesPage() {
             label="Clinic Manager Commission"
             value={formatPesoExact(managerCommission.commission)}
             subtext={`${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}% of clinic sales ${formatPesoExact(managerCommission.branchSales)} · ${filterLabel}`}
+            icon={<Percent className="h-5 w-5" />}
+            tone="emerald"
+          />
+        ) : null}
+        {operationsManager ? (
+          <StatCard
+            label="Operations Manager Commission"
+            value={formatPesoExact(managerCommission.commission)}
+            subtext={`${(OPERATIONS_MANAGER_COMMISSION_RATE * 100).toFixed(0)}% of all-clinic sales ${formatPesoExact(managerCommission.branchSales)} · ${filterLabel}`}
             icon={<Percent className="h-5 w-5" />}
             tone="emerald"
           />
@@ -565,31 +621,52 @@ export function MyCommissionSalesPage() {
           icon={<Trophy className="h-5 w-5" />}
           tone={planBAmount > 0 ? 'planb' : 'incentiveMuted'}
         />
-        <StatCard
-          label="2M Split Commission"
-          value={formatPesoExact(branchMilestone.splitShare)}
-          subtext={
-            branchMilestone.reached
-              ? `Your piece of the shared 1% pool ${formatPesoExact(branchMilestone.splitPool)} · days you timed in`
-              : `Unlocks at ₱2M · one shared 1% pool spread among staff who timed in`
-          }
-          icon={<Users className="h-5 w-5" />}
-          tone={branchMilestone.reached ? 'milestone' : 'incentiveMuted'}
-          className="sm:col-span-2 xl:col-span-1"
-        />
+        {!operationsManager ? (
+          <StatCard
+            label="2M Split Commission"
+            value={formatPesoExact(branchMilestone.splitShare)}
+            subtext={
+              branchMilestone.reached && branchMilestone.payoutReleased
+                ? `Your piece of the shared 1% pool ${formatPesoExact(branchMilestone.splitPool)} · paid on the ${MILESTONE_PAYOUT_DAY}th`
+                : branchMilestone.reached
+                  ? `Unlocked — share pays on ${branchMilestone.payoutDate} (the ${MILESTONE_PAYOUT_DAY}th)`
+                  : `Unlocks at ₱2M · paid once on the ${MILESTONE_PAYOUT_DAY}th among staff who timed in`
+            }
+            icon={<Users className="h-5 w-5" />}
+            tone={
+              branchMilestone.reached && branchMilestone.payoutReleased
+                ? 'milestone'
+                : 'incentiveMuted'
+            }
+            className="sm:col-span-2 xl:col-span-1"
+          />
+        ) : (
+          <StatCard
+            label="2M Split Commission"
+            value={formatPesoExact(0)}
+            subtext="Not applicable — Operations Manager earns 1% org commission instead of the clinic 2M split"
+            icon={<Users className="h-5 w-5" />}
+            tone="incentiveMuted"
+            className="sm:col-span-2 xl:col-span-1"
+          />
+        )}
       </div>
 
-      <MilestoneCard
-        branchName={branchMilestone.branchName}
-        monthLabel={branchMilestone.monthLabel}
-        sales={branchMilestone.sales}
-        remaining={branchMilestone.remaining}
-        pct={branchMilestone.pct}
-        reached={branchMilestone.reached}
-        teamSize={branchMilestone.teamSize}
-        splitPool={branchMilestone.splitPool}
-        splitShare={branchMilestone.splitShare}
-      />
+      {!operationsManager ? (
+        <MilestoneCard
+          branchName={branchMilestone.branchName}
+          monthLabel={branchMilestone.monthLabel}
+          sales={branchMilestone.sales}
+          remaining={branchMilestone.remaining}
+          pct={branchMilestone.pct}
+          reached={branchMilestone.reached}
+          teamSize={branchMilestone.teamSize}
+          splitPool={branchMilestone.splitPool}
+          splitShare={branchMilestone.splitShare}
+          payoutDate={branchMilestone.payoutDate}
+          payoutReleased={branchMilestone.payoutReleased}
+        />
+      ) : null}
 
       <Card className="p-4 sm:p-5">
         <CardHeader
@@ -817,6 +894,8 @@ function MilestoneCard({
   reached,
   splitPool,
   splitShare,
+  payoutDate,
+  payoutReleased,
 }: {
   branchName: string
   monthLabel: string
@@ -827,6 +906,8 @@ function MilestoneCard({
   teamSize: number
   splitPool: number
   splitShare: number
+  payoutDate: string
+  payoutReleased: boolean
 }) {
   return (
     <div className="rounded-[14px] border border-[#C5A059]/40 bg-gradient-to-br from-[#FFFDF8] via-[#F8F0DE] to-[#E8D5A3] p-4 shadow-[0_12px_28px_rgba(197,160,89,0.2)] sm:p-5">
@@ -855,7 +936,9 @@ function MilestoneCard({
           <span>{pct}% of ₱2M</span>
           <span>
             {reached
-              ? 'Milestone reached — day-share pool unlocked!'
+              ? payoutReleased
+                ? 'Milestone reached — share released'
+                : `Reached — share pays on ${payoutDate}`
               : `${formatPesoExact(remaining)} left to hit ₱2M`}
           </span>
         </div>
@@ -872,8 +955,10 @@ function MilestoneCard({
         </div>
         <p className="mt-2 text-xs text-[#6b5420]/90">
           {reached
-            ? `One shared 1% pool ${formatPesoExact(splitPool)} spread by day among staff who timed in (not 1% each) — your share ${formatPesoExact(splitShare)}.`
-            : 'Hit ₱2M and the branch unlocks one shared 1% pool spread by day among staff who timed in — not 1% per person.'}
+            ? payoutReleased
+              ? `One shared 1% pool ${formatPesoExact(splitPool)} · paid on the ${MILESTONE_PAYOUT_DAY}th — your share ${formatPesoExact(splitShare)}.`
+              : `Unlocked pool ${formatPesoExact(splitPool)} — paid once on the ${MILESTONE_PAYOUT_DAY}th (${payoutDate}) among staff who timed in.`
+            : `Hit ₱2M to unlock one shared 1% pool. Share is paid once on the ${MILESTONE_PAYOUT_DAY}th among staff who timed in — not 1% per person.`}
         </p>
       </div>
     </div>

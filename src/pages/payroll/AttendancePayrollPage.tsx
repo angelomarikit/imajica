@@ -73,13 +73,19 @@ function sumIncentives(
   branchAttendancePunches: AttendancePunch[] = [],
 ) {
   const branchId = row.employee.branchId
+  const branchScoped = branchId
+    ? branchAttendancePunches.filter((p) => p.branchId === branchId)
+    : branchAttendancePunches
+  // Employee punches for attendance incentive (matched timeclock / login id)
+  const attendancePunches = row.matchedUserId
+    ? branchScoped.filter((p) => p.userId === row.matchedUserId)
+    : []
   const inc = gatherPayslipIncentives({
     row,
     periodFrom,
     periodTo,
-    branchAttendancePunches: branchId
-      ? branchAttendancePunches.filter((p) => p.branchId === branchId)
-      : branchAttendancePunches,
+    attendancePunches,
+    branchAttendancePunches: branchScoped,
   })
   const total =
     (inc.staffSalesCommission || 0) +

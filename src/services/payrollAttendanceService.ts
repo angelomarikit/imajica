@@ -18,6 +18,7 @@ import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import {
   getMergedPayrollRoster,
   listPayrollProfilesForHr,
+  type PayrollProfileRecord,
 } from '@/services/payrollProfileService'
 
 export const ATTENDANCE_INCENTIVE_AMOUNT = ATTENDANCE_INCENTIVE_AMOUNT_CONST
@@ -369,9 +370,52 @@ function buildRow(
 
 const ALL_CLINIC_BRANCH_IDS = Object.values(BRANCH_IDS)
 
+function profileToRosterEmployee(p: PayrollProfileRecord): PayrollRosterEmployee {
+  return {
+    id: p.id,
+    firstName: p.firstName,
+    middleName: p.middleName,
+    lastName: p.lastName,
+    fullName: p.fullName,
+    email: p.email,
+    matchEmails: p.matchEmails,
+    gender: p.gender,
+    birthDate: p.birthDate,
+    civilStatus: p.civilStatus,
+    phone: p.phone,
+    address: p.address,
+    emergencyContact: p.emergencyContact,
+    emergencyRelationship: p.emergencyRelationship,
+    emergencyPhone: p.emergencyPhone,
+    dateHired: p.dateHired,
+    employmentStatus: p.employmentStatus,
+    jobTitle: p.jobTitle,
+    branchLabel: p.branchLabel,
+    branchId: p.branchId,
+    shiftLabel: p.shiftLabel,
+    salaryPerDay: p.salaryPerDay,
+    tin: p.tin,
+    pagibigNo: p.pagibigNo,
+    philhealthNo: p.philhealthNo,
+    sssNo: p.sssNo,
+    sssEmployee: p.sssEmployee,
+    mpfEmployee: p.mpfEmployee,
+    pagibigEmployee: p.pagibigEmployee,
+    philhealthEmployee: p.philhealthEmployee,
+    sssEmployer: p.sssEmployer,
+    mpfEmployer: p.mpfEmployer,
+    ecEmployer: p.ecEmployer,
+    pagibigEmployer: p.pagibigEmployer,
+    philhealthEmployer: p.philhealthEmployer,
+    otherDeduction: p.otherDeduction,
+    allowance: p.allowance,
+    benefits: p.benefits ?? [],
+  }
+}
+
 /**
  * Build attendance-based payroll over a Manila date range.
- * Roster = HR payroll profiles + live Employee Database (all clinics), not seed-only.
+ * Roster = Branches Accounts ∪ Staff list (attendance roles only) — no orphan seed rows.
  * Gross = present days × salary/day; late/undertime from shift vs punches; statutory prorated.
  */
 export async function computeAttendancePayroll(
@@ -381,58 +425,29 @@ export async function computeAttendancePayroll(
 ): Promise<AttendancePayrollRow[]> {
   const scopeIds =
     opts?.branchIds?.length ? opts.branchIds : ALL_CLINIC_BRANCH_IDS
+  const allowed = new Set(scopeIds)
   const [punches, profiles] = await Promise.all([
     listAttendanceForBranches(scopeIds, from, to),
     listPayrollProfilesForHr(),
   ])
+
   let roster = profiles
     .filter((p) => p.status !== 'inactive')
-    .map(
-      (p): PayrollRosterEmployee => ({
-        id: p.id,
-        firstName: p.firstName,
-        middleName: p.middleName,
-        lastName: p.lastName,
-        fullName: p.fullName,
-        email: p.email,
-        matchEmails: p.matchEmails,
-        gender: p.gender,
-        birthDate: p.birthDate,
-        civilStatus: p.civilStatus,
-        phone: p.phone,
-        address: p.address,
-        emergencyContact: p.emergencyContact,
-        emergencyRelationship: p.emergencyRelationship,
-        emergencyPhone: p.emergencyPhone,
-        dateHired: p.dateHired,
-        employmentStatus: p.employmentStatus,
-        jobTitle: p.jobTitle,
-        branchLabel: p.branchLabel,
-        branchId: p.branchId,
-        shiftLabel: p.shiftLabel,
-        salaryPerDay: p.salaryPerDay,
-        tin: p.tin,
-        pagibigNo: p.pagibigNo,
-        philhealthNo: p.philhealthNo,
-        sssNo: p.sssNo,
-        sssEmployee: p.sssEmployee,
-        mpfEmployee: p.mpfEmployee,
-        pagibigEmployee: p.pagibigEmployee,
-        philhealthEmployee: p.philhealthEmployee,
-        sssEmployer: p.sssEmployer,
-        mpfEmployer: p.mpfEmployer,
-        ecEmployer: p.ecEmployer,
-        pagibigEmployer: p.pagibigEmployer,
-        philhealthEmployer: p.philhealthEmployer,
-        otherDeduction: p.otherDeduction,
-        allowance: p.allowance,
-        benefits: p.benefits ?? [],
-      }),
-    )
+    .map(profileToRosterEmployee)
+
   if (opts?.branchIds?.length) {
-    const allowed = new Set(opts.branchIds)
-    roster = roster.filter((e) => e.branchId != null && allowed.has(e.branchId))
+    const punchUserIds = new Set(
+      punches.filter((p) => allowed.has(p.branchId)).map((p) => p.userId),
+    )
+    roster = roster.filter((e) => {
+      if (e.branchId && allowed.has(e.branchId)) return true
+      // Org-wide OM (no clinic tag) appears on All Salary and each clinic salary view
+      if (!e.branchId) return true
+      const ids = resolveUserIds(e)
+      return ids.some((id) => punchUserIds.has(id))
+    })
   }
+
   return roster
     .map((employee) => buildRow(employee, punches, from, to))
     .sort((a, b) => a.employee.fullName.localeCompare(b.employee.fullName))

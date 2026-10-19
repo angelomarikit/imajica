@@ -13,6 +13,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
 import {
   BRANCH_SALES_MILESTONE,
+  MILESTONE_PAYOUT_DAY,
   MILESTONE_SPLIT_RATE,
 } from '@/constants/payrollIncentives'
 import {
@@ -363,8 +364,17 @@ export function Milestone2MPage() {
           <li className="flex gap-2">
             <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#C5A059]" />
             <span>
-              That pool is spread by day (proportional to day sales). Only staff who{' '}
-              <strong>Time In</strong> that Manila day split that day’s slice equally.
+              That pool is spread by day (proportional to day sales). Only clinic staff + Clinic
+              Manager who <strong>Time In</strong> that Manila day split that day’s slice equally.
+              Operations Manager is <strong>not</strong> in this pool (they earn 1% org commission
+              instead).
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#C5A059]" />
+            <span>
+              Share is paid once per month on the <strong>{MILESTONE_PAYOUT_DAY}th</strong> (or the
+              last day in shorter months) — not on the 1st–15th salary cut.
             </span>
           </li>
           <li className="flex gap-2">

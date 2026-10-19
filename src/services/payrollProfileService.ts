@@ -11,7 +11,10 @@ import {
 } from '@/constants/payrollRosterSeed'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { listDirectoryStaff } from '@/services/staffDirectoryService'
-import type { EmployeeBenefitLine } from '@/types'
+import { listBranchAccounts } from '@/services/userAccessService'
+import type { AccessUser, EmployeeBenefitLine, Staff } from '@/types'
+import { isAttendanceRosterRole } from '@/utils/franchiseAccess'
+import { formatRoleLabel } from '@/utils/roleLabels'
 import { isUuid } from '@/utils/uuid'
 
 function normalizeBenefitLines(raw: unknown): EmployeeBenefitLine[] {
@@ -166,8 +169,8 @@ function stubFromDirectory(input: {
   id: string
   fullName: string
   email: string
-  branchId: string
-  branchName: string
+  branchId?: string | null
+  branchName?: string | null
   title: string
 }): PayrollProfileRecord {
   const parts = input.fullName.trim().split(/\s+/).filter(Boolean)
@@ -282,6 +285,113 @@ export function getMergedPayrollProfiles(): PayrollProfileRecord[] {
   return mergeProfiles(seedAsProfiles())
 }
 
+type SalarySourcePerson = {
+  id: string
+  fullName: string
+  email: string
+  role: string
+  branchId: string | null
+  branchName: string
+  title: string
+  dailyRate?: number
+  benefits?: EmployeeBenefitLine[]
+}
+
+function sourceKey(p: { id: string; email?: string | null }) {
+  return (p.email || '').trim().toLowerCase() || p.id
+}
+
+/**
+ * Live salary roster sources: Branches Accounts ∪ Staff list.
+ * Only Time In / Time Out roles (clinic staff, Clinic Manager, OM).
+ */
+function buildCanonicalSalaryPeople(
+  branchAccounts: AccessUser[],
+  directory: Staff[],
+): Map<string, SalarySourcePerson> {
+  const canonical = new Map<string, SalarySourcePerson>()
+
+  const upsert = (person: SalarySourcePerson) => {
+    if (!isAttendanceRosterRole(person.role)) return
+    const key = sourceKey(person)
+    const prev = canonical.get(key)
+    if (!prev) {
+      canonical.set(key, person)
+      return
+    }
+    canonical.set(key, {
+      ...prev,
+      ...person,
+      id: person.id || prev.id,
+      email: person.email || prev.email,
+      fullName: person.fullName || prev.fullName,
+      role: person.role || prev.role,
+      branchId: person.branchId ?? prev.branchId,
+      branchName: person.branchName || prev.branchName,
+      title: formatRoleLabel(person.role) || person.title || prev.title,
+      dailyRate:
+        person.dailyRate != null && person.dailyRate > 0
+          ? person.dailyRate
+          : prev.dailyRate,
+      benefits:
+        person.benefits && person.benefits.length > 0 ? person.benefits : prev.benefits,
+    })
+  }
+
+  for (const u of branchAccounts) {
+    if (u.status === 'inactive') continue
+    upsert({
+      id: u.id,
+      fullName: u.fullName,
+      email: u.email,
+      role: u.role,
+      branchId: u.branchId,
+      branchName: u.branchName || (u.branchId ? '' : 'All Branches (organization)'),
+      title: formatRoleLabel(u.role),
+    })
+  }
+
+  for (const emp of directory) {
+    if (emp.status === 'inactive') continue
+    upsert({
+      id: emp.profileId || emp.id,
+      fullName: emp.fullName,
+      email: emp.email,
+      role: emp.role,
+      branchId: emp.branchId || null,
+      branchName: emp.branchName || '',
+      title: emp.title || formatRoleLabel(emp.role),
+      dailyRate: emp.dailyRate,
+      benefits: emp.benefits,
+    })
+  }
+
+  return canonical
+}
+
+function findOverlay(
+  overlays: PayrollProfileRecord[],
+  person: SalarySourcePerson,
+): PayrollProfileRecord | undefined {
+  const email = (person.email || '').trim().toLowerCase()
+  const name = person.fullName.trim().toLowerCase()
+  return (
+    overlays.find((p) => p.userId === person.id || p.id === person.id) ||
+    (email
+      ? overlays.find(
+          (p) =>
+            p.email.trim().toLowerCase() === email ||
+            p.matchEmails.some((m) => m.trim().toLowerCase() === email),
+        )
+      : undefined) ||
+    overlays.find((p) => p.fullName.trim().toLowerCase() === name)
+  )
+}
+
+/**
+ * HR All Salary roster = Branches Accounts ∪ Staff list only (attendance roles).
+ * Drops seed/orphan payroll rows not in those directories; refreshes role/title/branch from live accounts.
+ */
 export async function listPayrollProfilesForHr(): Promise<PayrollProfileRecord[]> {
   let remote: PayrollProfileRecord[] = []
   if (isSupabaseConfigured && supabase) {
@@ -291,68 +401,81 @@ export async function listPayrollProfilesForHr(): Promise<PayrollProfileRecord[]
       .order('last_name')
     if (!error && data) {
       remote = (data as Parameters<typeof mapDbRow>[0][]).map(mapDbRow)
-      // Silent cache of remote rows
-      const local = readLocal()
-      const byEmail = new Map(local.map((r) => [r.email.trim().toLowerCase(), r]))
-      for (const r of remote) byEmail.set(r.email.trim().toLowerCase(), { ...byEmail.get(r.email.trim().toLowerCase()), ...r })
-      writeLocal([...byEmail.values()], true)
     }
   }
 
-  const directory = await listDirectoryStaff()
-  const merged = mergeProfiles([...seedAsProfiles(), ...remote])
-  const byEmail = new Map(merged.map((p) => [p.email.trim().toLowerCase(), p]))
-  const byName = new Map(merged.map((p) => [p.fullName.trim().toLowerCase(), p]))
+  const [directory, branchAccounts] = await Promise.all([
+    listDirectoryStaff(),
+    listBranchAccounts(),
+  ])
 
-  for (const emp of directory.filter((d) => d.status === 'active')) {
-    const email = (emp.email || '').trim().toLowerCase()
-    const name = emp.fullName.trim().toLowerCase()
-    const existing =
-      (email && byEmail.get(email)) ||
-      byName.get(name) ||
-      merged.find((p) => p.userId === emp.id || p.matchEmails.some((m) => m.toLowerCase() === email))
+  const canonical = buildCanonicalSalaryPeople(branchAccounts, directory)
+  const overlays = mergeProfiles([...seedAsProfiles(), ...remote, ...readLocal()])
 
-    if (existing) {
-      const directoryRate =
-        emp.dailyRate != null && emp.dailyRate > 0 ? emp.dailyRate : undefined
-      const directoryBenefits =
-        emp.benefits && emp.benefits.length > 0 ? normalizeBenefitLines(emp.benefits) : undefined
-      const next = {
-        ...existing,
-        userId: existing.userId || emp.id,
-        id: emp.id,
-        branchId: existing.branchId || emp.branchId || null,
-        branchLabel: existing.branchLabel || emp.branchName || '',
-        jobTitle: existing.jobTitle || emp.title || 'Staff',
-        // Employee Database daily rate / benefits win when set (clinic manager source of truth)
-        salaryPerDay: directoryRate ?? existing.salaryPerDay,
-        benefits: directoryBenefits ?? existing.benefits ?? [],
-        matchEmails: [
-          ...new Set([
-            ...existing.matchEmails,
-            emp.email,
-            ...(email && existing.email.toLowerCase() !== email ? [emp.email] : []),
-          ].filter(Boolean)),
-        ],
-      }
-      byEmail.set((next.email || email).toLowerCase(), next)
+  const out: PayrollProfileRecord[] = []
+  for (const person of canonical.values()) {
+    const overlay = findOverlay(overlays, person)
+    const roleTitle = formatRoleLabel(person.role)
+    const stub = stubFromDirectory({
+      id: person.id,
+      fullName: person.fullName,
+      email: person.email,
+      branchId: person.branchId,
+      branchName: person.branchName,
+      title: roleTitle || person.title || 'Staff',
+    })
+
+    if (!overlay) {
+      if (person.dailyRate != null && person.dailyRate > 0) stub.salaryPerDay = person.dailyRate
+      if (person.benefits?.length) stub.benefits = normalizeBenefitLines(person.benefits)
+      out.push(stub)
       continue
     }
 
-    const stub = stubFromDirectory({
-      id: emp.id,
-      fullName: emp.fullName,
-      email: emp.email,
-      branchId: emp.branchId || '',
-      branchName: emp.branchName || '',
-      title: emp.title || 'Staff',
+    const directoryRate =
+      person.dailyRate != null && person.dailyRate > 0 ? person.dailyRate : undefined
+    const directoryBenefits =
+      person.benefits && person.benefits.length > 0
+        ? normalizeBenefitLines(person.benefits)
+        : undefined
+
+    out.push({
+      ...overlay,
+      userId: overlay.userId || person.id,
+      id: person.id,
+      fullName: person.fullName || overlay.fullName,
+      firstName: stub.firstName || overlay.firstName,
+      middleName: stub.middleName || overlay.middleName,
+      lastName: stub.lastName || overlay.lastName,
+      email: person.email || overlay.email,
+      branchId: person.branchId ?? overlay.branchId ?? null,
+      branchLabel: person.branchName || overlay.branchLabel || '',
+      // Role from Branches Accounts / Staff list wins
+      jobTitle: roleTitle || person.title || overlay.jobTitle || 'Staff',
+      salaryPerDay: directoryRate ?? overlay.salaryPerDay,
+      benefits: directoryBenefits ?? overlay.benefits ?? [],
+      matchEmails: [
+        ...new Set(
+          [...overlay.matchEmails, person.email, overlay.email].filter(Boolean) as string[],
+        ),
+      ],
+      status: 'active',
     })
-    if (emp.dailyRate != null && emp.dailyRate > 0) stub.salaryPerDay = emp.dailyRate
-    if (emp.benefits?.length) stub.benefits = normalizeBenefitLines(emp.benefits)
-    byEmail.set((stub.email || emp.id).toLowerCase(), stub)
   }
 
-  return [...byEmail.values()].sort((a, b) => a.fullName.localeCompare(b.fullName))
+  // Drop local cache entries that are no longer on Branches Accounts / Staff list
+  const keepKeys = new Set(out.map((p) => sourceKey(p)))
+  const prunedLocal = readLocal().filter((p) => keepKeys.has(sourceKey(p)))
+  // Keep rate overlays for current people
+  const byKeep = new Map(prunedLocal.map((p) => [sourceKey(p), p]))
+  for (const p of out) {
+    const key = sourceKey(p)
+    const prev = byKeep.get(key)
+    byKeep.set(key, prev ? { ...prev, ...p, status: 'active' } : p)
+  }
+  writeLocal([...byKeep.values()], true)
+
+  return out.sort((a, b) => a.fullName.localeCompare(b.fullName))
 }
 
 export async function savePayrollProfile(profile: PayrollProfileRecord): Promise<PayrollProfileRecord> {

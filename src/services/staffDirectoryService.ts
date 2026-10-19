@@ -488,6 +488,8 @@ export async function saveEmployeeHrDetails(
 const BOOKING_STAFF_ROLES = new Set<string>([
   ...TIMECLOCK_ROLES.filter((r) => r !== 'DOCTOR'),
   'BRANCH_ADMIN',
+  /** OM can be tagged on checkout at any clinic (org-wide account). */
+  'OPERATIONS_MANAGER',
 ])
 
 function staffForBookingFromUsers(users: AccessUser[], branchId?: string): Staff[] {
@@ -506,13 +508,14 @@ function staffForBookingFromUsers(users: AccessUser[], branchId?: string): Staff
   }
   return mergeStaffById(
     users
-      .filter(
-        (u) =>
-          u.status === 'active' &&
-          Boolean(u.branchId) &&
-          matchesStaffBranch(u, branchId) &&
-          BOOKING_STAFF_ROLES.has(u.role as UserRole),
-      )
+      .filter((u) => {
+        if (u.status !== 'active') return false
+        if (!BOOKING_STAFF_ROLES.has(u.role as UserRole)) return false
+        // Operations Manager is All Branches — available on every clinic checkout
+        if (u.role === 'OPERATIONS_MANAGER') return true
+        if (!isDirectoryEmployee(u)) return false
+        return Boolean(u.branchId) && matchesStaffBranch(u, branchId)
+      })
       .map((u) => applyHr(accessUserToStaff(u), local[u.id])),
   )
 }

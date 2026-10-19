@@ -58,13 +58,16 @@ export function staffNamesMatch(accountName: string, saleStaffName: string) {
   return false
 }
 
+/** Manila calendar day for a sale timestamp (matches My Commission date filters). */
 export function saleDateKey(iso: string) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d)
 }
 
 function round2(n: number) {
@@ -187,8 +190,42 @@ export function computeClinicManagerCommission(input: {
   to: string
 }): { branchSales: number; commission: number } {
   if (!input.branchId) return { branchSales: 0, commission: 0 }
+  return computePaidSalesCommission({
+    branchId: input.branchId,
+    from: input.from,
+    to: input.to,
+    rate: CLINIC_MANAGER_COMMISSION_RATE,
+  })
+}
+
+/**
+ * Operations Manager 1% on paid sales across all clinics (or one clinic when scoped).
+ */
+export function computeOperationsManagerCommission(input: {
+  from: string
+  to: string
+  /** Optional clinic filter; omit / null = all clinics */
+  branchId?: string | null
+}): { branchSales: number; commission: number } {
+  return computePaidSalesCommission({
+    branchId: input.branchId || undefined,
+    from: input.from,
+    to: input.to,
+    rate: CLINIC_MANAGER_COMMISSION_RATE,
+    allBranches: !input.branchId,
+  })
+}
+
+function computePaidSalesCommission(input: {
+  branchId?: string
+  from: string
+  to: string
+  rate: number
+  allBranches?: boolean
+}): { branchSales: number; commission: number } {
+  if (!input.branchId && !input.allBranches) return { branchSales: 0, commission: 0 }
   const branchSales = round2(
-    getBookingRows({ branchId: input.branchId })
+    getBookingRows(input.branchId ? { branchId: input.branchId } : undefined)
       .filter((r) => {
         if (!isPaidBooking(r)) return false
         const day = saleDateKey(r.dateIso)
@@ -198,7 +235,7 @@ export function computeClinicManagerCommission(input: {
   )
   return {
     branchSales,
-    commission: round2(branchSales * CLINIC_MANAGER_COMMISSION_RATE),
+    commission: round2(branchSales * input.rate),
   }
 }
 
@@ -271,6 +308,7 @@ export function computeGrossCommissionForPeriod(input: {
   }
 }
 
+/** Clinic team only — Operations Manager is org-wide and not in the 2M split. */
 const MILESTONE_TEAM_ROLES = new Set([
   'BRANCH_ADMIN',
   'DOCTOR',
@@ -294,15 +332,40 @@ export function listBranchTeamUserIds(branchId: string | null | undefined): stri
   const ids = new Set<string>()
   for (const u of getAccessUsers()) {
     if (u.status !== 'active') continue
+    if (u.role === 'OPERATIONS_MANAGER') continue
     if (!u.branchId || !matchesStaffBranch(u, branchId)) continue
     if (MILESTONE_TEAM_ROLES.has(u.role)) ids.add(u.id)
   }
   for (const s of getDirectoryStaff()) {
     if (s.status !== 'active') continue
+    if (s.role === 'OPERATIONS_MANAGER') continue
     if (!matchesStaffBranch(s, branchId)) continue
+    if (!MILESTONE_TEAM_ROLES.has(s.role)) continue
     if (s.id) ids.add(s.id)
+    if (s.profileId) ids.add(s.profileId)
   }
   return [...ids]
+}
+
+/** True when this person is excluded from the branch 2M team split (e.g. OM). */
+export function isExcludedFromMilestoneShare(
+  userId: string | null | undefined,
+  linkedUserIds: string[] = [],
+): boolean {
+  const ids = new Set<string>([
+    ...(userId ? [userId] : []),
+    ...linkedUserIds,
+  ])
+  if (!ids.size) return false
+  for (const u of getAccessUsers()) {
+    if (!ids.has(u.id)) continue
+    if (u.role === 'OPERATIONS_MANAGER') return true
+  }
+  for (const s of getDirectoryStaff()) {
+    if (!ids.has(s.id) && !(s.profileId && ids.has(s.profileId))) continue
+    if (s.role === 'OPERATIONS_MANAGER') return true
+  }
+  return false
 }
 
 /** Active branch teammates who share the 2M split (staff + clinic manager). */
@@ -551,6 +614,8 @@ export function computeEmployeeMilestoneShare(input: {
   branchPunches: AttendancePunch[]
 }): number {
   if (!input.userId && !input.linkedUserIds?.length) return 0
+  // Operations Manager is not part of the clinic 2M team split
+  if (isExcludedFromMilestoneShare(input.userId, input.linkedUserIds)) return 0
   const result = computeMilestoneSharesByUser({
     branchId: input.branchId,
     periodMonth: input.periodMonth,

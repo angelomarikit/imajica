@@ -4,8 +4,10 @@
  */
 import {
   ATTENDANCE_INCENTIVE_AMOUNT,
+  isMilestonePayoutReleased,
   STAFF_SALES_COMMISSION_RATE,
 } from '@/constants/payrollIncentives'
+import { manilaDateKey } from '@/services/attendanceService'
 import { listAttendanceForBranches } from '@/services/attendanceService'
 import {
   currentPeriodMonth,
@@ -16,6 +18,7 @@ import {
   computeBranchMilestoneSplit,
   computeEmployeeMilestoneShare,
   computeClinicManagerCommission,
+  computeOperationsManagerCommission,
   computeEmployeeStaffCommission,
   resolveEmployeeMatchNames,
   staffNamesMatch,
@@ -52,9 +55,9 @@ export type EmployeeKpiRow = {
   bookingCount: number
   /** Gross paid sales tagged to employee */
   salesAmount: number
-  /** Staff 0.5% (or clinic-manager 1% when BRANCH_ADMIN) */
+  /** Staff 0.5%, clinic-manager 1% (BRANCH_ADMIN), or OM 1% (org-wide) */
   commission: number
-  commissionKind: 'staff' | 'clinic_manager'
+  commissionKind: 'staff' | 'clinic_manager' | 'operations_manager'
   serviceUnits: number
   serviceRevenue: number
   productUnits: number
@@ -220,6 +223,7 @@ export async function buildEmployeeKpiRows(opts?: {
       role === 'NURSE' ||
       role === 'DOCTOR' ||
       role === 'BRANCH_ADMIN' ||
+      role === 'OPERATIONS_MANAGER' ||
       Boolean(s.employeeCode) ||
       Boolean(s.branchId)
     )
@@ -247,9 +251,10 @@ export async function buildEmployeeKpiRows(opts?: {
     })
 
     const isClinicManager = emp.role === 'BRANCH_ADMIN'
+    const isOperationsManager = emp.role === 'OPERATIONS_MANAGER'
     let salesAmount = 0
     let commission = 0
-    let commissionKind: 'staff' | 'clinic_manager' = 'staff'
+    let commissionKind: 'staff' | 'clinic_manager' | 'operations_manager' = 'staff'
     let bookings = computeEmployeeStaffCommission({
       matchNames,
       from: monthFrom,
@@ -266,6 +271,21 @@ export async function buildEmployeeKpiRows(opts?: {
       commission = cm.commission
       commissionKind = 'clinic_manager'
       // Still count personal tagged bookings for activity
+      const tagged = computeEmployeeStaffCommission({
+        matchNames,
+        from: monthFrom,
+        to: monthTo,
+      })
+      bookings = tagged.bookings
+    } else if (isOperationsManager) {
+      const om = computeOperationsManagerCommission({
+        from: monthFrom,
+        to: monthTo,
+        branchId: null,
+      })
+      salesAmount = om.branchSales
+      commission = om.commission
+      commissionKind = 'operations_manager'
       const tagged = computeEmployeeStaffCommission({
         matchNames,
         from: monthFrom,
@@ -328,13 +348,20 @@ export async function buildEmployeeKpiRows(opts?: {
       periodMonth,
       branchPunches,
     })
-    const milestoneShare = computeEmployeeMilestoneShare({
-      branchId: emp.branchId || null,
-      periodMonth,
-      userId: emp.id,
-      linkedUserIds: [...linkedIds],
-      branchPunches,
-    })
+    const payoutReleased = isMilestonePayoutReleased(periodMonth, manilaDateKey())
+    const rawMilestoneShare =
+      isOperationsManager
+        ? 0
+        : computeEmployeeMilestoneShare({
+            branchId: emp.branchId || null,
+            periodMonth,
+            userId: emp.id,
+            linkedUserIds: [...linkedIds],
+            branchPunches,
+          })
+    // 2M share only after the 30th of that month
+    const milestoneShare =
+      payoutReleased && milestoneProgress.milestoneReached ? rawMilestoneShare : 0
 
     const performanceScore = computePerformanceScore({
       salesAmount,
@@ -346,10 +373,7 @@ export async function buildEmployeeKpiRows(opts?: {
     })
 
     const totalIncentivePay = round2(
-      commission +
-        planBAmount +
-        attendanceIncentive +
-        (milestoneProgress.milestoneReached ? milestoneShare : 0),
+      commission + planBAmount + attendanceIncentive + milestoneShare,
     )
 
     return {

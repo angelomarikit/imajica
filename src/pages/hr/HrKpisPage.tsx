@@ -424,7 +424,11 @@ function EmployeeKpiTableRows({
         <td className="px-2 py-3">
           <p className="font-medium">{formatPesoExact(row.commission)}</p>
           <p className="text-[10px] text-slate-ui">
-            {row.commissionKind === 'clinic_manager' ? '1% clinic' : '0.5% tagged'}
+            {row.commissionKind === 'clinic_manager'
+              ? '1% clinic'
+              : row.commissionKind === 'operations_manager'
+                ? '1% all clinics'
+                : '0.5% tagged'}
           </p>
         </td>
         <td className="px-2 py-3">
@@ -521,7 +525,9 @@ function EmployeeKpiTableRows({
                       <span className="block text-[11px] text-slate-ui">
                         {row.commissionKind === 'clinic_manager'
                           ? 'Clinic manager 1% of branch paid sales'
-                          : 'Staff 0.5% of tagged paid sales'}
+                          : row.commissionKind === 'operations_manager'
+                            ? 'Operations manager 1% of all-clinic paid sales'
+                            : 'Staff 0.5% of tagged paid sales'}
                       </span>
                     </span>
                   </li>
