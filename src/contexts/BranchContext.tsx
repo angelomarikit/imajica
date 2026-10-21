@@ -2,7 +2,8 @@ import { createContext, useContext, useMemo, useState, type ReactNode, useEffect
 import { useAuth } from '@/contexts/AuthContext'
 import { getBranches, subscribeBranches } from '@/services/branchService'
 import type { Branch } from '@/types'
-import { isBranchScopedStaff } from '@/utils/franchiseAccess'
+import { resolveClinicBranchId } from '@/services/branchService'
+import { HQ_SENTINEL_BRANCH_ID, isBranchScopedStaff } from '@/utils/franchiseAccess'
 
 interface BranchContextValue {
   branches: Branch[]
@@ -19,7 +20,10 @@ const BranchContext = createContext<BranchContextValue | null>(null)
 export function BranchProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const locked = isBranchScopedStaff(user)
-  const lockedBranchId = locked ? user?.branchId ?? 'all' : 'all'
+  const resolvedUserBranch =
+    resolveClinicBranchId(user?.branchId) ||
+    (user?.branchId && user.branchId !== HQ_SENTINEL_BRANCH_ID ? user.branchId : undefined)
+  const lockedBranchId = locked ? resolvedUserBranch ?? 'all' : 'all'
   const prevUserKey = useRef<string | null>(null)
 
   const [selectedBranchId, setSelectedBranchIdState] = useState(lockedBranchId)
@@ -42,8 +46,8 @@ export function BranchProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    if (locked && user?.branchId) {
-      setSelectedBranchIdState(user.branchId)
+    if (locked && resolvedUserBranch) {
+      setSelectedBranchIdState(resolvedUserBranch)
       prevUserKey.current = user ? `${user.id}:${user.role}` : null
       return
     }
@@ -56,7 +60,7 @@ export function BranchProvider({ children }: { children: ReactNode }) {
     if (userChanged && !locked) {
       setSelectedBranchIdState('all')
     }
-  }, [locked, user, user?.branchId, user?.id, user?.role])
+  }, [locked, user, resolvedUserBranch, user?.id, user?.role])
 
   const setSelectedBranchId = (id: string) => {
     if (locked) return
@@ -64,17 +68,20 @@ export function BranchProvider({ children }: { children: ReactNode }) {
   }
 
   const value = useMemo(() => {
-    const effectiveId = locked && user?.branchId ? user.branchId : selectedBranchId
+    const effectiveId = locked && resolvedUserBranch ? resolvedUserBranch : selectedBranchId
     const selectedBranch = branches.find((b) => b.id === effectiveId) ?? null
     return {
-      branches: locked && user?.branchId ? branches.filter((b) => b.id === user.branchId) : branches,
+      branches:
+        locked && resolvedUserBranch
+          ? branches.filter((b) => b.id === resolvedUserBranch)
+          : branches,
       selectedBranchId: effectiveId,
       setSelectedBranchId,
       selectedBranch,
       isAllBranches: !locked && effectiveId === 'all',
       branchLocked: locked,
     }
-  }, [branches, selectedBranchId, locked, user?.branchId])
+  }, [branches, selectedBranchId, locked, resolvedUserBranch])
 
   return <BranchContext.Provider value={value}>{children}</BranchContext.Provider>
 }

@@ -123,16 +123,22 @@ export function BookingCheckoutModal({
   const { selectedBranchId, selectedBranch } = useBranch()
   const forcedBranchId = useForcedBranchId()
 
-  /** Checkout clinic: locked branch → header branch → patient preferred branch */
+  /** Checkout clinic: locked branch → session branch → header → patient preferred */
   const rawBranchId =
     forcedBranchId ||
+    user?.branchId ||
     (selectedBranchId !== 'all' ? selectedBranchId : '') ||
     patient.preferredBranchId ||
     ''
-  const branchId = resolveClinicBranchId(rawBranchId) || (isUuid(rawBranchId) ? rawBranchId : '')
+  const branchId =
+    resolveClinicBranchId(rawBranchId) ||
+    resolveClinicBranchId(user?.branchName) ||
+    resolveClinicBranchId(patient.preferredBranchName) ||
+    (isUuid(rawBranchId) ? rawBranchId : '')
   const branchName =
     selectedBranch?.name ||
     getBranches().find((b) => b.id === branchId)?.name ||
+    user?.branchName ||
     patient.preferredBranchName ||
     ''
 

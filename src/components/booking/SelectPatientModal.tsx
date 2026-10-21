@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { useAuth } from '@/contexts/AuthContext'
+import { useBranch } from '@/contexts/BranchContext'
 import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import {
@@ -14,6 +15,7 @@ import {
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
 import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
+import { isUuid } from '@/utils/uuid'
 
 const field =
   'h-11 w-full rounded-[10px] border border-border bg-white px-3 text-sm placeholder:text-slate-ui/70 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/15'
@@ -29,6 +31,7 @@ export function SelectPatientModal({
   onSelect: (client: Client) => void
 }) {
   const { user } = useAuth()
+  const { selectedBranchId, selectedBranch } = useBranch()
   const forcedBranchId = useForcedBranchId()
   const effectiveBranchId = useEffectiveBranchId()
   const hqView = isHqRole(user?.role)
@@ -102,21 +105,29 @@ export function SelectPatientModal({
   }, [scopedClients, applied])
 
   function resolveBranch() {
+    const headerId =
+      selectedBranchId !== 'all' ? selectedBranchId : undefined
     const rawId =
       forcedBranchId ||
-      (hqView && effectiveBranchId !== 'all' ? effectiveBranchId : undefined) ||
-      user?.branchId
+      user?.branchId ||
+      (hqView ? (effectiveBranchId !== 'all' ? effectiveBranchId : undefined) : headerId) ||
+      headerId
     const clinicId =
-      resolveClinicBranchId(rawId) || resolveClinicBranchId(user?.branchName)
+      resolveClinicBranchId(rawId) ||
+      resolveClinicBranchId(user?.branchName) ||
+      resolveClinicBranchId(selectedBranch?.name) ||
+      (rawId && isUuid(rawId) ? rawId : null)
     if (clinicId) {
       const fromDb = getBranches().find((b) => b.id === clinicId)
       return {
         id: clinicId,
-        name: (fromDb?.name || user?.branchName || 'Clinic').replace(/ Branch$/, ''),
+        name: (
+          fromDb?.name ||
+          selectedBranch?.name ||
+          user?.branchName ||
+          'Clinic'
+        ).replace(/ Branch$/, ''),
       }
-    }
-    if (rawId && user?.branchName) {
-      return { id: rawId, name: user.branchName.replace(/ Branch$/, '') }
     }
     throw new Error('No clinic branch assigned — cannot register patient')
   }
@@ -140,7 +151,9 @@ export function SelectPatientModal({
     try {
       branch = resolveBranch()
     } catch {
-      toast.error('Your account has no clinic branch — contact HQ')
+      toast.error(
+        'Your account has no clinic branch. Sign out and sign in again with your Branches Accounts login. If it still fails, ask HQ to re-save your clinic on Team → Branches Accounts.',
+      )
       return
     }
     setSaving(true)

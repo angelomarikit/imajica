@@ -187,6 +187,17 @@ const CLINIC_ALIASES: Record<string, string> = {
   fr02: '22222222-2222-2222-2222-222222222206',
 }
 
+/** Canonical clinic UUIDs (company-owned + franchise) — used even if local cache hid a branch. */
+const CANONICAL_CLINIC_IDS = new Set<string>([
+  ...Object.values(CLINIC_ALIASES),
+  '22222222-2222-2222-2222-222222222201',
+  '22222222-2222-2222-2222-222222222202',
+  '22222222-2222-2222-2222-222222222203',
+  '22222222-2222-2222-2222-222222222204',
+  '22222222-2222-2222-2222-222222222205',
+  '22222222-2222-2222-2222-222222222206',
+])
+
 /** Resolve a clinic branch UUID for Supabase writes (id, code, alias, or name). */
 export function resolveClinicBranchId(
   branchIdOrName: string | null | undefined,
@@ -194,9 +205,23 @@ export function resolveClinicBranchId(
   if (!branchIdOrName) return null
   const raw = branchIdOrName.trim()
   if (!raw) return null
+
+  // Known clinic UUID — accept even if localStorage marked the branch deleted/inactive
+  if (CANONICAL_CLINIC_IDS.has(raw)) return raw
+
   const branches = getClinicBranches()
   const byId = branches.find((b) => b.id === raw)
   if (byId) return byId.id
+  // Full directory (includes inactive) — still prefer a real clinic row over failing
+  const anyById = getBranches().find(
+    (b) =>
+      b.id === raw &&
+      b.branchType !== 'warehouse' &&
+      b.code !== 'HQ' &&
+      b.id !== '00000000-0000-0000-0000-000000000001',
+  )
+  if (anyById) return anyById.id
+
   const byCode = branches.find((b) => b.code.toLowerCase() === raw.toLowerCase())
   if (byCode) return byCode.id
   const needle = raw

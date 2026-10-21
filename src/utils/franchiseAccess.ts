@@ -149,7 +149,17 @@ export function isTimeclockStaff(user: AuthSessionUser | null | undefined): bool
 
 /** Staff who must stay locked to a single branch in UI/data. */
 export function isBranchScopedStaff(user: AuthSessionUser | null | undefined): boolean {
-  return isBranchOwner(user) || isTimeclockStaff(user) || isBranchMarketingRole(user?.role)
+  if (!user) return false
+  if (isBranchOwner(user) || isTimeclockStaff(user)) return true
+  // Branch Marketing / clinic roles with a real clinic tag (not HQ sentinel)
+  if (
+    (isBranchMarketingRole(user.role) || TIMECLOCK_ROLES.includes(user.role) || user.role === 'BRANCH_ADMIN') &&
+    user.branchId &&
+    user.branchId !== HQ_SENTINEL_BRANCH_ID
+  ) {
+    return true
+  }
+  return false
 }
 
 export function canAccessHqAdmin(user: AuthSessionUser | null | undefined): boolean {
