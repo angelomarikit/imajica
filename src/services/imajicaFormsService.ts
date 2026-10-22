@@ -1,9 +1,13 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 import { formPdfUrl } from '@/constants/imajicaFormTemplates'
 import type { FormTemplateDef } from '@/constants/imajicaFormTemplates'
+import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { isUuid } from '@/utils/uuid'
 
 const STORAGE_KEY = 'imajica_generated_forms'
 const CHANGE_EVENT = 'imajica:forms-changed'
+/** Keep local history small — signatures are large even when compressed. */
+const MAX_LOCAL_FORMS = 25
 
 export type GeneratedFormRecord = {
   id: string
@@ -31,6 +35,12 @@ function readStored(): GeneratedFormRecord[] {
     const parsed = JSON.parse(raw) as GeneratedFormRecord[]
     return Array.isArray(parsed) ? parsed : []
   } catch {
+    // Corrupt / truncated JSON after a prior quota failure
+    try {
+      localStorage.removeItem(STORAGE_KEY)
+    } catch {
+      /* ignore */
+    }
     return []
   }
 }
@@ -46,6 +56,132 @@ function readDeleted(): Set<string> {
   }
 }
 
+/** Shrink signature data URLs so localStorage / DB stay under quota. */
+export async function compressSignatureDataUrl(
+  dataUrl: string,
+  maxWidth = 480,
+  quality = 0.65,
+): Promise<string> {
+  if (!dataUrl?.startsWith('data:image/')) return dataUrl
+  // Already a small JPEG — skip re-encode if under ~40KB
+  if (dataUrl.startsWith('data:image/jpeg') && dataUrl.length < 40_000) return dataUrl
+
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, maxWidth / Math.max(1, img.width))
+        const w = Math.max(1, Math.round(img.width * scale))
+        const h = Math.max(1, Math.round(img.height * scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          resolve(dataUrl)
+          return
+        }
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, w, h)
+        ctx.drawImage(img, 0, 0, w, h)
+        resolve(canvas.toDataURL('image/jpeg', quality))
+      } catch {
+        resolve(dataUrl)
+      }
+    }
+    img.onerror = () => resolve(dataUrl)
+    img.src = dataUrl
+  })
+}
+
+function estimateBytes(rows: GeneratedFormRecord[]): number {
+  try {
+    return new Blob([JSON.stringify(rows)]).size
+  } catch {
+    return JSON.stringify(rows).length
+  }
+}
+
+/** Write forms history; prune oldest on QuotaExceededError until it fits. */
+function persistLocal(rows: GeneratedFormRecord[]): void {
+  let next = rows.slice(0, MAX_LOCAL_FORMS)
+  // Soft cap ~3.5MB to leave room for other keys
+  while (next.length > 1 && estimateBytes(next) > 3_500_000) {
+    next = next.slice(0, -1)
+  }
+  for (;;) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      return
+    } catch (err) {
+      const quota =
+        err instanceof DOMException &&
+        (err.name === 'QuotaExceededError' ||
+          err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+          err.code === 22)
+      if (!quota || next.length <= 1) {
+        // Last resort: drop signatures from remaining rows and retry once
+        if (next.length > 0) {
+          const slim = next.map((r) => ({
+            ...r,
+            clientSignature: r.clientSignature ? '[signature-omitted-quota]' : '',
+            otherSignature: undefined,
+          }))
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(slim.slice(0, 5)))
+            return
+          } catch {
+            try {
+              localStorage.removeItem(STORAGE_KEY)
+            } catch {
+              /* ignore */
+            }
+            throw new Error(
+              'Browser storage is full. Clear site data for this app, or delete old forms, then try again.',
+            )
+          }
+        }
+        throw err instanceof Error
+          ? err
+          : new Error('Could not save form history — browser storage is full')
+      }
+      next = next.slice(0, -1)
+    }
+  }
+}
+
+/** One-time cleanup of oversized history already on this device. */
+function pruneIfBloated() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return
+    if (raw.length > 4_000_000) {
+      const rows = readStored()
+      const slim = rows.slice(0, MAX_LOCAL_FORMS).map((r) => ({
+        ...r,
+        // Drop huge legacy PNG signatures from old records
+        clientSignature:
+          r.clientSignature && r.clientSignature.length > 80_000
+            ? ''
+            : r.clientSignature,
+        otherSignature:
+          r.otherSignature && r.otherSignature.length > 80_000
+            ? undefined
+            : r.otherSignature,
+      }))
+      persistLocal(slim)
+    }
+  } catch {
+    try {
+      localStorage.removeItem(STORAGE_KEY)
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+pruneIfBloated()
+
 export function getGeneratedForms(): GeneratedFormRecord[] {
   const extra = readStored()
   const deleted = readDeleted()
@@ -56,16 +192,95 @@ export function getGeneratedForms(): GeneratedFormRecord[] {
   )
 }
 
-export function createGeneratedForm(input: {
+async function persistRemote(record: GeneratedFormRecord): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) return
+  const id = isUuid(record.id) ? record.id : crypto.randomUUID()
+  const { error } = await supabase.from('imajica_forms').upsert(
+    {
+      id,
+      title: `${record.formType} — ${record.clientName}`,
+      form_type: record.formType,
+      client_name: record.clientName,
+      template_file: record.templateFile,
+      branch_code: record.branch,
+      field_values: {
+        ...record.fieldValues,
+        __templateId: record.templateId,
+        __clientSignature: record.clientSignature || null,
+        __otherSignature: record.otherSignature || null,
+      },
+      submitted_at: record.submittedAt,
+      status: 'active',
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'id' },
+  )
+  if (error) {
+    console.warn('[forms] supabase save skipped:', error.message)
+  }
+}
+
+export async function preloadGeneratedForms(): Promise<void> {
+  pruneIfBloated()
+  if (!isSupabaseConfigured || !supabase) return
+  const { data, error } = await supabase
+    .from('imajica_forms')
+    .select(
+      'id, client_name, form_type, template_file, branch_code, field_values, submitted_at, title',
+    )
+    .order('submitted_at', { ascending: false })
+    .limit(80)
+  if (error || !data) return
+
+  const remote: GeneratedFormRecord[] = data.map((row) => {
+    const fv = (row.field_values || {}) as Record<string, unknown>
+    const clientSig =
+      typeof fv.__clientSignature === 'string' ? fv.__clientSignature : ''
+    const otherSig =
+      typeof fv.__otherSignature === 'string' ? fv.__otherSignature : undefined
+    const { __clientSignature: _c, __otherSignature: _o, __templateId, ...rest } = fv
+    void _c
+    void _o
+    return {
+      id: String(row.id),
+      clientName: row.client_name || row.title || 'Guest',
+      formType: row.form_type || 'Form',
+      templateId: typeof __templateId === 'string' ? __templateId : '',
+      templateFile: row.template_file || '',
+      branch: row.branch_code || '',
+      submittedAt: row.submitted_at || new Date().toISOString(),
+      fieldValues: rest,
+      clientSignature: clientSig,
+      otherSignature: otherSig,
+    }
+  })
+
+  const local = readStored()
+  const byId = new Map<string, GeneratedFormRecord>()
+  for (const r of [...remote, ...local]) byId.set(r.id, r)
+  persistLocal(
+    [...byId.values()].sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)),
+  )
+  emit()
+}
+
+export async function createGeneratedForm(input: {
   template: FormTemplateDef
   clientName: string
   branch?: string
   fieldValues: Record<string, unknown>
   clientSignature: string
   otherSignature?: string
-}): GeneratedFormRecord {
+}): Promise<GeneratedFormRecord> {
+  const [clientSignature, otherSignature] = await Promise.all([
+    compressSignatureDataUrl(input.clientSignature),
+    input.otherSignature
+      ? compressSignatureDataUrl(input.otherSignature)
+      : Promise.resolve(undefined),
+  ])
+
   const record: GeneratedFormRecord = {
-    id: `gf-${Date.now()}`,
+    id: crypto.randomUUID(),
     clientName: input.clientName.trim() || 'Guest',
     formType: input.template.typeLabel,
     templateId: input.template.id,
@@ -73,26 +288,32 @@ export function createGeneratedForm(input: {
     branch: input.branch ?? 'BR01',
     submittedAt: new Date().toISOString(),
     fieldValues: input.fieldValues,
-    clientSignature: input.clientSignature,
-    otherSignature: input.otherSignature,
+    clientSignature,
+    otherSignature,
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([record, ...readStored()]))
+
+  persistLocal([record, ...readStored()])
   emit()
+  void persistRemote(record)
   return record
 }
 
 export function deleteGeneratedForm(id: string) {
-  if (id.startsWith('gf-') && !DEFAULT_HISTORY.some((r) => r.id === id)) {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(readStored().filter((r) => r.id !== id)),
-    )
+  if (!DEFAULT_HISTORY.some((r) => r.id === id)) {
+    persistLocal(readStored().filter((r) => r.id !== id))
   } else {
     const deleted = readDeleted()
     deleted.add(id)
-    localStorage.setItem(`${STORAGE_KEY}_deleted`, JSON.stringify([...deleted]))
+    try {
+      localStorage.setItem(`${STORAGE_KEY}_deleted`, JSON.stringify([...deleted]))
+    } catch {
+      /* ignore */
+    }
   }
   emit()
+  if (isSupabaseConfigured && supabase && isUuid(id)) {
+    void supabase.from('imajica_forms').delete().eq('id', id)
+  }
 }
 
 export function subscribeGeneratedForms(listener: () => void) {
@@ -108,6 +329,7 @@ export function subscribeGeneratedForms(listener: () => void) {
 }
 
 function dataUrlToBytes(dataUrl: string): { bytes: Uint8Array; kind: 'png' | 'jpg' } | null {
+  if (dataUrl === '[signature-omitted-quota]') return null
   const match = /^data:(image\/(?:png|jpeg|jpg));base64,(.+)$/i.exec(dataUrl)
   if (!match) return null
   const mime = match[1]!.toLowerCase()
@@ -174,7 +396,6 @@ async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord
 
   void height
 
-  // Signature area near bottom (matches typical Patient's Signature / Date lines)
   const sigWidth = Math.min(200, width * 0.34)
   const sigHeight = 52
   const sigX = width * 0.12

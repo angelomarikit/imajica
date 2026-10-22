@@ -21,7 +21,8 @@ export function SignaturePad({
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    const ratio = window.devicePixelRatio || 1
+    // Cap DPR so signature PNGs/JPEGs stay small (avoids localStorage quota errors)
+    const ratio = Math.min(1.5, window.devicePixelRatio || 1)
     const w = canvas.clientWidth
     const h = canvas.clientHeight
     canvas.width = w * ratio
@@ -67,7 +68,8 @@ export function SignaturePad({
     if (!drawing.current) return
     drawing.current = false
     const canvas = canvasRef.current
-    if (canvas) onChange(canvas.toDataURL('image/png'))
+    // JPEG is much smaller than PNG — critical for tablet localStorage limits
+    if (canvas) onChange(canvas.toDataURL('image/jpeg', 0.72))
   }
 
   function clear() {

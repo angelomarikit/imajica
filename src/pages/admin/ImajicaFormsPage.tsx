@@ -28,6 +28,7 @@ import {
   downloadGeneratedPacket,
   getGeneratedForms,
   openGeneratedFormPdf,
+  preloadGeneratedForms,
   subscribeGeneratedForms,
   type GeneratedFormRecord,
 } from '@/services/imajicaFormsService'
@@ -69,7 +70,10 @@ export function ImajicaFormsPage() {
     }
   }, [viewPdfUrl])
 
-  useEffect(() => subscribeGeneratedForms(() => setHistory(getGeneratedForms())), [])
+  useEffect(() => {
+    void preloadGeneratedForms().then(() => setHistory(getGeneratedForms()))
+    return subscribeGeneratedForms(() => setHistory(getGeneratedForms()))
+  }, [])
 
   useEffect(() => {
     setValues({})
@@ -81,11 +85,14 @@ export function ImajicaFormsPage() {
 
   const filteredHistory = useMemo(() => {
     let list = history
-    if (franchiseOwner && user?.branchName) {
-      const branchName = user.branchName
-      list = list.filter(
-        (h) => h.branch === branchName || h.branch.includes(branchName.split(',')[0] ?? branchName),
-      )
+    // Clinic-scoped staff (all clinics, not only franchise): only their branch history
+    const branchName = user?.branchName
+    if (branchName && (franchiseOwner || user?.role === 'BRANCH_ADMIN' || Boolean(user?.branchId))) {
+      const token = branchName.split(',')[0]?.trim().toLowerCase() || branchName.toLowerCase()
+      list = list.filter((h) => {
+        const hb = (h.branch || '').toLowerCase()
+        return hb === branchName.toLowerCase() || hb.includes(token) || token.includes(hb.split(',')[0] || '')
+      })
     }
     if (!search.trim()) return list
     const q = search.toLowerCase()
@@ -95,7 +102,7 @@ export function ImajicaFormsPage() {
         h.formType.toLowerCase().includes(q) ||
         h.branch.toLowerCase().includes(q),
     )
-  }, [history, search, franchiseOwner, user?.branchName])
+  }, [history, search, franchiseOwner, user?.branchName, user?.branchId, user?.role])
 
   function setField(key: string, value: unknown) {
     setValues((prev) => ({ ...prev, [key]: value }))
@@ -113,22 +120,28 @@ export function ImajicaFormsPage() {
     }
     setBusyAction('generate')
     try {
-      const record = createGeneratedForm({
+      const record = await createGeneratedForm({
         template,
         clientName: patientName,
-        branch: user?.branchName ?? 'BR01',
+        branch: user?.branchName || user?.branchId || 'Clinic',
         fieldValues: values,
         clientSignature: clientSig,
         otherSignature: template.otherSignature ? otherSig || undefined : undefined,
       })
       await downloadGeneratedPacket(record)
+      setHistory(getGeneratedForms())
       toast.success(`Generated ${record.formType} PDF`)
       setPatientName('')
       setValues({})
       setClientSig('')
       setOtherSig('')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to generate PDF')
+      const msg = err instanceof Error ? err.message : 'Failed to generate PDF'
+      toast.error(
+        /quota|storage is full/i.test(msg)
+          ? 'Device storage is full. Delete old forms below, then generate again.'
+          : msg,
+      )
     } finally {
       setBusyAction(null)
     }
