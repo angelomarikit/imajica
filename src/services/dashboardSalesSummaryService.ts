@@ -18,6 +18,10 @@ export type BranchDashboardSalesSummary = {
   latestSaleDate: string | null
 }
 
+/** Avoid hammering RPC after "not allowed" / 429 — clears on full page reload. */
+const deniedBranchIds = new Set<string>()
+const cooldownUntil = new Map<string, number>()
+
 function num(v: unknown) {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
@@ -55,6 +59,14 @@ export async function fetchBranchDashboardSalesSummary(input: {
 }): Promise<BranchDashboardSalesSummary | null> {
   if (!isSupabaseConfigured || !supabase || !input.branchId) return null
 
+  if (deniedBranchIds.has(input.branchId)) {
+    return null
+  }
+  const cool = cooldownUntil.get(input.branchId) ?? 0
+  if (cool > Date.now()) {
+    return null
+  }
+
   const { data, error } = await supabase.rpc('branch_dashboard_sales_summary', {
     p_branch_id: input.branchId,
     p_from: input.from,
@@ -63,12 +75,28 @@ export async function fetchBranchDashboardSalesSummary(input: {
   })
 
   if (error) {
-    console.error('[dashboard] sales summary rpc failed', error.message)
+    const msg = error.message || ''
+    // 429 / rate limit — back off this branch for 60s
+    if (/429|rate limit|too many/i.test(msg) || (error as { status?: number }).status === 429) {
+      cooldownUntil.set(input.branchId, Date.now() + 60_000)
+      console.warn('[dashboard] sales summary rate-limited; using local sales for 60s')
+      return null
+    }
+    console.error('[dashboard] sales summary rpc failed', msg)
     return null
   }
   if (!data || typeof data !== 'object') return null
   const mapped = mapSummary(data as Record<string, unknown>)
   if (!mapped.ok) {
+    // Permanent for this session until role/branch is fixed in DB
+    if (/not allowed/i.test(mapped.error || '')) {
+      deniedBranchIds.add(input.branchId)
+      console.warn(
+        '[dashboard] sales summary denied for this branch — check user_roles.branch_id for this login (run migration 20261022000094). Falling back to local sales.',
+        mapped.error,
+      )
+      return null
+    }
     console.error('[dashboard] sales summary denied', mapped.error)
     return null
   }

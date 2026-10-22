@@ -37,8 +37,13 @@ export function LoginPage() {
     e.preventDefault()
     setLoading(true)
     try {
-      const hintEmail =
-        roleHint === 'CLIENT'
+      // Live Supabase: always sign in with the email typed in the form.
+      // (Admin / Staff / Clinic Manager used to rewrite to demo emails like
+      // franchise@imajica.ph — that broke real clinic logins e.g. lipa@imajica.com.)
+      // Offline demo only: map those buttons to seed accounts.
+      const hintEmail = isSupabaseConfigured
+        ? email.trim()
+        : roleHint === 'CLIENT'
           ? 'client@imajica.ph'
           : roleHint === 'RECEPTIONIST'
             ? 'staff@imajica.ph'
@@ -47,6 +52,11 @@ export function LoginPage() {
               : roleHint === 'HQ_ADMIN' || roleHint === 'SUPER_ADMIN'
                 ? 'admin@imajica.ph'
                 : email
+
+      if (isSupabaseConfigured && !hintEmail) {
+        toast.error('Enter your clinic email (e.g. lipa@imajica.com), then Sign In')
+        return
+      }
 
       const sessionUser = await login(hintEmail || email, password, roleHint)
       // Prefer DB role from login; roleHint only for offline demo quick-login buttons
@@ -248,33 +258,44 @@ export function LoginPage() {
             {loading ? 'Signing in…' : 'Sign In →'}
           </button>
 
-          <div className="my-5 flex items-center gap-3 text-xs text-[#8a8a8a]">
-            <div className="h-px flex-1 bg-[#E5E0D6]" />
-            Or continue with
-            <div className="h-px flex-1 bg-[#E5E0D6]" />
-          </div>
+          {/* Demo quick-login only when Supabase is not configured.
+              Live clinics must use email + Sign In (role comes from Branches Accounts). */}
+          {!isSupabaseConfigured ? (
+            <>
+              <div className="my-5 flex items-center gap-3 text-xs text-[#8a8a8a]">
+                <div className="h-px flex-1 bg-[#E5E0D6]" />
+                Or continue with
+                <div className="h-px flex-1 bg-[#E5E0D6]" />
+              </div>
 
-          <div className="grid grid-cols-3 gap-2.5">
-            {(
-              [
-                { label: 'Admin', role: 'HQ_ADMIN' as const, icon: Settings2 },
-                { label: 'Staff', role: 'RECEPTIONIST' as const, icon: Heart },
-                { label: 'Clinic Manager', role: 'BRANCH_ADMIN' as const, icon: Building2 },
-              ]
-            ).map(({ label, role, icon: Icon }) => (
-              <button
-                key={label}
-                type="button"
-                onClick={(e) => void handleSubmit(e, role)}
-                className={cn(
-                  'flex flex-col items-center gap-1.5 rounded-[10px] border border-[#C5A059]/55 bg-[#FBF7F0] px-2 py-3 text-xs font-medium text-[#0A2E26] transition hover:bg-[#F7F1E3]',
-                )}
-              >
-                <Icon className="h-4 w-4 text-[#C5A059]" />
-                {label}
-              </button>
-            ))}
-          </div>
+              <div className="grid grid-cols-3 gap-2.5">
+                {(
+                  [
+                    { label: 'Admin', role: 'HQ_ADMIN' as const, icon: Settings2 },
+                    { label: 'Staff', role: 'RECEPTIONIST' as const, icon: Heart },
+                    { label: 'Clinic Manager', role: 'BRANCH_ADMIN' as const, icon: Building2 },
+                  ]
+                ).map(({ label, role, icon: Icon }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={(e) => void handleSubmit(e, role)}
+                    className={cn(
+                      'flex flex-col items-center gap-1.5 rounded-[10px] border border-[#C5A059]/55 bg-[#FBF7F0] px-2 py-3 text-xs font-medium text-[#0A2E26] transition hover:bg-[#F7F1E3]',
+                    )}
+                  >
+                    <Icon className="h-4 w-4 text-[#C5A059]" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="mt-5 text-center text-xs text-[#8a8a8a]">
+              Use your Branches Accounts email and password, then Sign In. Your role and clinic
+              (e.g. Lipa Clinic Manager) are loaded from the database.
+            </p>
+          )}
 
           <p className="mt-6 text-center text-sm text-[#6b6b6b]">
             New here?{' '}
