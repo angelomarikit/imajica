@@ -123,6 +123,10 @@ export const TEAM_ACCOUNTS_SEED: TeamAccountSeed[] = [
   branch('tablemanager03', 'tableBR03@gmail.com', BRANCH_IDS.pasig, 'Pasig City', 41),
   branch('Veronica Mayo', 'veronnemay@gmail.com', BRANCH_IDS.cainta, 'Cainta, Rizal', 42),
   hq('Zhai', 'zhairethchua81@gmail.com', 43),
+  // Lipa (BR04) — parity with San Mateo / Cainta / Pasig clinic logins
+  branch('LIPA ADMIN', 'lipa@imajica.com', BRANCH_IDS.lipa, 'Lipa, Batangas', 44),
+  branch('Lipa, Batangas', 'imajicalipa@gmail.com', BRANCH_IDS.lipa, 'Lipa, Batangas', 45),
+  branch('tablemanager04', 'tableBR04@gmail.com', BRANCH_IDS.lipa, 'Lipa, Batangas', 46),
 ]
 
 export function teamAccountsAsAccessUsers(): AccessUser[] {

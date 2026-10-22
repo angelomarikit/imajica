@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom'
 import { useState } from 'react'
 import { AdminSidebar } from './AdminSidebar'
 import { AdminHeader } from './AdminHeader'
+import { PageErrorBoundary } from './PageErrorBoundary'
 
 export function AdminShell() {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -16,7 +17,9 @@ export function AdminShell() {
           <AdminHeader menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((v) => !v)} />
         </div>
         <main className="flex-1 px-4 py-5 lg:px-6 lg:py-6 print:p-0">
-          <Outlet />
+          <PageErrorBoundary>
+            <Outlet />
+          </PageErrorBoundary>
         </main>
       </div>
     </div>

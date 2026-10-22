@@ -37,7 +37,7 @@ export function RegisterPage() {
     gender: 'female' as 'female' | 'male' | 'prefer_not_to_say',
     password: '',
     confirmPassword: '',
-    preferredBranch: 'br-pasig',
+    preferredBranch: '22222222-2222-2222-2222-222222222203',
   })
 
   function update<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
@@ -317,10 +317,12 @@ export function RegisterPage() {
                   value={form.preferredBranch}
                   onChange={(e) => update('preferredBranch', e.target.value)}
                 >
-                  <option value="br-pasig">Pasig Branch</option>
-                  <option value="br-makati">Makati Branch</option>
-                  <option value="br-alabang">Alabang Branch</option>
-                  <option value="br-santacruz">Santa Cruz Branch</option>
+                  <option value="22222222-2222-2222-2222-222222222201">San Mateo, Rizal</option>
+                  <option value="22222222-2222-2222-2222-222222222202">Cainta, Rizal</option>
+                  <option value="22222222-2222-2222-2222-222222222203">Pasig City</option>
+                  <option value="22222222-2222-2222-2222-222222222204">Lipa, Batangas</option>
+                  <option value="22222222-2222-2222-2222-222222222205">Dasmariñas, Cavite</option>
+                  <option value="22222222-2222-2222-2222-222222222206">Bacoor, Cavite</option>
                 </select>
               </label>
             </div>

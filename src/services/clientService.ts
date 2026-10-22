@@ -426,7 +426,7 @@ function mapRemoteClient(row: RemoteClientRow): Client {
   return {
     id: row.id,
     code: row.code || `MJ-${row.id.slice(0, 8).toUpperCase()}`,
-    fullName: row.full_name,
+    fullName: (row.full_name || '').trim() || 'Unknown client',
     email: row.email || '',
     phone: row.phone || '',
     dateOfBirth: row.date_of_birth || '',

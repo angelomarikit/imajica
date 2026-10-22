@@ -67,23 +67,34 @@ type BirthdayCard = {
   role?: string
 }
 
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean)
-  if (parts.length >= 2) return `${parts[0]![0]}${parts[parts.length - 1]![0]}`.toUpperCase()
-  return name.slice(0, 2).toUpperCase() || '—'
+function safeName(name: unknown, fallback = 'Unknown') {
+  const s = typeof name === 'string' ? name.trim() : ''
+  return s || fallback
 }
 
-function parseDob(raw?: string): Date | null {
-  if (!raw?.trim()) return null
-  const d = new Date(raw.includes('T') ? raw : `${raw}T12:00:00`)
+function initials(name: unknown) {
+  const parts = safeName(name, '—').split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) return `${parts[0]![0]}${parts[parts.length - 1]![0]}`.toUpperCase()
+  return (parts[0] || '—').slice(0, 2).toUpperCase()
+}
+
+function parseDob(raw?: string | null): Date | null {
+  if (raw == null) return null
+  const text = String(raw).trim()
+  if (!text) return null
+  const d = new Date(text.includes('T') ? text : `${text}T12:00:00`)
   return Number.isNaN(d.getTime()) ? null : d
 }
 
 function birthdayMeta(dob: Date, from: Date) {
+  if (Number.isNaN(dob.getTime())) return null
   const today = new Date(from.getFullYear(), from.getMonth(), from.getDate())
   let next = new Date(today.getFullYear(), dob.getMonth(), dob.getDate())
+  if (Number.isNaN(next.getTime())) return null
   if (next < today) next = new Date(today.getFullYear() + 1, dob.getMonth(), dob.getDate())
+  if (Number.isNaN(next.getTime())) return null
   const daysUntil = Math.round((next.getTime() - today.getTime()) / 86_400_000)
+  if (!Number.isFinite(daysUntil)) return null
   let age = today.getFullYear() - dob.getFullYear()
   const hadBirthday =
     today.getMonth() > dob.getMonth() ||
@@ -896,10 +907,10 @@ function BranchOpsDashboard() {
       const dob = parseDob(c.dateOfBirth)
       if (!dob) continue
       const meta = birthdayMeta(dob, now)
-      if (meta.daysUntil > 92) continue
+      if (!meta || meta.daysUntil > 92) continue
       const card: BirthdayCard = {
         id: c.id,
-        name: c.fullName,
+        name: safeName(c.fullName, 'Client'),
         initials: initials(c.fullName),
         label: meta.daysUntil === 0 ? 'Today' : `in ${meta.daysUntil} days`,
         sub: `${meta.displayDate} | ${meta.age} years old`,
@@ -924,10 +935,10 @@ function BranchOpsDashboard() {
       const dob = parseDob(s.birthDate)
       if (!dob) continue
       const meta = birthdayMeta(dob, now)
-      if (meta.daysUntil > 92) continue
+      if (!meta || meta.daysUntil > 92) continue
       const card: BirthdayCard = {
         id: s.id,
-        name: s.fullName,
+        name: safeName(s.fullName, 'Staff'),
         initials: initials(s.fullName),
         label: meta.daysUntil === 0 ? 'Today' : `in ${meta.daysUntil} days`,
         sub: `${meta.displayDate} | ${meta.age} years old`,
@@ -1179,7 +1190,9 @@ function BranchOpsDashboard() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title={branchOwner ? 'Completed Bookings' : 'Total Appointments'}
-          value={(branchOwner ? metrics.completedBookings : metrics.totalAppointments).toLocaleString()}
+          value={Number(
+            branchOwner ? metrics.completedBookings : metrics.totalAppointments,
+          ).toLocaleString()}
           hint={`In selected range · ${rangeLabel}`}
           tag="Bookings"
           tagTone="amber"

@@ -12,6 +12,7 @@ const LEGACY_BRANCH_IDS: Record<string, string> = {
   'br-pasig': BRANCH_IDS.pasig,
   'br-san-mateo': BRANCH_IDS.sanMateo,
   'br-cainta': BRANCH_IDS.cainta,
+  'br-lipa': BRANCH_IDS.lipa,
   'br-dasma': BRANCH_IDS.dasma,
   'br-bacoor': BRANCH_IDS.bacoor,
   'br-makati': BRANCH_IDS.pasig,
@@ -117,20 +118,24 @@ export function matchesStaffBranch(
   return a === b || a.includes(b) || b.includes(a)
 }
 
-function splitFullName(fullName: string): { firstName: string; middleName: string; lastName: string } {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean)
+function splitFullName(fullName: string | null | undefined): {
+  firstName: string
+  middleName: string
+  lastName: string
+} {
+  const parts = (fullName || '').trim().split(/\s+/).filter(Boolean)
   if (parts.length === 0) return { firstName: '', middleName: '', lastName: '' }
-  if (parts.length === 1) return { firstName: parts[0], middleName: '', lastName: '' }
-  if (parts.length === 2) return { firstName: parts[0], middleName: '', lastName: parts[1] }
+  if (parts.length === 1) return { firstName: parts[0]!, middleName: '', lastName: '' }
+  if (parts.length === 2) return { firstName: parts[0]!, middleName: '', lastName: parts[1]! }
   return {
-    firstName: parts[0],
+    firstName: parts[0]!,
     middleName: parts.slice(1, -1).join(' '),
-    lastName: parts[parts.length - 1],
+    lastName: parts[parts.length - 1]!,
   }
 }
 
 function isDirectoryEmployee(u: AccessUser): boolean {
-  const name = u.fullName.trim().toUpperCase()
+  const name = (u.fullName || '').trim().toUpperCase()
   if (!name || name === 'INACTIVE') return false
   return true
 }
@@ -252,12 +257,13 @@ function applyHr(staff: Staff, hr?: EmployeeHrDetails | null): Staff {
 
 export function accessUserToStaff(u: AccessUser): Staff {
   const names = splitFullName(u.fullName)
+  const fullName = (u.fullName || '').trim() || 'Staff'
   return {
     id: u.id,
     profileId: u.id,
     code: u.employeeCode ? `EMP-${u.employeeCode}` : `EMP-${u.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`,
     employeeCode: u.employeeCode ?? null,
-    fullName: u.fullName,
+    fullName,
     firstName: names.firstName,
     middleName: names.middleName,
     lastName: names.lastName,
@@ -281,7 +287,7 @@ export function accessUserToStaff(u: AccessUser): Staff {
 function mergeStaffById(rows: Staff[]): Staff[] {
   const byKey = new Map<string, Staff>()
   for (const row of rows) {
-    const key = row.email.trim().toLowerCase() || row.id
+    const key = (row.email || '').trim().toLowerCase() || row.id
     const existing = byKey.get(key)
     if (!existing) {
       byKey.set(key, row)

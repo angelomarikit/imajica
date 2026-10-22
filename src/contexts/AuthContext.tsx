@@ -128,6 +128,21 @@ function branchMeta(branchId: string | undefined) {
   }
 }
 
+/** Map clinic shortcut logins → branch UUID when user_roles.branch_id is missing. */
+function clinicBranchFromShortcutEmail(email: string | undefined): string | undefined {
+  const local = (email || '').trim().toLowerCase().split('@')[0] || ''
+  const map: Record<string, string> = {
+    sanmateo: '22222222-2222-2222-2222-222222222201',
+    cainta: '22222222-2222-2222-2222-222222222202',
+    pasig: '22222222-2222-2222-2222-222222222203',
+    pasi: '22222222-2222-2222-2222-222222222203',
+    lipa: '22222222-2222-2222-2222-222222222204',
+    dasma: '22222222-2222-2222-2222-222222222205',
+    bacoor: '22222222-2222-2222-2222-222222222206',
+  }
+  return map[local]
+}
+
 /** Resolve app session from Supabase auth user + profiles / user_roles (DB is source of truth). */
 async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthSessionUser> {
   if (!supabase) {
@@ -167,7 +182,7 @@ async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthS
       (roleRows ?? []).find(
         (r) => r.branch_id && String(r.branch_id) !== hqSentinel,
       )
-  const branchId = staffBranch?.branch_id ? String(staffBranch.branch_id) : undefined
+  let branchId = staffBranch?.branch_id ? String(staffBranch.branch_id) : undefined
 
   let branchType: AuthSessionUser['branchType']
   let branchName: string | undefined
@@ -200,9 +215,29 @@ async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthS
     )
   }
 
+  const email = profile?.email || authUser.email || ''
+  // Clinic shortcut accounts (lipa@ / cainta@ / …) with missing user_roles.branch_id
+  if (
+    !branchId &&
+    (role === 'BRANCH_ADMIN' ||
+      role === 'STAFF' ||
+      role === 'RECEPTIONIST' ||
+      role === 'AESTHETICIAN' ||
+      role === 'NURSE' ||
+      role === 'DOCTOR')
+  ) {
+    const fromEmail = clinicBranchFromShortcutEmail(email)
+    if (fromEmail) {
+      const metaFromEmail = branchMeta(fromEmail)
+      branchId = metaFromEmail.branchId
+      branchType = metaFromEmail.branchType
+      branchName = metaFromEmail.branchName
+    }
+  }
+
   return {
     id: authUser.id,
-    email: profile?.email || authUser.email || '',
+    email,
     fullName: profile?.full_name || meta.full_name || authUser.email || '',
     role,
     branchId,

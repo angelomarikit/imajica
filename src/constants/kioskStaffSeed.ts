@@ -60,6 +60,7 @@ export const KIOSK_STAFF_SEED: KioskStaffSeed[] = [
   staff('Chloe Renee Francisco', 'chloe.renee.francisco', '025', BRANCH_IDS.cainta, 'Cainta, Rizal', 11),
   staff('Sapiya Lomodag', 'sapiya.lomodag', '026', BRANCH_IDS.pasig, 'Pasig City', 12),
   staff('Ynyr Collene Bandoquillo', 'ynyr.collene.bandoquillo', '027', BRANCH_IDS.sanMateo, 'San Mateo, Rizal', 13),
+  staff('Lipa Front Desk', 'lipa.frontdesk', '040', BRANCH_IDS.lipa, 'Lipa, Batangas', 14),
 ]
 
 export function kioskStaffAsAccessUsers(): AccessUser[] {
