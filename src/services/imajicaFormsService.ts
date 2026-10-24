@@ -5,9 +5,14 @@ import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { isUuid } from '@/utils/uuid'
 
 const STORAGE_KEY = 'imajica_generated_forms'
+const IDB_NAME = 'imajica_forms_db'
+const IDB_STORE = 'generated_forms'
+const IDB_VERSION = 1
 const CHANGE_EVENT = 'imajica:forms-changed'
-/** Keep local history small — signatures are large even when compressed. */
-const MAX_LOCAL_FORMS = 25
+
+/** Soft cap for device cache (IndexedDB supports this; localStorage cannot). */
+const MAX_CACHE_BYTES = 20 * 1024 * 1024
+const MAX_LOCAL_FORMS = 120
 
 export type GeneratedFormRecord = {
   id: string
@@ -24,18 +29,110 @@ export type GeneratedFormRecord = {
 
 const DEFAULT_HISTORY: GeneratedFormRecord[] = []
 
+/** In-memory mirror so UI can read sync; hydrated from IndexedDB / remote. */
+let memoryCache: GeneratedFormRecord[] | null = null
+let idbReady: Promise<IDBDatabase | null> | null = null
+let migratePromise: Promise<void> | null = null
+
 function emit() {
   window.dispatchEvent(new Event(CHANGE_EVENT))
 }
 
-function readStored(): GeneratedFormRecord[] {
+function estimateBytes(rows: GeneratedFormRecord[]): number {
+  try {
+    return new Blob([JSON.stringify(rows)]).size
+  } catch {
+    return JSON.stringify(rows).length
+  }
+}
+
+function sortBySubmitted(rows: GeneratedFormRecord[]): GeneratedFormRecord[] {
+  return [...rows].sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))
+}
+
+function pruneToBudget(rows: GeneratedFormRecord[]): GeneratedFormRecord[] {
+  let next = sortBySubmitted(rows).slice(0, MAX_LOCAL_FORMS)
+  while (next.length > 1 && estimateBytes(next) > MAX_CACHE_BYTES) {
+    next = next.slice(0, -1)
+  }
+  return next
+}
+
+function openFormsDb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null)
+  if (!idbReady) {
+    idbReady = new Promise((resolve) => {
+      try {
+        const req = indexedDB.open(IDB_NAME, IDB_VERSION)
+        req.onupgradeneeded = () => {
+          const db = req.result
+          if (!db.objectStoreNames.contains(IDB_STORE)) {
+            db.createObjectStore(IDB_STORE, { keyPath: 'id' })
+          }
+        }
+        req.onsuccess = () => resolve(req.result)
+        req.onerror = () => {
+          console.warn('[forms] IndexedDB open failed', req.error?.message)
+          resolve(null)
+        }
+      } catch (err) {
+        console.warn('[forms] IndexedDB unavailable', err)
+        resolve(null)
+      }
+    })
+  }
+  return idbReady
+}
+
+async function idbGetAll(): Promise<GeneratedFormRecord[]> {
+  const db = await openFormsDb()
+  if (!db) return []
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly')
+      const store = tx.objectStore(IDB_STORE)
+      const req = store.getAll()
+      req.onsuccess = () => {
+        const rows = Array.isArray(req.result) ? (req.result as GeneratedFormRecord[]) : []
+        resolve(sortBySubmitted(rows))
+      }
+      req.onerror = () => resolve([])
+    } catch {
+      resolve([])
+    }
+  })
+}
+
+async function idbReplaceAll(rows: GeneratedFormRecord[]): Promise<boolean> {
+  const db = await openFormsDb()
+  if (!db) return false
+  const pruned = pruneToBudget(rows)
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite')
+      const store = tx.objectStore(IDB_STORE)
+      store.clear()
+      for (const row of pruned) store.put(row)
+      tx.oncomplete = () => resolve(true)
+      tx.onerror = () => {
+        console.warn('[forms] IndexedDB write failed', tx.error?.message)
+        resolve(false)
+      }
+      tx.onabort = () => resolve(false)
+    } catch (err) {
+      console.warn('[forms] IndexedDB write error', err)
+      resolve(false)
+    }
+  })
+}
+
+function readLegacyLocalStorage(): GeneratedFormRecord[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw) as GeneratedFormRecord[]
     return Array.isArray(parsed) ? parsed : []
   } catch {
-    // Corrupt / truncated JSON after a prior quota failure
     try {
       localStorage.removeItem(STORAGE_KEY)
     } catch {
@@ -43,6 +140,76 @@ function readStored(): GeneratedFormRecord[] {
     }
     return []
   }
+}
+
+function clearLegacyLocalStorage() {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Tiny localStorage fallback only when IndexedDB is unavailable.
+ * Strip signatures if quota is tight — browsers still hard-cap ~5MB.
+ */
+function persistLocalStorageFallback(rows: GeneratedFormRecord[]): void {
+  let next = pruneToBudget(rows)
+  // Stay well under typical 5MB localStorage ceiling
+  while (next.length > 1 && estimateBytes(next) > 3_500_000) {
+    next = next.slice(0, -1)
+  }
+  for (;;) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      return
+    } catch (err) {
+      const quota =
+        err instanceof DOMException &&
+        (err.name === 'QuotaExceededError' ||
+          err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+          err.code === 22)
+      if (!quota || next.length <= 1) {
+        if (next.length > 0) {
+          const slim = next.map((r) => ({
+            ...r,
+            clientSignature: r.clientSignature ? '[signature-omitted-quota]' : '',
+            otherSignature: undefined,
+          }))
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(slim.slice(0, 5)))
+            return
+          } catch {
+            try {
+              localStorage.removeItem(STORAGE_KEY)
+            } catch {
+              /* ignore */
+            }
+            throw new Error(
+              'Browser storage is full. Clear site data for this app, or delete old forms, then try again.',
+            )
+          }
+        }
+        throw err instanceof Error
+          ? err
+          : new Error('Could not save form history — browser storage is full')
+      }
+      next = next.slice(0, -1)
+    }
+  }
+}
+
+async function persistCache(rows: GeneratedFormRecord[]): Promise<void> {
+  const pruned = pruneToBudget(rows)
+  memoryCache = pruned
+  const ok = await idbReplaceAll(pruned)
+  if (ok) {
+    // Free the old localStorage slot that was blowing the quota
+    clearLegacyLocalStorage()
+    return
+  }
+  persistLocalStorageFallback(pruned)
 }
 
 function readDeleted(): Set<string> {
@@ -56,14 +223,13 @@ function readDeleted(): Set<string> {
   }
 }
 
-/** Shrink signature data URLs so localStorage / DB stay under quota. */
+/** Shrink signature data URLs so cache / DB stay under budget. */
 export async function compressSignatureDataUrl(
   dataUrl: string,
   maxWidth = 480,
   quality = 0.65,
 ): Promise<string> {
   if (!dataUrl?.startsWith('data:image/')) return dataUrl
-  // Already a small JPEG — skip re-encode if under ~40KB
   if (dataUrl.startsWith('data:image/jpeg') && dataUrl.length < 40_000) return dataUrl
 
   return new Promise((resolve) => {
@@ -94,96 +260,42 @@ export async function compressSignatureDataUrl(
   })
 }
 
-function estimateBytes(rows: GeneratedFormRecord[]): number {
-  try {
-    return new Blob([JSON.stringify(rows)]).size
-  } catch {
-    return JSON.stringify(rows).length
-  }
-}
-
-/** Write forms history; prune oldest on QuotaExceededError until it fits. */
-function persistLocal(rows: GeneratedFormRecord[]): void {
-  let next = rows.slice(0, MAX_LOCAL_FORMS)
-  // Soft cap ~3.5MB to leave room for other keys
-  while (next.length > 1 && estimateBytes(next) > 3_500_000) {
-    next = next.slice(0, -1)
-  }
-  for (;;) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+async function migrateLegacyIfNeeded(): Promise<void> {
+  if (migratePromise) return migratePromise
+  migratePromise = (async () => {
+    const legacy = readLegacyLocalStorage()
+    const existing = await idbGetAll()
+    if (legacy.length) {
+      const byId = new Map<string, GeneratedFormRecord>()
+      for (const r of [...existing, ...legacy]) byId.set(r.id, r)
+      await persistCache([...byId.values()])
+      clearLegacyLocalStorage()
       return
-    } catch (err) {
-      const quota =
-        err instanceof DOMException &&
-        (err.name === 'QuotaExceededError' ||
-          err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
-          err.code === 22)
-      if (!quota || next.length <= 1) {
-        // Last resort: drop signatures from remaining rows and retry once
-        if (next.length > 0) {
-          const slim = next.map((r) => ({
-            ...r,
-            clientSignature: r.clientSignature ? '[signature-omitted-quota]' : '',
-            otherSignature: undefined,
-          }))
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(slim.slice(0, 5)))
-            return
-          } catch {
-            try {
-              localStorage.removeItem(STORAGE_KEY)
-            } catch {
-              /* ignore */
-            }
-            throw new Error(
-              'Browser storage is full. Clear site data for this app, or delete old forms, then try again.',
-            )
-          }
-        }
-        throw err instanceof Error
-          ? err
-          : new Error('Could not save form history — browser storage is full')
-      }
-      next = next.slice(0, -1)
     }
-  }
+    if (existing.length) {
+      memoryCache = pruneToBudget(existing)
+      return
+    }
+    memoryCache = []
+  })()
+  return migratePromise
 }
 
-/** One-time cleanup of oversized history already on this device. */
-function pruneIfBloated() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return
-    if (raw.length > 4_000_000) {
-      const rows = readStored()
-      const slim = rows.slice(0, MAX_LOCAL_FORMS).map((r) => ({
-        ...r,
-        // Drop huge legacy PNG signatures from old records
-        clientSignature:
-          r.clientSignature && r.clientSignature.length > 80_000
-            ? ''
-            : r.clientSignature,
-        otherSignature:
-          r.otherSignature && r.otherSignature.length > 80_000
-            ? undefined
-            : r.otherSignature,
-      }))
-      persistLocal(slim)
-    }
-  } catch {
-    try {
-      localStorage.removeItem(STORAGE_KEY)
-    } catch {
-      /* ignore */
-    }
-  }
-}
+void migrateLegacyIfNeeded()
 
-pruneIfBloated()
+function syncReadStored(): GeneratedFormRecord[] {
+  if (memoryCache) return memoryCache
+  // Before IDB hydrate finishes, fall back to legacy localStorage once
+  const legacy = readLegacyLocalStorage()
+  if (legacy.length) {
+    memoryCache = pruneToBudget(legacy)
+    return memoryCache
+  }
+  return []
+}
 
 export function getGeneratedForms(): GeneratedFormRecord[] {
-  const extra = readStored()
+  const extra = syncReadStored()
   const deleted = readDeleted()
   const seedIds = new Set(DEFAULT_HISTORY.map((r) => r.id))
   const customs = extra.filter((r) => !seedIds.has(r.id))
@@ -221,8 +333,13 @@ async function persistRemote(record: GeneratedFormRecord): Promise<void> {
 }
 
 export async function preloadGeneratedForms(): Promise<void> {
-  pruneIfBloated()
-  if (!isSupabaseConfigured || !supabase) return
+  await migrateLegacyIfNeeded()
+
+  if (!isSupabaseConfigured || !supabase) {
+    emit()
+    return
+  }
+
   const { data, error } = await supabase
     .from('imajica_forms')
     .select(
@@ -230,7 +347,10 @@ export async function preloadGeneratedForms(): Promise<void> {
     )
     .order('submitted_at', { ascending: false })
     .limit(80)
-  if (error || !data) return
+  if (error || !data) {
+    emit()
+    return
+  }
 
   const remote: GeneratedFormRecord[] = data.map((row) => {
     const fv = (row.field_values || {}) as Record<string, unknown>
@@ -255,10 +375,11 @@ export async function preloadGeneratedForms(): Promise<void> {
     }
   })
 
-  const local = readStored()
+  const local = await idbGetAll()
+  const legacy = readLegacyLocalStorage()
   const byId = new Map<string, GeneratedFormRecord>()
-  for (const r of [...remote, ...local]) byId.set(r.id, r)
-  persistLocal(
+  for (const r of [...remote, ...local, ...legacy]) byId.set(r.id, r)
+  await persistCache(
     [...byId.values()].sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)),
   )
   emit()
@@ -272,6 +393,8 @@ export async function createGeneratedForm(input: {
   clientSignature: string
   otherSignature?: string
 }): Promise<GeneratedFormRecord> {
+  await migrateLegacyIfNeeded()
+
   const [clientSignature, otherSignature] = await Promise.all([
     compressSignatureDataUrl(input.clientSignature),
     input.otherSignature
@@ -292,7 +415,8 @@ export async function createGeneratedForm(input: {
     otherSignature,
   }
 
-  persistLocal([record, ...readStored()])
+  const existing = memoryCache ?? (await idbGetAll())
+  await persistCache([record, ...existing.filter((r) => r.id !== record.id)])
   emit()
   void persistRemote(record)
   return record
@@ -300,7 +424,9 @@ export async function createGeneratedForm(input: {
 
 export function deleteGeneratedForm(id: string) {
   if (!DEFAULT_HISTORY.some((r) => r.id === id)) {
-    persistLocal(readStored().filter((r) => r.id !== id))
+    const next = syncReadStored().filter((r) => r.id !== id)
+    memoryCache = next
+    void persistCache(next)
   } else {
     const deleted = readDeleted()
     deleted.add(id)
