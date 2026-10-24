@@ -4,15 +4,11 @@ import type { FormTemplateDef } from '@/constants/imajicaFormTemplates'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { isUuid } from '@/utils/uuid'
 
-const STORAGE_KEY = 'imajica_generated_forms'
-const IDB_NAME = 'imajica_forms_db'
-const IDB_STORE = 'generated_forms'
-const IDB_VERSION = 1
+const LEGACY_STORAGE_KEY = 'imajica_generated_forms'
+const SIG_BUCKET = 'form-signatures'
 const CHANGE_EVENT = 'imajica:forms-changed'
-
-/** Soft cap for device cache (IndexedDB supports this; localStorage cannot). */
-const MAX_CACHE_BYTES = 20 * 1024 * 1024
-const MAX_LOCAL_FORMS = 120
+/** Keep session list small — full payloads live in Supabase. */
+const MAX_MEMORY_FORMS = 80
 
 export type GeneratedFormRecord = {
   id: string
@@ -23,214 +19,57 @@ export type GeneratedFormRecord = {
   branch: string
   submittedAt: string
   fieldValues: Record<string, unknown>
+  /** In-memory / hydrated data URL for PDF stamping */
   clientSignature: string
   otherSignature?: string
+  clientSignaturePath?: string
+  otherSignaturePath?: string
 }
 
 const DEFAULT_HISTORY: GeneratedFormRecord[] = []
 
-/** In-memory mirror so UI can read sync; hydrated from IndexedDB / remote. */
-let memoryCache: GeneratedFormRecord[] | null = null
-let idbReady: Promise<IDBDatabase | null> | null = null
-let migratePromise: Promise<void> | null = null
+/** Session-only mirror of DB rows (never written to localStorage). */
+let memoryCache: GeneratedFormRecord[] = []
 
 function emit() {
   window.dispatchEvent(new Event(CHANGE_EVENT))
 }
 
-function estimateBytes(rows: GeneratedFormRecord[]): number {
+/** Wipe the key that was blowing browser quota on tablets. */
+function clearLegacyBrowserStorage() {
   try {
-    return new Blob([JSON.stringify(rows)]).size
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
+    localStorage.removeItem(`${LEGACY_STORAGE_KEY}_deleted`)
   } catch {
-    return JSON.stringify(rows).length
+    /* ignore */
   }
-}
-
-function sortBySubmitted(rows: GeneratedFormRecord[]): GeneratedFormRecord[] {
-  return [...rows].sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))
-}
-
-function pruneToBudget(rows: GeneratedFormRecord[]): GeneratedFormRecord[] {
-  let next = sortBySubmitted(rows).slice(0, MAX_LOCAL_FORMS)
-  while (next.length > 1 && estimateBytes(next) > MAX_CACHE_BYTES) {
-    next = next.slice(0, -1)
-  }
-  return next
-}
-
-function openFormsDb(): Promise<IDBDatabase | null> {
-  if (typeof indexedDB === 'undefined') return Promise.resolve(null)
-  if (!idbReady) {
-    idbReady = new Promise((resolve) => {
-      try {
-        const req = indexedDB.open(IDB_NAME, IDB_VERSION)
-        req.onupgradeneeded = () => {
-          const db = req.result
-          if (!db.objectStoreNames.contains(IDB_STORE)) {
-            db.createObjectStore(IDB_STORE, { keyPath: 'id' })
-          }
-        }
-        req.onsuccess = () => resolve(req.result)
-        req.onerror = () => {
-          console.warn('[forms] IndexedDB open failed', req.error?.message)
-          resolve(null)
-        }
-      } catch (err) {
-        console.warn('[forms] IndexedDB unavailable', err)
-        resolve(null)
-      }
-    })
-  }
-  return idbReady
-}
-
-async function idbGetAll(): Promise<GeneratedFormRecord[]> {
-  const db = await openFormsDb()
-  if (!db) return []
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(IDB_STORE, 'readonly')
-      const store = tx.objectStore(IDB_STORE)
-      const req = store.getAll()
-      req.onsuccess = () => {
-        const rows = Array.isArray(req.result) ? (req.result as GeneratedFormRecord[]) : []
-        resolve(sortBySubmitted(rows))
-      }
-      req.onerror = () => resolve([])
-    } catch {
-      resolve([])
-    }
-  })
-}
-
-async function idbReplaceAll(rows: GeneratedFormRecord[]): Promise<boolean> {
-  const db = await openFormsDb()
-  if (!db) return false
-  const pruned = pruneToBudget(rows)
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(IDB_STORE, 'readwrite')
-      const store = tx.objectStore(IDB_STORE)
-      store.clear()
-      for (const row of pruned) store.put(row)
-      tx.oncomplete = () => resolve(true)
-      tx.onerror = () => {
-        console.warn('[forms] IndexedDB write failed', tx.error?.message)
-        resolve(false)
-      }
-      tx.onabort = () => resolve(false)
-    } catch (err) {
-      console.warn('[forms] IndexedDB write error', err)
-      resolve(false)
-    }
-  })
-}
-
-function readLegacyLocalStorage(): GeneratedFormRecord[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as GeneratedFormRecord[]
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    try {
-      localStorage.removeItem(STORAGE_KEY)
-    } catch {
-      /* ignore */
+    if (typeof indexedDB !== 'undefined') {
+      indexedDB.deleteDatabase('imajica_forms_db')
     }
-    return []
-  }
-}
-
-function clearLegacyLocalStorage() {
-  try {
-    localStorage.removeItem(STORAGE_KEY)
   } catch {
     /* ignore */
   }
 }
 
-/**
- * Tiny localStorage fallback only when IndexedDB is unavailable.
- * Strip signatures if quota is tight — browsers still hard-cap ~5MB.
- */
-function persistLocalStorageFallback(rows: GeneratedFormRecord[]): void {
-  let next = pruneToBudget(rows)
-  // Stay well under typical 5MB localStorage ceiling
-  while (next.length > 1 && estimateBytes(next) > 3_500_000) {
-    next = next.slice(0, -1)
-  }
-  for (;;) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-      return
-    } catch (err) {
-      const quota =
-        err instanceof DOMException &&
-        (err.name === 'QuotaExceededError' ||
-          err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
-          err.code === 22)
-      if (!quota || next.length <= 1) {
-        if (next.length > 0) {
-          const slim = next.map((r) => ({
-            ...r,
-            clientSignature: r.clientSignature ? '[signature-omitted-quota]' : '',
-            otherSignature: undefined,
-          }))
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(slim.slice(0, 5)))
-            return
-          } catch {
-            try {
-              localStorage.removeItem(STORAGE_KEY)
-            } catch {
-              /* ignore */
-            }
-            throw new Error(
-              'Browser storage is full. Clear site data for this app, or delete old forms, then try again.',
-            )
-          }
-        }
-        throw err instanceof Error
-          ? err
-          : new Error('Could not save form history — browser storage is full')
-      }
-      next = next.slice(0, -1)
-    }
-  }
+clearLegacyBrowserStorage()
+
+function sortBySubmitted(rows: GeneratedFormRecord[]): GeneratedFormRecord[] {
+  return [...rows].sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))
 }
 
-async function persistCache(rows: GeneratedFormRecord[]): Promise<void> {
-  const pruned = pruneToBudget(rows)
-  memoryCache = pruned
-  const ok = await idbReplaceAll(pruned)
-  if (ok) {
-    // Free the old localStorage slot that was blowing the quota
-    clearLegacyLocalStorage()
-    return
-  }
-  persistLocalStorageFallback(pruned)
+function setMemory(rows: GeneratedFormRecord[]) {
+  memoryCache = sortBySubmitted(rows).slice(0, MAX_MEMORY_FORMS)
 }
 
-function readDeleted(): Set<string> {
-  try {
-    const raw = localStorage.getItem(`${STORAGE_KEY}_deleted`)
-    if (!raw) return new Set()
-    const parsed = JSON.parse(raw) as string[]
-    return new Set(Array.isArray(parsed) ? parsed : [])
-  } catch {
-    return new Set()
-  }
-}
-
-/** Shrink signature data URLs so cache / DB stay under budget. */
+/** Aggressive JPEG shrink — signatures only need to stamp a PDF. */
 export async function compressSignatureDataUrl(
   dataUrl: string,
-  maxWidth = 480,
-  quality = 0.65,
+  maxWidth = 320,
+  quality = 0.42,
 ): Promise<string> {
   if (!dataUrl?.startsWith('data:image/')) return dataUrl
-  if (dataUrl.startsWith('data:image/jpeg') && dataUrl.length < 40_000) return dataUrl
+  if (dataUrl.startsWith('data:image/jpeg') && dataUrl.length < 18_000) return dataUrl
 
   return new Promise((resolve) => {
     const img = new Image()
@@ -260,53 +99,155 @@ export async function compressSignatureDataUrl(
   })
 }
 
-async function migrateLegacyIfNeeded(): Promise<void> {
-  if (migratePromise) return migratePromise
-  migratePromise = (async () => {
-    const legacy = readLegacyLocalStorage()
-    const existing = await idbGetAll()
-    if (legacy.length) {
-      const byId = new Map<string, GeneratedFormRecord>()
-      for (const r of [...existing, ...legacy]) byId.set(r.id, r)
-      await persistCache([...byId.values()])
-      clearLegacyLocalStorage()
-      return
-    }
-    if (existing.length) {
-      memoryCache = pruneToBudget(existing)
-      return
-    }
-    memoryCache = []
-  })()
-  return migratePromise
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  const match = /^data:(image\/(?:png|jpeg|jpg|webp));base64,(.+)$/i.exec(dataUrl)
+  if (!match) return null
+  const mime = match[1]!.toLowerCase().replace('jpg', 'jpeg')
+  const binary = atob(match[2]!)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new Blob([bytes], { type: mime })
 }
 
-void migrateLegacyIfNeeded()
-
-function syncReadStored(): GeneratedFormRecord[] {
-  if (memoryCache) return memoryCache
-  // Before IDB hydrate finishes, fall back to legacy localStorage once
-  const legacy = readLegacyLocalStorage()
-  if (legacy.length) {
-    memoryCache = pruneToBudget(legacy)
-    return memoryCache
+async function uploadSignature(
+  formId: string,
+  kind: 'client' | 'other',
+  dataUrl: string,
+): Promise<string | null> {
+  if (!supabase || !dataUrl) return null
+  const blob = dataUrlToBlob(dataUrl)
+  if (!blob) return null
+  const ext = blob.type.includes('png') ? 'png' : 'jpg'
+  const path = `${formId}/${kind}.${ext}`
+  const { error } = await supabase.storage.from(SIG_BUCKET).upload(path, blob, {
+    upsert: true,
+    contentType: blob.type,
+    cacheControl: '3600',
+  })
+  if (error) {
+    console.warn('[forms] signature upload failed', error.message)
+    return null
   }
-  return []
+  return path
+}
+
+async function downloadSignatureDataUrl(path: string | undefined | null): Promise<string> {
+  if (!path || !supabase) return ''
+  // Already a data URL (legacy / memory)
+  if (path.startsWith('data:image/')) return path
+  const { data, error } = await supabase.storage.from(SIG_BUCKET).download(path)
+  if (error || !data) {
+    console.warn('[forms] signature download failed', error?.message)
+    return ''
+  }
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => resolve('')
+    reader.readAsDataURL(data)
+  })
+}
+
+/** Ensure signatures are data URLs before PDF build. */
+export async function hydrateFormSignatures(
+  record: GeneratedFormRecord,
+): Promise<GeneratedFormRecord> {
+  let clientSignature = record.clientSignature
+  let otherSignature = record.otherSignature
+  if ((!clientSignature || clientSignature.length < 32) && record.clientSignaturePath) {
+    clientSignature = await downloadSignatureDataUrl(record.clientSignaturePath)
+  }
+  if ((!otherSignature || otherSignature.length < 32) && record.otherSignaturePath) {
+    otherSignature = await downloadSignatureDataUrl(record.otherSignaturePath)
+  }
+  return { ...record, clientSignature, otherSignature }
+}
+
+type RemoteFormRow = {
+  id: string
+  client_name: string | null
+  form_type: string | null
+  template_file: string | null
+  branch_code: string | null
+  field_values: Record<string, unknown> | null
+  submitted_at: string | null
+  title: string | null
+  client_signature_path: string | null
+  other_signature_path: string | null
+}
+
+function mapRemoteRow(row: RemoteFormRow): GeneratedFormRecord {
+  const fv = (row.field_values || {}) as Record<string, unknown>
+  const legacyClient =
+    typeof fv.__clientSignature === 'string' ? fv.__clientSignature : ''
+  const legacyOther =
+    typeof fv.__otherSignature === 'string' ? fv.__otherSignature : undefined
+  const { __clientSignature: _c, __otherSignature: _o, __templateId, ...rest } = fv
+  void _c
+  void _o
+  return {
+    id: String(row.id),
+    clientName: row.client_name || row.title || 'Guest',
+    formType: row.form_type || 'Form',
+    templateId: typeof __templateId === 'string' ? __templateId : '',
+    templateFile: row.template_file || '',
+    branch: row.branch_code || '',
+    submittedAt: row.submitted_at || new Date().toISOString(),
+    fieldValues: rest,
+    // Prefer storage paths; keep legacy base64 only if still in jsonb
+    clientSignature: legacyClient,
+    otherSignature: legacyOther,
+    clientSignaturePath: row.client_signature_path || undefined,
+    otherSignaturePath: row.other_signature_path || undefined,
+  }
 }
 
 export function getGeneratedForms(): GeneratedFormRecord[] {
-  const extra = syncReadStored()
-  const deleted = readDeleted()
+  const deleted = new Set<string>()
+  try {
+    const raw = localStorage.getItem(`${LEGACY_STORAGE_KEY}_deleted`)
+    if (raw) {
+      const parsed = JSON.parse(raw) as string[]
+      if (Array.isArray(parsed)) parsed.forEach((id) => deleted.add(id))
+    }
+  } catch {
+    /* ignore */
+  }
   const seedIds = new Set(DEFAULT_HISTORY.map((r) => r.id))
-  const customs = extra.filter((r) => !seedIds.has(r.id))
+  const customs = memoryCache.filter((r) => !seedIds.has(r.id))
   return [...customs, ...DEFAULT_HISTORY.filter((r) => !deleted.has(r.id))].sort((a, b) =>
     b.submittedAt.localeCompare(a.submittedAt),
   )
 }
 
 async function persistRemote(record: GeneratedFormRecord): Promise<void> {
-  if (!isSupabaseConfigured || !supabase) return
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured — cannot save form to the database')
+  }
+
   const id = isUuid(record.id) ? record.id : crypto.randomUUID()
+
+  const [clientPath, otherPath] = await Promise.all([
+    record.clientSignature
+      ? uploadSignature(id, 'client', record.clientSignature)
+      : Promise.resolve(record.clientSignaturePath || null),
+    record.otherSignature
+      ? uploadSignature(id, 'other', record.otherSignature)
+      : Promise.resolve(record.otherSignaturePath || null),
+  ])
+
+  // Prefer storage paths; only embed tiny legacy sigs in jsonb as last resort
+  const fieldValues: Record<string, unknown> = {
+    ...record.fieldValues,
+    __templateId: record.templateId,
+  }
+  if (!clientPath && record.clientSignature && record.clientSignature.length < 25_000) {
+    fieldValues.__clientSignature = record.clientSignature
+  }
+  if (!otherPath && record.otherSignature && record.otherSignature.length < 25_000) {
+    fieldValues.__otherSignature = record.otherSignature
+  }
+
   const { error } = await supabase.from('imajica_forms').upsert(
     {
       id,
@@ -315,12 +256,9 @@ async function persistRemote(record: GeneratedFormRecord): Promise<void> {
       client_name: record.clientName,
       template_file: record.templateFile,
       branch_code: record.branch,
-      field_values: {
-        ...record.fieldValues,
-        __templateId: record.templateId,
-        __clientSignature: record.clientSignature || null,
-        __otherSignature: record.otherSignature || null,
-      },
+      field_values: fieldValues,
+      client_signature_path: clientPath,
+      other_signature_path: otherPath,
       submitted_at: record.submittedAt,
       status: 'active',
       updated_at: new Date().toISOString(),
@@ -328,12 +266,16 @@ async function persistRemote(record: GeneratedFormRecord): Promise<void> {
     { onConflict: 'id' },
   )
   if (error) {
-    console.warn('[forms] supabase save skipped:', error.message)
+    throw new Error(error.message || 'Could not save form to the database')
   }
+
+  record.id = id
+  record.clientSignaturePath = clientPath || undefined
+  record.otherSignaturePath = otherPath || undefined
 }
 
 export async function preloadGeneratedForms(): Promise<void> {
-  await migrateLegacyIfNeeded()
+  clearLegacyBrowserStorage()
 
   if (!isSupabaseConfigured || !supabase) {
     emit()
@@ -343,45 +285,18 @@ export async function preloadGeneratedForms(): Promise<void> {
   const { data, error } = await supabase
     .from('imajica_forms')
     .select(
-      'id, client_name, form_type, template_file, branch_code, field_values, submitted_at, title',
+      'id, client_name, form_type, template_file, branch_code, field_values, submitted_at, title, client_signature_path, other_signature_path',
     )
     .order('submitted_at', { ascending: false })
     .limit(80)
-  if (error || !data) {
+
+  if (error) {
+    console.warn('[forms] preload failed', error.message)
     emit()
     return
   }
 
-  const remote: GeneratedFormRecord[] = data.map((row) => {
-    const fv = (row.field_values || {}) as Record<string, unknown>
-    const clientSig =
-      typeof fv.__clientSignature === 'string' ? fv.__clientSignature : ''
-    const otherSig =
-      typeof fv.__otherSignature === 'string' ? fv.__otherSignature : undefined
-    const { __clientSignature: _c, __otherSignature: _o, __templateId, ...rest } = fv
-    void _c
-    void _o
-    return {
-      id: String(row.id),
-      clientName: row.client_name || row.title || 'Guest',
-      formType: row.form_type || 'Form',
-      templateId: typeof __templateId === 'string' ? __templateId : '',
-      templateFile: row.template_file || '',
-      branch: row.branch_code || '',
-      submittedAt: row.submitted_at || new Date().toISOString(),
-      fieldValues: rest,
-      clientSignature: clientSig,
-      otherSignature: otherSig,
-    }
-  })
-
-  const local = await idbGetAll()
-  const legacy = readLegacyLocalStorage()
-  const byId = new Map<string, GeneratedFormRecord>()
-  for (const r of [...remote, ...local, ...legacy]) byId.set(r.id, r)
-  await persistCache(
-    [...byId.values()].sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)),
-  )
+  setMemory((data as RemoteFormRow[] | null)?.map(mapRemoteRow) ?? [])
   emit()
 }
 
@@ -393,7 +308,7 @@ export async function createGeneratedForm(input: {
   clientSignature: string
   otherSignature?: string
 }): Promise<GeneratedFormRecord> {
-  await migrateLegacyIfNeeded()
+  clearLegacyBrowserStorage()
 
   const [clientSignature, otherSignature] = await Promise.all([
     compressSignatureDataUrl(input.clientSignature),
@@ -415,43 +330,34 @@ export async function createGeneratedForm(input: {
     otherSignature,
   }
 
-  const existing = memoryCache ?? (await idbGetAll())
-  await persistCache([record, ...existing.filter((r) => r.id !== record.id)])
+  // Database is the source of truth — never write form payloads to localStorage
+  await persistRemote(record)
+
+  setMemory([record, ...memoryCache.filter((r) => r.id !== record.id)])
   emit()
-  void persistRemote(record)
   return record
 }
 
 export function deleteGeneratedForm(id: string) {
-  if (!DEFAULT_HISTORY.some((r) => r.id === id)) {
-    const next = syncReadStored().filter((r) => r.id !== id)
-    memoryCache = next
-    void persistCache(next)
-  } else {
-    const deleted = readDeleted()
-    deleted.add(id)
+  setMemory(memoryCache.filter((r) => r.id !== id))
+  emit()
+
+  if (!isSupabaseConfigured || !supabase || !isUuid(id)) return
+
+  void (async () => {
     try {
-      localStorage.setItem(`${STORAGE_KEY}_deleted`, JSON.stringify([...deleted]))
+      await supabase.storage.from(SIG_BUCKET).remove([`${id}/client.jpg`, `${id}/client.png`, `${id}/other.jpg`, `${id}/other.png`])
     } catch {
       /* ignore */
     }
-  }
-  emit()
-  if (isSupabaseConfigured && supabase && isUuid(id)) {
-    void supabase.from('imajica_forms').delete().eq('id', id)
-  }
+    const { error } = await supabase.from('imajica_forms').delete().eq('id', id)
+    if (error) console.warn('[forms] remote delete failed', error.message)
+  })()
 }
 
 export function subscribeGeneratedForms(listener: () => void) {
-  const onStorage = (e: StorageEvent) => {
-    if (e.key === STORAGE_KEY || e.key === `${STORAGE_KEY}_deleted`) listener()
-  }
   window.addEventListener(CHANGE_EVENT, listener)
-  window.addEventListener('storage', onStorage)
-  return () => {
-    window.removeEventListener(CHANGE_EVENT, listener)
-    window.removeEventListener('storage', onStorage)
-  }
+  return () => window.removeEventListener(CHANGE_EVENT, listener)
 }
 
 function dataUrlToBytes(dataUrl: string): { bytes: Uint8Array; kind: 'png' | 'jpg' } | null {
@@ -495,10 +401,7 @@ function hasFilledFields(fieldValues: Record<string, unknown>) {
   })
 }
 
-async function embedSignature(
-  pdfDoc: PDFDocument,
-  dataUrl: string,
-) {
+async function embedSignature(pdfDoc: PDFDocument, dataUrl: string) {
   const parsed = dataUrlToBytes(dataUrl)
   if (!parsed) return null
   return parsed.kind === 'png'
@@ -506,7 +409,6 @@ async function embedSignature(
     : pdfDoc.embedJpg(parsed.bytes)
 }
 
-/** Stamp name, date, and signatures onto the last page of the consent PDF. */
 async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord) {
   const pages = pdfDoc.getPages()
   const page = pages[pages.length - 1]!
@@ -639,8 +541,7 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
   )
   y -= 24
 
-  const entries = Object.entries(record.fieldValues)
-  for (const [key, value] of entries) {
+  for (const [key, value] of Object.entries(record.fieldValues)) {
     if (y < 70) break
     const label = key.replaceAll('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())
     const text = formatFieldValue(value)
@@ -708,18 +609,18 @@ function wrapText(text: string, maxChars: number): string[] {
   return lines
 }
 
-/** Build the final PDF: original template + stamped signature/date (+ answers page if needed). */
 export async function buildGeneratedFormPdf(record: GeneratedFormRecord): Promise<Uint8Array> {
-  const url = formPdfUrl(record.templateFile)
+  const hydrated = await hydrateFormSignatures(record)
+  const url = formPdfUrl(hydrated.templateFile)
   const res = await fetch(url)
   if (!res.ok) {
-    throw new Error(`Could not load template PDF (${record.templateFile})`)
+    throw new Error(`Could not load template PDF (${hydrated.templateFile})`)
   }
   const templateBytes = await res.arrayBuffer()
   const pdfDoc = await PDFDocument.load(templateBytes)
 
-  await stampConsentPage(pdfDoc, record)
-  await appendAnswersPage(pdfDoc, record)
+  await stampConsentPage(pdfDoc, hydrated)
+  await appendAnswersPage(pdfDoc, hydrated)
 
   return pdfDoc.save()
 }
@@ -739,14 +640,12 @@ function triggerDownload(bytes: Uint8Array, fileName: string) {
   URL.revokeObjectURL(url)
 }
 
-/** Download the full signed template PDF (not a summary HTML page). */
 export async function downloadGeneratedPacket(record: GeneratedFormRecord) {
   const bytes = await buildGeneratedFormPdf(record)
   const safeName = record.clientName.replace(/[^\w\-]+/g, '_').replace(/_+/g, '_')
   triggerDownload(bytes, `${record.formType}-${safeName || 'client'}.pdf`)
 }
 
-/** Open the generated PDF in a new tab for viewing. */
 export async function openGeneratedFormPdf(record: GeneratedFormRecord): Promise<string> {
   const bytes = await buildGeneratedFormPdf(record)
   return URL.createObjectURL(toPdfBlob(bytes))

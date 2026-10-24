@@ -138,9 +138,11 @@ export function ImajicaFormsPage() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to generate PDF'
       toast.error(
-        /quota|storage is full/i.test(msg)
-          ? 'Device storage is full. Delete old forms below, then generate again.'
-          : msg,
+        /quota|setItem|storage is full/i.test(msg)
+          ? 'Old browser cache was full. Refresh the page once, then generate again.'
+          : /database|supabase|not configured|permission|row-level|jwt/i.test(msg)
+            ? `Could not save form to the database: ${msg}`
+            : msg,
       )
     } finally {
       setBusyAction(null)
