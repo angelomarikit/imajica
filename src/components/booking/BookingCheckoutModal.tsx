@@ -386,6 +386,19 @@ export function BookingCheckoutModal({
 
     setSaving(true)
     try {
+      // Warm JWT before RLS writes — tablets often sit on Booking for hours
+      try {
+        const { softRefreshSupabaseSession, requireSupabaseSession } = await import(
+          '@/utils/supabaseSession'
+        )
+        await softRefreshSupabaseSession()
+        await requireSupabaseSession()
+      } catch (authErr) {
+        throw authErr instanceof Error
+          ? authErr
+          : new Error('Session expired. Sign out and sign in again, then place the order.')
+      }
+
       const wasFirstVisit = (patient.totalVisits ?? 0) === 0 && !patient.lastSaleId
 
       // Link / create customer in Supabase first so sales survive logout
@@ -525,9 +538,11 @@ export function BookingCheckoutModal({
       onClose()
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Could not place order'
-      const message = /not signed in/i.test(raw)
-        ? 'Not signed in to the database. Sign out and sign in again with your Cainta (or clinic) account, then retry Place Order.'
-        : raw
+      const message = /session expired/i.test(raw)
+        ? 'Session expired. Sign out and sign in again, then place the order.'
+        : /not signed in/i.test(raw)
+          ? 'Not signed in to the database. Sign out and sign in again with your clinic account (Lipa / Cainta / …), then retry Place Order.'
+          : raw
       toast.error(message)
     } finally {
       setSaving(false)

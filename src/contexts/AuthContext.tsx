@@ -13,6 +13,7 @@ import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { getBranches } from '@/services/branchService'
 import { teamAccountsAsDemoUsers } from '@/constants/teamAccountsSeed'
 import { kioskStaffAsDemoUsers } from '@/constants/kioskStaffSeed'
+import { safeLocalRemoveItem, safeLocalSetItem } from '@/utils/safeLocalStorage'
 
 interface AuthContextValue {
   user: AuthSessionUser | null
@@ -255,8 +256,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const persist = useCallback((next: AuthSessionUser | null) => {
     setUser(next)
-    if (next) localStorage.setItem('imajica_auth_user', JSON.stringify(next))
-    else localStorage.removeItem('imajica_auth_user')
+    if (next) {
+      // Prefer JWT / profile survival over form cache if tablet storage is full
+      try {
+        safeLocalSetItem('imajica_auth_user', JSON.stringify(next))
+      } catch {
+        /* quota after reclaim — still keep React state */
+      }
+    } else {
+      safeLocalRemoveItem('imajica_auth_user')
+    }
   }, [])
 
   useEffect(() => {
@@ -269,13 +278,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     void (async () => {
       try {
-        const { data } = await supabase.auth.getSession()
+        let { data } = await supabase.auth.getSession()
+        if (!data.session) {
+          const refreshed = await supabase.auth.refreshSession()
+          data = refreshed.data
+        }
         if (cancelled) return
         if (data.session?.user) {
           const sessionUser = await resolveSupabaseSessionUser(data.session.user)
           if (!cancelled) persist(sessionUser)
         } else {
-          // localStorage-only “demo” login cannot call RLS/RPC (checkout shows “Not signed in”)
+          // Stale UI profile without JWT → clear so checkout does not look “signed in”
           if (!cancelled) persist(null)
         }
       } catch (err) {
@@ -297,9 +310,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }, 0)
     })
 
+    // Clinic tablets stay open for hours — refresh JWT when the tab becomes visible again
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      void import('@/utils/supabaseSession').then(({ softRefreshSupabaseSession }) =>
+        softRefreshSupabaseSession(),
+      )
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+
     return () => {
       cancelled = true
       sub.subscription.unsubscribe()
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
     }
   }, [persist])
 
