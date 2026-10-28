@@ -19,15 +19,17 @@ export function AdminHeader({
   onToggleMenu?: () => void
 }) {
   const { user, logout } = useAuth()
-  const { branches, selectedBranchId, setSelectedBranchId, branchLocked } = useBranch()
+  const { branches, selectedBranchId, setSelectedBranchId, branchLocked, csrBranchScoped } =
+    useBranch()
   const { unread, enabled: handoffsEnabled } = useMarketingHandoffUnread()
   const [query, setQuery] = useState('')
   const [accountOpen, setAccountOpen] = useState(false)
   const navigate = useNavigate()
 
-  const branchOptions = branchLocked
-    ? branches.map((b) => ({ value: b.id, label: b.name }))
-    : [{ value: 'all', label: 'All Branches' }, ...branches.map((b) => ({ value: b.id, label: b.name }))]
+  const branchOptions =
+    branchLocked || csrBranchScoped
+      ? branches.map((b) => ({ value: b.id, label: b.name }))
+      : [{ value: 'all', label: 'All Branches' }, ...branches.map((b) => ({ value: b.id, label: b.name }))]
 
   return (
     <header className="sticky top-0 z-50 border-b border-border/80 bg-ivory/90 backdrop-blur">

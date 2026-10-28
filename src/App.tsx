@@ -4,9 +4,11 @@ import { Toaster } from 'sonner'
 import { AdminShell } from '@/components/layout/AdminShell'
 import { ClientShell } from '@/components/layout/ClientShell'
 import {
+  CsrModuleGate,
   PublicOnly,
   RequireAuth,
   RequireClient,
+  RequireCsrMarketing,
   RequireHqAdmin,
   RequireMarketing,
   RequireOperationsAdmin,
@@ -14,6 +16,9 @@ import {
   RequireRole,
   RequireStaff,
 } from '@/components/layout/RouteGuards'
+import { CsrBookAppointmentPage } from '@/pages/csr/CsrBookAppointmentPage'
+import { CsrCalendarPage } from '@/pages/csr/CsrCalendarPage'
+import { CsrPatientLookupPage } from '@/pages/csr/CsrPatientLookupPage'
 import { AuthProvider, isStaffRole, useAuth } from '@/contexts/AuthContext'
 import { BranchProvider } from '@/contexts/BranchContext'
 import { SalesDataBootstrap } from '@/components/SalesDataBootstrap'
@@ -170,18 +175,44 @@ export default function App() {
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
               </Route>
 
-              <Route
-                path="/admin"
-                element={
-                  <RequireAuth>
-                    <RequireStaff>
-                      <AdminShell />
-                    </RequireStaff>
-                  </RequireAuth>
-                }
-              >
+                <Route
+                  path="/admin"
+                  element={
+                    <RequireAuth>
+                      <RequireStaff>
+                        <CsrModuleGate>
+                          <AdminShell />
+                        </CsrModuleGate>
+                      </RequireStaff>
+                    </RequireAuth>
+                  }
+                >
                 <Route index element={<AdminIndexRedirect />} />
                 <Route path="dashboard" element={<AdminDashboardGate />} />
+                <Route
+                  path="csr/calendar"
+                  element={
+                    <RequireCsrMarketing>
+                      <CsrCalendarPage />
+                    </RequireCsrMarketing>
+                  }
+                />
+                <Route
+                  path="csr/book"
+                  element={
+                    <RequireCsrMarketing>
+                      <CsrBookAppointmentPage />
+                    </RequireCsrMarketing>
+                  }
+                />
+                <Route
+                  path="csr/patients"
+                  element={
+                    <RequireCsrMarketing>
+                      <CsrPatientLookupPage />
+                    </RequireCsrMarketing>
+                  }
+                />
                 <Route path="attendance" element={<MyAttendancePage />} />
                 <Route path="my-leave" element={<MyLeavePage />} />
                 <Route path="my-training" element={<MyTrainingPage />} />

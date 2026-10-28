@@ -84,6 +84,7 @@ const STAFF_ROLES: UserRole[] = [
   'BRANCH_MARKETING',
   'OPERATIONS_MANAGER',
   'BRANCH_ADMIN',
+  'CSR_MARKETING',
   'DOCTOR',
   'NURSE',
   'AESTHETICIAN',
@@ -98,6 +99,7 @@ const ROLE_PRIORITY: UserRole[] = [
   'HR',
   'MARKETING',
   'BRANCH_MARKETING',
+  'CSR_MARKETING',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -185,6 +187,26 @@ async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthS
       )
   let branchId = staffBranch?.branch_id ? String(staffBranch.branch_id) : undefined
 
+  // CSR_MARKETING may hold many clinic rows in user_roles
+  const branchIds =
+    role === 'CSR_MARKETING'
+      ? [
+          ...new Set(
+            (roleRows ?? [])
+              .filter(
+                (r) =>
+                  String(r.role_id) === 'CSR_MARKETING' &&
+                  r.branch_id &&
+                  String(r.branch_id) !== hqSentinel,
+              )
+              .map((r) => String(r.branch_id)),
+          ),
+        ]
+      : undefined
+  if (branchIds?.length && (!branchId || !branchIds.includes(branchId))) {
+    branchId = branchIds[0]
+  }
+
   let branchType: AuthSessionUser['branchType']
   let branchName: string | undefined
   if (branchId) {
@@ -244,6 +266,7 @@ async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthS
     branchId,
     branchType,
     branchName,
+    branchIds,
   }
 }
 

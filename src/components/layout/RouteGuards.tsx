@@ -1,7 +1,7 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth, isStaffRole } from '@/contexts/AuthContext'
 import type { UserRole } from '@/types'
-import { getStaffHomePath } from '@/utils/franchiseAccess'
+import { getStaffHomePath, isCsrMarketingRole } from '@/utils/franchiseAccess'
 
 export function RequireAuth({ children }: { children?: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -51,6 +51,7 @@ export function RequireStaff({ children }: { children?: React.ReactNode }) {
     'HR',
     'MARKETING',
     'BRANCH_MARKETING',
+    'CSR_MARKETING',
     'OPERATIONS_MANAGER',
     'BRANCH_ADMIN',
     'DOCTOR',
@@ -60,6 +61,33 @@ export function RequireStaff({ children }: { children?: React.ReactNode }) {
     'STAFF',
   ]
   return <RequireRole roles={staffRoles}>{children}</RequireRole>
+}
+
+/** CSR Marketing modules only (calendar / book / patient lookup). */
+export function RequireCsrMarketing({ children }: { children?: React.ReactNode }) {
+  return (
+    <RequireRole roles={['SUPER_ADMIN', 'HQ_ADMIN', 'CSR_MARKETING']}>{children}</RequireRole>
+  )
+}
+
+/**
+ * When a CSR opens a non-CSR admin URL, send them home.
+ * HQ may still open /admin/csr/* for support.
+ */
+export function CsrModuleGate({ children }: { children?: React.ReactNode }) {
+  const { user } = useAuth()
+  const location = useLocation()
+  if (user && isCsrMarketingRole(user.role)) {
+    const path = location.pathname
+    const allowed =
+      path.startsWith('/admin/csr') ||
+      path === '/admin' ||
+      path === '/admin/'
+    if (!allowed) {
+      return <Navigate to="/admin/csr/calendar" replace />
+    }
+  }
+  return children ? <>{children}</> : <Outlet />
 }
 
 /** HQ-only admin surfaces (User Access, Branches directory CRUD, etc.) */

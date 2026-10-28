@@ -3,7 +3,11 @@ import { useAuth } from '@/contexts/AuthContext'
 import { getBranches, subscribeBranches } from '@/services/branchService'
 import type { Branch } from '@/types'
 import { resolveClinicBranchId } from '@/services/branchService'
-import { HQ_SENTINEL_BRANCH_ID, isBranchScopedStaff } from '@/utils/franchiseAccess'
+import {
+  HQ_SENTINEL_BRANCH_ID,
+  isBranchScopedStaff,
+  isCsrMarketingRole,
+} from '@/utils/franchiseAccess'
 
 interface BranchContextValue {
   branches: Branch[]
@@ -11,26 +15,39 @@ interface BranchContextValue {
   setSelectedBranchId: (id: string) => void
   selectedBranch: Branch | null
   isAllBranches: boolean
-  /** Franchise owners cannot switch away from their branch */
+  /** Franchise owners / single-clinic staff cannot switch away from their branch */
   branchLocked: boolean
+  /** CSR may switch only among assigned clinics (no All Branches) */
+  csrBranchScoped: boolean
 }
 
 const BranchContext = createContext<BranchContextValue | null>(null)
 
 export function BranchProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
-  const locked = isBranchScopedStaff(user)
+  const csrScoped = isCsrMarketingRole(user?.role)
+  const locked = isBranchScopedStaff(user) && !csrScoped
   const resolvedUserBranch =
     resolveClinicBranchId(user?.branchId) ||
     (user?.branchId && user.branchId !== HQ_SENTINEL_BRANCH_ID ? user.branchId : undefined)
+  const csrBranchIds = useMemo(() => {
+    if (!csrScoped) return [] as string[]
+    const ids = (user?.branchIds?.length ? user.branchIds : user?.branchId ? [user.branchId] : [])
+      .map((id) => resolveClinicBranchId(id) || id)
+      .filter((id): id is string => Boolean(id) && id !== HQ_SENTINEL_BRANCH_ID)
+    return [...new Set(ids)]
+  }, [csrScoped, user?.branchIds, user?.branchId])
+
   const lockedBranchId = locked ? resolvedUserBranch ?? 'all' : 'all'
   const prevUserKey = useRef<string | null>(null)
 
-  const [selectedBranchId, setSelectedBranchIdState] = useState(lockedBranchId)
+  const [selectedBranchId, setSelectedBranchIdState] = useState(() => {
+    if (csrScoped && csrBranchIds[0]) return csrBranchIds[0]
+    return lockedBranchId
+  })
   const [branches, setBranches] = useState<Branch[]>(() => getBranches())
 
   useEffect(() => {
-    // Header switcher: clinic locations only (company-owned + franchise). No warehouse.
     const refresh = () =>
       setBranches(
         getBranches().filter(
@@ -46,28 +63,53 @@ export function BranchProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    if (locked && resolvedUserBranch) {
-      setSelectedBranchIdState(resolvedUserBranch)
-      prevUserKey.current = user ? `${user.id}:${user.role}` : null
-      return
-    }
-    // HQ (and other org-wide staff) must land on All Branches after login / unlock —
-    // otherwise a prior San Mateo (or any clinic) selection sticks and the HQ dashboard
-    // looks single-branch.
     const userKey = user ? `${user.id}:${user.role}` : null
     const userChanged = userKey !== prevUserKey.current
     prevUserKey.current = userKey
+
+    if (csrScoped) {
+      setSelectedBranchIdState((prev) =>
+        prev !== 'all' && csrBranchIds.includes(prev) ? prev : csrBranchIds[0] || prev,
+      )
+      return
+    }
+    if (locked && resolvedUserBranch) {
+      setSelectedBranchIdState(resolvedUserBranch)
+      return
+    }
     if (userChanged && !locked) {
       setSelectedBranchIdState('all')
     }
-  }, [locked, user, resolvedUserBranch, user?.id, user?.role])
+  }, [locked, csrScoped, resolvedUserBranch, user?.id, user?.role, csrBranchIds])
 
   const setSelectedBranchId = (id: string) => {
     if (locked) return
+    if (csrScoped) {
+      if (csrBranchIds.includes(id)) setSelectedBranchIdState(id)
+      return
+    }
     setSelectedBranchIdState(id)
   }
 
   const value = useMemo(() => {
+    if (csrScoped) {
+      const csrBranches = branches.filter((b) => csrBranchIds.includes(b.id))
+      const effectiveId =
+        selectedBranchId !== 'all' && csrBranchIds.includes(selectedBranchId)
+          ? selectedBranchId
+          : csrBranchIds[0] || selectedBranchId
+      const selectedBranch = csrBranches.find((b) => b.id === effectiveId) ?? null
+      return {
+        branches: csrBranches,
+        selectedBranchId: effectiveId,
+        setSelectedBranchId,
+        selectedBranch,
+        isAllBranches: false,
+        branchLocked: false,
+        csrBranchScoped: true,
+      }
+    }
+
     const effectiveId = locked && resolvedUserBranch ? resolvedUserBranch : selectedBranchId
     const selectedBranch = branches.find((b) => b.id === effectiveId) ?? null
     return {
@@ -80,8 +122,9 @@ export function BranchProvider({ children }: { children: ReactNode }) {
       selectedBranch,
       isAllBranches: !locked && effectiveId === 'all',
       branchLocked: locked,
+      csrBranchScoped: false,
     }
-  }, [branches, selectedBranchId, locked, resolvedUserBranch])
+  }, [branches, selectedBranchId, locked, resolvedUserBranch, csrScoped, csrBranchIds.join('|')])
 
   return <BranchContext.Provider value={value}>{children}</BranchContext.Provider>
 }

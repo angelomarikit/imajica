@@ -33,6 +33,11 @@ export function isBranchMarketingRole(role: UserRole | undefined | null): boolea
   return role === 'BRANCH_MARKETING'
 }
 
+/** CSR Marketing — multi-branch calendar / booking with limited patient lookup. */
+export function isCsrMarketingRole(role: UserRole | undefined | null): boolean {
+  return role === 'CSR_MARKETING'
+}
+
 /** Org Marketing or Branch Marketing. */
 export function isAnyMarketingRole(role: UserRole | undefined | null): boolean {
   return isMarketingRole(role) || isBranchMarketingRole(role)
@@ -169,6 +174,7 @@ export function canAccessHqAdmin(user: AuthSessionUser | null | undefined): bool
 /** Post-login / default admin home. HQ + OM + clinic managers → Dashboard; HR → salary; clinical staff → attendance. */
 export function getStaffHomePath(user: AuthSessionUser | null | undefined): string {
   if (!user) return '/login'
+  if (isCsrMarketingRole(user.role)) return '/admin/csr/calendar'
   if (isHrRole(user.role)) return '/admin/hr/salary'
   if (isAnyMarketingRole(user.role)) return '/admin/marketing/dashboard'
   if (isTimeclockStaff(user)) return '/admin/attendance'

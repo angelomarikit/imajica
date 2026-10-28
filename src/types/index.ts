@@ -5,6 +5,7 @@ export type UserRole =
   | 'HR'
   | 'MARKETING'
   | 'BRANCH_MARKETING'
+  | 'CSR_MARKETING'
   | 'OPERATIONS_MANAGER'
   | 'BRANCH_ADMIN'
   | 'DOCTOR'
@@ -212,6 +213,8 @@ export interface AccessUser {
   status: 'active' | 'inactive'
   /** Shared kiosk Time In / Out number (e.g. 023) */
   employeeCode?: string | null
+  /** CSR_MARKETING multi-branch assignments */
+  branchIds?: string[]
 }
 
 export interface Treatment {
@@ -821,6 +824,8 @@ export interface AuthSessionUser {
   /** When set from user_roles → branches */
   branchType?: 'company_owned' | 'franchise' | 'warehouse'
   branchName?: string
+  /** CSR_MARKETING (and similar): all assigned clinic branch UUIDs */
+  branchIds?: string[]
 }
 
 export type AttendancePunchType = 'time_in' | 'time_out'

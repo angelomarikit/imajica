@@ -5,6 +5,7 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { getBranches } from '@/services/branchService'
+import { setCsrBranchAssignments } from '@/services/csrMarketingService'
 import { createAccessUser } from '@/services/userAccessService'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { cn } from '@/utils/cn'
@@ -21,6 +22,7 @@ const ROLE_OPTIONS = [
   'HR',
   'MARKETING',
   'BRANCH_MARKETING',
+  'CSR_MARKETING',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -36,13 +38,22 @@ const labelClass = 'text-sm font-medium text-[#073D2C]'
 
 export function NewUserPage() {
   const navigate = useNavigate()
-  const branches = useMemo(() => getBranches().filter((b) => b.status === 'active'), [])
+  const branches = useMemo(
+    () =>
+      getBranches().filter(
+        (b) => b.status === 'active' && b.branchType !== 'warehouse' && b.code !== 'HQ',
+      ),
+    [],
+  )
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('')
   const [branchId, setBranchId] = useState('')
+  const [csrBranchIds, setCsrBranchIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+
+  const isCsr = role === 'CSR_MARKETING'
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -59,24 +70,39 @@ export function NewUserPage() {
       return
     }
     const orgWide = isOrgWideRole(role)
-    if (isSupabaseConfigured && !orgWide && !branchId) {
+    if (isCsr) {
+      if (!csrBranchIds.length) {
+        toast.error('Select at least one clinic branch for CSR Marketing')
+        return
+      }
+    } else if (isSupabaseConfigured && !orgWide && !branchId) {
       toast.error(
         'Select a clinic branch for this role, or choose OM / HR / Marketing / HQ for All Branches. Branch Marketing needs a clinic.',
       )
       return
     }
-    const branch = branches.find((b) => b.id === branchId)
+
+    const primaryBranchId = isCsr ? csrBranchIds[0]! : branchId
+    const branch = branches.find((b) => b.id === primaryBranchId)
     setSaving(true)
     try {
-      await createAccessUser({
+      const created = await createAccessUser({
         fullName: fullName.trim(),
         email: email.trim(),
         password,
         role,
-        branchId: orgWide ? HQ_SENTINEL_BRANCH_ID : branchId || null,
-        branchName: orgWide ? 'All Branches (organization)' : branch?.name ?? null,
+        branchId: orgWide ? HQ_SENTINEL_BRANCH_ID : primaryBranchId || null,
+        branchName: orgWide
+          ? 'All Branches (organization)'
+          : isCsr
+            ? `${csrBranchIds.length} clinics`
+            : branch?.name ?? null,
         status: 'active',
+        branchIds: isCsr ? csrBranchIds : undefined,
       })
+      if (isCsr && isSupabaseConfigured) {
+        await setCsrBranchAssignments(created.id, csrBranchIds)
+      }
       toast.success('User added')
       navigate('/admin/team/user-access')
     } catch (err) {
@@ -84,6 +110,12 @@ export function NewUserPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  function toggleCsrBranch(id: string) {
+    setCsrBranchIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
   }
 
   return (
@@ -111,7 +143,7 @@ export function NewUserPage() {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="block">
               <span className={labelClass}>Full Name</span>
@@ -156,6 +188,9 @@ export function NewUserPage() {
                   setRole(next)
                   if (isOrgWideRole(next)) {
                     setBranchId(HQ_SENTINEL_BRANCH_ID)
+                    setCsrBranchIds([])
+                  } else if (next === 'CSR_MARKETING') {
+                    setBranchId('')
                   } else if (branchId === HQ_SENTINEL_BRANCH_ID) {
                     setBranchId('')
                   }
@@ -172,43 +207,73 @@ export function NewUserPage() {
                 ))}
               </select>
               <p className="mt-1.5 text-xs text-slate-ui">
-                <strong>Operations Manager</strong> / <strong>Marketing</strong> /{' '}
-                <strong>HR</strong> = All Branches.{' '}
-                <strong>Branch Marketing</strong> = one clinic only.
+                <strong>CSR Marketing</strong> = multi-clinic calendar & booking.{' '}
+                <strong>Branch Marketing</strong> = one clinic marketing tools.
               </p>
             </label>
-            <label className="block sm:col-span-2">
-              <span className={labelClass}>Branch</span>
-              <select
-                className={cn(
-                  fieldClass,
-                  !branchId && !isOrgWideRole(role) && 'text-slate-400',
-                )}
-                value={isOrgWideRole(role) ? HQ_SENTINEL_BRANCH_ID : branchId}
-                onChange={(e) => {
-                  const next = e.target.value
-                  setBranchId(next)
-                  if (next === HQ_SENTINEL_BRANCH_ID && !isOrgWideRole(role)) {
-                    if (role === 'BRANCH_MARKETING') {
-                      setRole('MARKETING')
-                      return
+
+            {isCsr ? (
+              <div className="block sm:col-span-2">
+                <span className={labelClass}>Assigned clinics (multi-select)</span>
+                <div className="mt-2 grid max-h-56 gap-2 overflow-y-auto rounded-[10px] border border-border p-3 sm:grid-cols-2">
+                  {branches.map((b) => {
+                    const checked = csrBranchIds.includes(b.id)
+                    return (
+                      <label
+                        key={b.id}
+                        className={cn(
+                          'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm',
+                          checked ? 'bg-emerald-50 text-emerald-950' : 'hover:bg-cream/60',
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleCsrBranch(b.id)}
+                        />
+                        <span>
+                          {b.code} — {b.name}
+                          {b.branchType === 'franchise' ? ' (Franchise)' : ''}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : (
+              <label className="block sm:col-span-2">
+                <span className={labelClass}>Branch</span>
+                <select
+                  className={cn(
+                    fieldClass,
+                    !branchId && !isOrgWideRole(role) && 'text-slate-400',
+                  )}
+                  value={isOrgWideRole(role) ? HQ_SENTINEL_BRANCH_ID : branchId}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    setBranchId(next)
+                    if (next === HQ_SENTINEL_BRANCH_ID && !isOrgWideRole(role)) {
+                      if (role === 'BRANCH_MARKETING') {
+                        setRole('MARKETING')
+                        return
+                      }
+                      setRole('HR')
                     }
-                    setRole('HR')
-                  }
-                }}
-              >
-                <option value="">Select clinic branch</option>
-                <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
-                  All Branches (organization) — OM / HR / Marketing
-                </option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id} className="text-[#073D2C]">
-                    {b.code} — {b.name}
-                    {b.branchType === 'franchise' ? ' (Franchise)' : ''}
+                  }}
+                >
+                  <option value="">Select clinic branch</option>
+                  <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
+                    All Branches (organization) — OM / HR / Marketing
                   </option>
-                ))}
-              </select>
-            </label>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id} className="text-[#073D2C]">
+                      {b.code} — {b.name}
+                      {b.branchType === 'franchise' ? ' (Franchise)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
 
           <div className="flex justify-end gap-2 pt-2">

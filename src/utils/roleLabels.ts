@@ -9,6 +9,7 @@ const ROLE_DISPLAY_LABELS: Record<string, string> = {
   HR: 'HR',
   MARKETING: 'Marketing',
   BRANCH_MARKETING: 'Branch Marketing',
+  CSR_MARKETING: 'CSR Marketing',
   OPERATIONS_MANAGER: 'Operations Manager',
   BRANCH_ADMIN: 'Clinic Manager',
   DOCTOR: 'Doctor',

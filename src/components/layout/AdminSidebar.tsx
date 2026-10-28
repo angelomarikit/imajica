@@ -57,6 +57,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useMarketingHandoffUnread } from '@/hooks/useMarketingHandoffUnread'
 import { cn } from '@/utils/cn'
 import {
+  isCsrMarketingRole,
   isFranchiseBranchOwner,
   isHrRole,
   isAnyMarketingRole,
@@ -333,6 +334,21 @@ function buildMarketingNavSections(): NavSection[] {
     },
     {
       items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
+    },
+  ]
+}
+
+/** CSR Marketing — calendar / book / patient lookup only */
+function buildCsrMarketingNavSections(): NavSection[] {
+  return [
+    {
+      category: 'CSR Booking',
+      categoryIcon: CalendarDays,
+      items: [
+        { to: '/admin/csr/calendar', label: 'Calendar', icon: CalendarDays },
+        { to: '/admin/csr/book', label: 'Book Appointment', icon: ShoppingBag },
+        { to: '/admin/csr/patients', label: 'Patient Lookup', icon: Users },
+      ],
     },
   ]
 }
@@ -997,6 +1013,7 @@ export function AdminSidebar({
   )
   const { unread: handoffUnread } = useMarketingHandoffUnread()
   const navSections = useMemo(() => {
+    if (isCsrMarketingRole(user?.role)) return buildCsrMarketingNavSections()
     if (isTimeclockStaff(user)) return buildTimeclockStaffNavSections(handoffUnread)
     if (isFranchiseBranchOwner(user)) {
       return buildFranchiseOwnerNavSections(handoffUnread, {
