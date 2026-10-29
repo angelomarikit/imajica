@@ -5,7 +5,6 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { getBranches } from '@/services/branchService'
-import { setCsrBranchAssignments } from '@/services/csrMarketingService'
 import { createAccessUser } from '@/services/userAccessService'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { cn } from '@/utils/cn'
@@ -20,7 +19,6 @@ const BRANCH_ROLE_OPTIONS = [
   'HR',
   'MARKETING',
   'BRANCH_MARKETING',
-  'CSR_MARKETING',
   'BRANCH_ADMIN',
   'DOCTOR',
   'NURSE',
@@ -46,9 +44,7 @@ export function NewBranchAccountPage() {
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<string>('BRANCH_ADMIN')
   const [branchId, setBranchId] = useState('')
-  const [csrBranchIds, setCsrBranchIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
-  const isCsr = role === 'CSR_MARKETING'
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -61,12 +57,7 @@ export function NewBranchAccountPage() {
       return
     }
     const orgWide = isOrgWideRole(role)
-    if (isCsr) {
-      if (!csrBranchIds.length) {
-        toast.error('Select at least one clinic for CSR Marketing')
-        return
-      }
-    } else if (!orgWide && !branchId) {
+    if (!orgWide && !branchId) {
       toast.error('Select a branch from the directory')
       return
     }
@@ -74,31 +65,23 @@ export function NewBranchAccountPage() {
       toast.error('Password must be at least 6 characters')
       return
     }
-    const primaryId = isCsr ? csrBranchIds[0]! : branchId
-    const branch = branches.find((b) => b.id === primaryId)
-    if (!orgWide && !isCsr && !branch) {
+    const branch = branches.find((b) => b.id === branchId)
+    if (!orgWide && !branch) {
       toast.error('Selected branch was not found')
       return
     }
 
     setSaving(true)
     try {
-      const created = await createAccessUser({
+      await createAccessUser({
         fullName: fullName.trim(),
         email: email.trim().toLowerCase(),
         password,
         role,
-        branchId: orgWide ? HQ_SENTINEL_BRANCH_ID : primaryId,
-        branchName: orgWide
-          ? 'All Branches (organization)'
-          : isCsr
-            ? `${csrBranchIds.length} clinics`
-            : branch!.name,
+        branchId: orgWide ? HQ_SENTINEL_BRANCH_ID : branch!.id,
+        branchName: orgWide ? 'All Branches (organization)' : branch!.name,
         status: 'active',
       })
-      if (isCsr && isSupabaseConfigured) {
-        await setCsrBranchAssignments(created.id, csrBranchIds)
-      }
       toast.success(
         isSupabaseConfigured
           ? 'Account created — they can sign in with this email and password'
@@ -130,25 +113,19 @@ export function NewBranchAccountPage() {
       />
 
       <Card className="mx-auto max-w-4xl p-6 sm:p-8">
-        <div className="mb-6 space-y-2">
+        <div className="mb-6">
           <h2 className="text-lg font-semibold text-[#0a0a0a]">Branch Account Credentials</h2>
-          <p className="text-sm text-slate-ui">
-            You create accounts <strong>here in the web app</strong> — not in the Supabase Authentication
-            UI. Under the hood the app calls the <code className="text-xs">create-branch-account</code>{' '}
-            Edge Function, which safely uses the service role on the server.
+          <p className="mt-1 text-sm text-slate-ui">
+            Requirements: migration <code className="text-xs">20260929000030</code> applied, Edge
+            Function deployed, and you signed in with a real HQ Auth user (not offline demo).
           </p>
-          {!isSupabaseConfigured ? (
-            <p className="rounded-[10px] bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              Add <code className="text-xs">VITE_SUPABASE_URL</code> and{' '}
-              <code className="text-xs">VITE_SUPABASE_ANON_KEY</code> to <code className="text-xs">.env</code>,
-              apply migration 30, deploy the Edge Function, then sign in as HQ admin.
-            </p>
-          ) : (
-            <p className="rounded-[10px] bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-              Requirements: migration <code className="text-xs">20260929000030</code> applied, Edge Function
-              deployed, and you signed in with a real HQ Auth user (not offline demo).
-            </p>
-          )}
+          <p className="mt-2 rounded-[10px] border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+            CSR Marketing accounts are created under{' '}
+            <Link to="/admin/team/user-access/new" className="font-semibold underline">
+              Team → User Access → Create User
+            </Link>{' '}
+            (multi-clinic assignment).
+          </p>
         </div>
 
         <form onSubmit={(e) => void handleSubmit(e)} className="space-y-5">
@@ -194,7 +171,6 @@ export function NewBranchAccountPage() {
                 onChange={(e) => {
                   const next = e.target.value
                   setRole(next)
-                  // HR is org-wide — lock branch to All Branches
                   if (isOrgWideRole(next)) {
                     setBranchId(HQ_SENTINEL_BRANCH_ID)
                   } else if (branchId === HQ_SENTINEL_BRANCH_ID) {
@@ -210,90 +186,53 @@ export function NewBranchAccountPage() {
                 ))}
               </select>
               <p className="mt-1.5 text-xs text-slate-ui">
-                <strong>CSR Marketing</strong> = multi-clinic booking.{' '}
-                <strong>Branch Marketing</strong> = one clinic marketing tools.
+                <strong>Operations Manager</strong> / <strong>Marketing</strong> /{' '}
+                <strong>HR</strong> = All Branches.{' '}
+                <strong>Branch Marketing</strong> = one clinic only (pick the branch below).
               </p>
             </label>
-            {isCsr ? (
-              <div className="block sm:col-span-2">
-                <span className={labelClass}>
-                  Assigned clinics <span className="text-red-500">*</span>
-                </span>
-                <div className="mt-2 grid max-h-56 gap-2 overflow-y-auto rounded-[10px] border border-border p-3 sm:grid-cols-2">
-                  {branches.map((b) => {
-                    const checked = csrBranchIds.includes(b.id)
-                    return (
-                      <label
-                        key={b.id}
-                        className={cn(
-                          'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm',
-                          checked ? 'bg-emerald-50 text-emerald-950' : 'hover:bg-cream/60',
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() =>
-                            setCsrBranchIds((prev) =>
-                              prev.includes(b.id)
-                                ? prev.filter((x) => x !== b.id)
-                                : [...prev, b.id],
-                            )
-                          }
-                        />
-                        <span>
-                          {b.code} — {b.name}
-                          {b.branchType === 'franchise' ? ' (Franchise)' : ''}
-                        </span>
-                      </label>
-                    )
-                  })}
-                </div>
-              </div>
-            ) : (
-              <label className="block sm:col-span-2">
-                <span className={labelClass}>
-                  Branch <span className="text-red-500">*</span>
-                </span>
-                <select
-                  className={cn(
-                    fieldClass,
-                    !branchId && !isOrgWideRole(role) && 'text-slate-400',
-                  )}
-                  value={isOrgWideRole(role) ? HQ_SENTINEL_BRANCH_ID : branchId}
-                  onChange={(e) => {
-                    const next = e.target.value
-                    setBranchId(next)
-                    if (next === HQ_SENTINEL_BRANCH_ID && !isOrgWideRole(role)) {
-                      setRole(role === 'BRANCH_MARKETING' ? 'MARKETING' : 'HR')
-                    }
-                  }}
-                  required
-                >
-                  <option value="" disabled>
-                    Select branch from directory
+            <label className="block sm:col-span-2">
+              <span className={labelClass}>
+                Branch <span className="text-red-500">*</span>
+              </span>
+              <select
+                className={cn(
+                  fieldClass,
+                  !branchId && !isOrgWideRole(role) && 'text-slate-400',
+                )}
+                value={isOrgWideRole(role) ? HQ_SENTINEL_BRANCH_ID : branchId}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setBranchId(next)
+                  if (next === HQ_SENTINEL_BRANCH_ID && !isOrgWideRole(role)) {
+                    setRole(role === 'BRANCH_MARKETING' ? 'MARKETING' : 'HR')
+                  }
+                }}
+                required
+              >
+                <option value="" disabled>
+                  Select branch from directory
+                </option>
+                <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
+                  All Branches (organization) — OM / HR / Marketing
+                </option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id} className="text-[#073D2C]">
+                    {b.code} — {b.name}
+                    {b.branchType === 'franchise' ? ' (Franchise)' : ''}
                   </option>
-                  <option value={HQ_SENTINEL_BRANCH_ID} className="text-[#073D2C]">
-                    All Branches (organization) — OM / HR / Marketing
-                  </option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id} className="text-[#073D2C]">
-                      {b.code} — {b.name}
-                      {b.branchType === 'franchise' ? ' (Franchise)' : ''}
-                    </option>
-                  ))}
-                </select>
-                {isOrgWideRole(role) || branchId === HQ_SENTINEL_BRANCH_ID ? (
-                  <p className="mt-1.5 text-xs text-emerald-800">
-                    This account can see data across every clinic (not tied to one branch).
-                  </p>
-                ) : role === 'BRANCH_MARKETING' ? (
-                  <p className="mt-1.5 text-xs text-emerald-800">
-                    Branch Marketing sees only this clinic&apos;s marketing data and handoffs.
-                  </p>
-                ) : null}
-              </label>
-            )}
+                ))}
+              </select>
+              {isOrgWideRole(role) || branchId === HQ_SENTINEL_BRANCH_ID ? (
+                <p className="mt-1.5 text-xs text-emerald-800">
+                  This account can see data across every clinic (not tied to one branch).
+                </p>
+              ) : role === 'BRANCH_MARKETING' ? (
+                <p className="mt-1.5 text-xs text-emerald-800">
+                  Branch Marketing sees only this clinic&apos;s marketing data and handoffs.
+                </p>
+              ) : null}
+            </label>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
