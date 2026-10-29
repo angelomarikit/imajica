@@ -16,6 +16,38 @@ const fieldLabel = 'mb-1 block text-[11px] font-bold uppercase tracking-[0.1em] 
 const fieldControl =
   'h-11 w-full rounded-[10px] border border-border bg-white px-3 text-sm text-charcoal outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/15'
 
+type IntervalMinutes = 60 | 90
+
+const DAY_START_MINUTES = 8 * 60 // 8:00 AM
+const DAY_END_MINUTES = 20 * 60 // 8:00 PM last end
+const SLOT_STEP_MINUTES = 30
+
+function formatClock(totalMinutes: number): string {
+  const h24 = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  const period = h24 >= 12 ? 'PM' : 'AM'
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12
+  return `${h12}:${String(m).padStart(2, '0')} ${period}`
+}
+
+function toTimeValue(totalMinutes: number): string {
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+function buildIntervalSlots(duration: IntervalMinutes): { start: string; label: string }[] {
+  const slots: { start: string; label: string }[] = []
+  for (let start = DAY_START_MINUTES; start + duration <= DAY_END_MINUTES; start += SLOT_STEP_MINUTES) {
+    const end = start + duration
+    slots.push({
+      start: toTimeValue(start),
+      label: `${formatClock(start)} – ${formatClock(end)}`,
+    })
+  }
+  return slots
+}
+
 export function CsrBookAppointmentPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -35,9 +67,12 @@ export function CsrBookAppointmentPage() {
   const [skinConcern, setSkinConcern] = useState('')
   const [preferredProcedure, setPreferredProcedure] = useState('')
   const [date, setDate] = useState(initialDate)
+  const [intervalMinutes, setIntervalMinutes] = useState<IntervalMinutes>(60)
   const [time, setTime] = useState('10:00')
   const [source, setSource] = useState<string>('Other')
   const [saving, setSaving] = useState(false)
+
+  const timeSlots = useMemo(() => buildIntervalSlots(intervalMinutes), [intervalMinutes])
 
   const [treatments, setTreatments] = useState<
     { id: string; name: string; durationMinutes: number; price: number }[]
@@ -75,7 +110,11 @@ export function CsrBookAppointmentPage() {
       return
     }
     if (!date || !time) {
-      toast.error('Date and time are required')
+      toast.error('Date and time slot are required')
+      return
+    }
+    if (!timeSlots.some((s) => s.start === time)) {
+      toast.error('Select a valid time interval')
       return
     }
 
@@ -91,7 +130,7 @@ export function CsrBookAppointmentPage() {
         email: email.trim() || null,
         skinConcern: skinConcern.trim() || null,
         preferredProcedure: preferredProcedure.trim() || null,
-        durationMinutes: matchedTreatment?.durationMinutes ?? 60,
+        durationMinutes: intervalMinutes,
         marketingSource: source || 'Other',
       })
       toast.success('Booking added for this branch')
@@ -195,7 +234,7 @@ export function CsrBookAppointmentPage() {
             </datalist>
             {matchedTreatment ? (
               <p className="mt-1.5 text-xs text-emerald-800">
-                Matched catalog: {matchedTreatment.name} ({matchedTreatment.durationMinutes} min)
+                Matched catalog: {matchedTreatment.name}
               </p>
             ) : preferredProcedure.trim() ? (
               <p className="mt-1.5 text-xs text-slate-ui">
@@ -204,32 +243,74 @@ export function CsrBookAppointmentPage() {
             ) : null}
           </label>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className={fieldLabel}>
-                Date <span className="text-red-500">*</span>
-              </span>
-              <input
-                type="date"
-                className={fieldControl}
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                required
-              />
-            </label>
-            <label className="block">
-              <span className={fieldLabel}>
-                Time <span className="text-red-500">*</span>
-              </span>
-              <input
-                type="time"
-                className={fieldControl}
-                value={time}
-                onChange={(e) => setTime(e.target.value)}
-                required
-              />
-            </label>
+          <label className="block">
+            <span className={fieldLabel}>
+              Date <span className="text-red-500">*</span>
+            </span>
+            <input
+              type="date"
+              className={fieldControl}
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              required
+            />
+          </label>
+
+          <div>
+            <span className={fieldLabel}>
+              Interval <span className="text-red-500">*</span>
+            </span>
+            <div className="mt-1.5 flex flex-wrap gap-2">
+              {([60, 90] as IntervalMinutes[]).map((mins) => (
+                <button
+                  key={mins}
+                  type="button"
+                  onClick={() => {
+                    setIntervalMinutes(mins)
+                    const nextSlots = buildIntervalSlots(mins)
+                    if (!nextSlots.some((s) => s.start === time)) {
+                      setTime(nextSlots.find((s) => s.start === '10:00')?.start ?? nextSlots[0]?.start ?? '')
+                    }
+                  }}
+                  className={cn(
+                    'rounded-[10px] border px-4 py-2.5 text-sm font-semibold transition-colors',
+                    intervalMinutes === mins
+                      ? 'border-emerald-800 bg-emerald-900 text-white'
+                      : 'border-border bg-white text-charcoal hover:bg-cream/60',
+                  )}
+                >
+                  {mins} mins
+                  <span className="ml-1.5 font-normal opacity-80">
+                    {mins === 60 ? '(e.g. 8:00 – 9:00 AM)' : '(e.g. 8:00 – 9:30 AM)'}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
+
+          <label className="block">
+            <span className={fieldLabel}>
+              Time <span className="text-red-500">*</span>
+            </span>
+            <select
+              className={cn(fieldControl, !time && 'text-slate-400')}
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              required
+            >
+              <option value="" disabled>
+                Select time slot
+              </option>
+              {timeSlots.map((slot) => (
+                <option key={`${intervalMinutes}-${slot.start}`} value={slot.start}>
+                  {slot.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-xs text-slate-ui">
+              Slots every 30 minutes from 8:00 AM, ending by 8:00 PM.
+            </p>
+          </label>
 
           <label className="block">
             <span className={fieldLabel}>
