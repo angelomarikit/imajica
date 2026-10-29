@@ -79,6 +79,9 @@ export async function csrRegisterLimitedClient(input: {
   phone: string
   branchId: string
   leadSource?: string | null
+  email?: string | null
+  address?: string | null
+  skinConcern?: string | null
 }): Promise<string> {
   const client = requireClient()
   const { data, error } = await client.rpc('csr_register_limited_client', {
@@ -86,9 +89,45 @@ export async function csrRegisterLimitedClient(input: {
     p_phone: input.phone,
     p_branch_id: input.branchId,
     p_lead_source: input.leadSource || null,
+    p_email: input.email || null,
+    p_address: input.address || null,
+    p_skin_concern: input.skinConcern || null,
   })
   if (error) throw new Error(error.message)
   if (!data) throw new Error('Could not create patient')
+  return String(data)
+}
+
+/** One-form CSR intake matching field collection: name, phone, address, email, concern, procedure, time, branch. */
+export async function csrCreateIntakeBooking(input: {
+  fullName: string
+  phone: string
+  branchId: string
+  startAt: string
+  address?: string | null
+  email?: string | null
+  skinConcern?: string | null
+  preferredProcedure?: string | null
+  durationMinutes?: number
+  marketingSource?: string | null
+  marketingCampaign?: string | null
+}): Promise<string> {
+  const client = requireClient()
+  const { data, error } = await client.rpc('csr_create_intake_booking', {
+    p_full_name: input.fullName,
+    p_phone: input.phone,
+    p_branch_id: input.branchId,
+    p_start_at: input.startAt,
+    p_address: input.address || null,
+    p_email: input.email || null,
+    p_skin_concern: input.skinConcern || null,
+    p_preferred_procedure: input.preferredProcedure || null,
+    p_duration_minutes: input.durationMinutes ?? 60,
+    p_marketing_source: input.marketingSource || 'Other',
+    p_marketing_campaign: input.marketingCampaign || null,
+  })
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error('Could not create booking')
   return String(data)
 }
 
