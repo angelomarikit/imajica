@@ -609,14 +609,42 @@ function wrapText(text: string, maxChars: number): string[] {
   return lines
 }
 
+async function loadTemplatePdfBytes(fileName: string): Promise<ArrayBuffer> {
+  const url = formPdfUrl(fileName)
+  const tryFetch = async (cache: RequestCache) => {
+    const res = await fetch(url, { cache })
+    if (!res.ok) {
+      throw new Error(`Could not load template PDF (${fileName}) — HTTP ${res.status}`)
+    }
+    const contentType = (res.headers.get('content-type') || '').toLowerCase()
+    const bytes = await res.arrayBuffer()
+    const head = new Uint8Array(bytes.slice(0, 5))
+    const isPdf =
+      head.length >= 4 &&
+      head[0] === 0x25 &&
+      head[1] === 0x50 &&
+      head[2] === 0x44 &&
+      head[3] === 0x46 // %PDF
+    if (!isPdf) {
+      throw new Error(
+        contentType.includes('html')
+          ? `Template PDF missing on server (${fileName}). Hard-refresh or redeploy so /imajica_forms/ is available.`
+          : `Invalid PDF template (${fileName}). Expected a PDF file, got ${contentType || 'unknown'}.`,
+      )
+    }
+    return bytes
+  }
+
+  try {
+    return await tryFetch('force-cache')
+  } catch {
+    return tryFetch('reload')
+  }
+}
+
 export async function buildGeneratedFormPdf(record: GeneratedFormRecord): Promise<Uint8Array> {
   const hydrated = await hydrateFormSignatures(record)
-  const url = formPdfUrl(hydrated.templateFile)
-  const res = await fetch(url)
-  if (!res.ok) {
-    throw new Error(`Could not load template PDF (${hydrated.templateFile})`)
-  }
-  const templateBytes = await res.arrayBuffer()
+  const templateBytes = await loadTemplatePdfBytes(hydrated.templateFile)
   const pdfDoc = await PDFDocument.load(templateBytes)
 
   await stampConsentPage(pdfDoc, hydrated)

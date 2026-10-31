@@ -2,6 +2,7 @@ import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import { deleteClient, getClientById, getClients, registerClient, saveClient } from '@/services/clientService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import type { Appointment, AppointmentStatus } from '@/types'
+import { mapBookingAuthError, requireSupabaseSession } from '@/utils/supabaseSession'
 import { isUuid } from '@/utils/uuid'
 
 const STORAGE_KEY = 'imajica_appointments'
@@ -359,7 +360,6 @@ async function ensureRemoteClient(input: {
 }): Promise<{ id: string; fullName: string; email?: string; phone?: string }> {
   if (!supabase) throw new Error('Supabase is not configured')
 
-  const { requireSupabaseSession, mapBookingAuthError } = await import('@/utils/supabaseSession')
   try {
     await requireSupabaseSession()
   } catch (err) {

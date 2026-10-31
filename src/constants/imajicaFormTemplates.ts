@@ -585,8 +585,14 @@ export const IMAJICA_FORM_TEMPLATES: FormTemplateDef[] = [
   },
 ]
 
+/** Public template path — encode path segments without turning `/` into `%2F`. */
 export function formPdfUrl(fileName: string) {
-  return `/imajica_forms/${encodeURIComponent(fileName)}`
+  const safe = String(fileName || '')
+    .split('/')
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join('/')
+  return `/imajica_forms/${safe}`
 }
 
 export function getFormTemplate(id: string) {

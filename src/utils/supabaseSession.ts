@@ -67,6 +67,12 @@ export async function softRefreshSupabaseSession(): Promise<boolean> {
 }
 
 export function mapBookingAuthError(message: string): string {
+  if (/failed to fetch dynamically imported module|loading chunk|importing a module script failed/i.test(message)) {
+    return 'App updated on the server. Refresh this page once, sign in again if asked, then place the order.'
+  }
+  if (/failed to fetch|networkerror|network request failed|load failed/i.test(message)) {
+    return 'Network error while saving. Check internet, refresh once, then retry Place Order.'
+  }
   if (/session expired/i.test(message)) {
     return 'Session expired. Sign out and sign in again, then place the order.'
   }

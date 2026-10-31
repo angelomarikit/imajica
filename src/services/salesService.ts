@@ -7,6 +7,7 @@ import {
   syncClientsFromImportedSales,
 } from '@/services/clientSalesProfileService'
 import { getClientById, getClients, saveClient } from '@/services/clientService'
+import { mapBookingAuthError, requireSupabaseSession } from '@/utils/supabaseSession'
 import { isUuid } from '@/utils/uuid'
 
 /** Clinic share of a doctor's-procedure order (customer still pays 100%). */
@@ -840,7 +841,6 @@ export async function recordBookingCheckout(
   }))
 
   if (isSupabaseConfigured && supabase) {
-    const { requireSupabaseSession, mapBookingAuthError } = await import('@/utils/supabaseSession')
     try {
       await requireSupabaseSession()
     } catch (err) {
@@ -1068,7 +1068,6 @@ export async function recordSessionUse(saleLineId: string): Promise<Sale | null>
   const nextCompleted = completed + 1
 
   if (isSupabaseConfigured && supabase) {
-    const { requireSupabaseSession, mapBookingAuthError } = await import('@/utils/supabaseSession')
     try {
       await requireSupabaseSession()
     } catch (err) {

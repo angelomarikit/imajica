@@ -14,6 +14,7 @@ import { getBranches } from '@/services/branchService'
 import { teamAccountsAsDemoUsers } from '@/constants/teamAccountsSeed'
 import { kioskStaffAsDemoUsers } from '@/constants/kioskStaffSeed'
 import { safeLocalRemoveItem, safeLocalSetItem } from '@/utils/safeLocalStorage'
+import { softRefreshSupabaseSession } from '@/utils/supabaseSession'
 
 interface AuthContextValue {
   user: AuthSessionUser | null
@@ -336,9 +337,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Clinic tablets stay open for hours — refresh JWT when the tab becomes visible again
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return
-      void import('@/utils/supabaseSession').then(({ softRefreshSupabaseSession }) =>
-        softRefreshSupabaseSession(),
-      )
+      void softRefreshSupabaseSession()
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)

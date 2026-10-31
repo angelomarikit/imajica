@@ -288,11 +288,31 @@ export function ImajicaFormsPage() {
               Template Document Preview
             </p>
             <div className="overflow-hidden rounded-[10px] border border-border bg-[#525659]">
-              <iframe
+              <object
                 title="Form template preview"
-                src={formPdfUrl(template.fileName)}
+                data={`${formPdfUrl(template.fileName)}#view=FitH`}
+                type="application/pdf"
                 className="h-[520px] w-full bg-white"
-              />
+              >
+                <iframe
+                  title="Form template preview fallback"
+                  src={`${formPdfUrl(template.fileName)}#view=FitH`}
+                  className="h-[520px] w-full bg-white"
+                />
+              </object>
+              <p className="bg-[#3a3d40] px-3 py-2 text-center text-xs text-white/80">
+                Preview:{' '}
+                <a
+                  className="underline"
+                  href={formPdfUrl(template.fileName)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {template.fileName}
+                </a>
+                {' · '}
+                Generate Final PDF still works if the preview pane fails on this tablet.
+              </p>
             </div>
           </div>
           <div className="space-y-4">

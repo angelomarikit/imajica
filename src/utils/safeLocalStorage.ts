@@ -10,6 +10,14 @@ const RECLAIM_KEYS = [
   'imajica_generated_forms_deleted',
 ] as const
 
+/** Heavy clinic caches — trim/remove under quota so auth + saves keep working on every branch. */
+const HEAVY_CACHE_KEYS = [
+  'imajica_clients',
+  'imajica_sales',
+  'imajica_remote_live_sales',
+  'imajica_appointments',
+] as const
+
 function isQuotaError(err: unknown): boolean {
   return (
     err instanceof DOMException &&
@@ -29,13 +37,43 @@ function reclaimNonAuthSpace() {
   }
 }
 
-export function safeLocalSetItem(key: string, value: string): void {
+function reclaimHeavyCaches(keepKey?: string) {
+  for (const key of HEAVY_CACHE_KEYS) {
+    if (keepKey && key === keepKey) continue
+    try {
+      localStorage.removeItem(key)
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Write localStorage without letting QuotaExceeded wipe clinic tablets.
+ * Returns false if the write still could not be completed after reclaim.
+ */
+export function safeLocalSetItem(key: string, value: string): boolean {
   try {
     localStorage.setItem(key, value)
+    return true
   } catch (err) {
     if (!isQuotaError(err)) throw err
     reclaimNonAuthSpace()
-    localStorage.setItem(key, value)
+    try {
+      localStorage.setItem(key, value)
+      return true
+    } catch (err2) {
+      if (!isQuotaError(err2)) throw err2
+      reclaimHeavyCaches(key)
+      try {
+        localStorage.setItem(key, value)
+        return true
+      } catch (err3) {
+        if (!isQuotaError(err3)) throw err3
+        console.warn('[storage] quota still exceeded for', key)
+        return false
+      }
+    }
   }
 }
 

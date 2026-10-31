@@ -20,6 +20,11 @@ import {
 import type { Client, PaymentMethod, Staff } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
+import {
+  mapBookingAuthError,
+  requireSupabaseSession,
+  softRefreshSupabaseSession,
+} from '@/utils/supabaseSession'
 import { isUuid } from '@/utils/uuid'
 
 function roundMoney(n: number) {
@@ -386,17 +391,20 @@ export function BookingCheckoutModal({
 
     setSaving(true)
     try {
-      // Warm JWT before RLS writes — tablets often sit on Booking for hours
+      // Warm JWT before RLS writes — tablets often sit on Booking for hours.
+      // Static import (not dynamic) so Place Order never fails on a stale Vite chunk after deploy.
       try {
-        const { softRefreshSupabaseSession, requireSupabaseSession } = await import(
-          '@/utils/supabaseSession'
-        )
         await softRefreshSupabaseSession()
         await requireSupabaseSession()
       } catch (authErr) {
-        throw authErr instanceof Error
-          ? authErr
-          : new Error('Session expired. Sign out and sign in again, then place the order.')
+        const msg = authErr instanceof Error ? authErr.message : 'Session expired'
+        throw new Error(
+          mapBookingAuthError(
+            /failed to fetch|dynamically imported|loading chunk|importing a module/i.test(msg)
+              ? 'Session expired. Sign out and sign in again, then place the order.'
+              : msg,
+          ),
+        )
       }
 
       const wasFirstVisit = (patient.totalVisits ?? 0) === 0 && !patient.lastSaleId
@@ -538,12 +546,7 @@ export function BookingCheckoutModal({
       onClose()
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Could not place order'
-      const message = /session expired/i.test(raw)
-        ? 'Session expired. Sign out and sign in again, then place the order.'
-        : /not signed in/i.test(raw)
-          ? 'Not signed in to the database. Sign out and sign in again with your clinic account (Lipa / Cainta / …), then retry Place Order.'
-          : raw
-      toast.error(message)
+      toast.error(mapBookingAuthError(raw))
     } finally {
       setSaving(false)
     }

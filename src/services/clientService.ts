@@ -6,21 +6,60 @@ import {
 } from '@/constants/clientProfileSeed'
 import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { safeLocalGetItem, safeLocalSetItem } from '@/utils/safeLocalStorage'
 import { isUuid } from '@/utils/uuid'
 
 const STORAGE_KEY = 'imajica_clients'
 const CHANGE_EVENT = 'imajica:clients-changed'
 const PROFILE_ENRICH_FLAG = 'imajica_client_profiles_enriched_v1'
+/** Keep local cache lean — franchise tablets hit 5MB when avatars are data URLs. */
+const MAX_LOCAL_CLIENTS = 400
 
 function readExtra(): Client[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = safeLocalGetItem(STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw) as Client[]
     return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
   }
+}
+
+/** Never put camera data-URLs into localStorage (quota killers on Dasma/Bacoor tablets). */
+function slimClientForLocal(client: Client): Client {
+  const avatar = client.avatarUrl
+  if (avatar && avatar.startsWith('data:')) {
+    const { avatarUrl: _drop, ...rest } = client
+    return rest
+  }
+  return client
+}
+
+function writeClientsLocal(clients: Client[]): void {
+  const slim = clients.map(slimClientForLocal)
+  const capped =
+    slim.length > MAX_LOCAL_CLIENTS
+      ? [...slim]
+          .sort((a, b) => (b.registeredAt || '').localeCompare(a.registeredAt || ''))
+          .slice(0, MAX_LOCAL_CLIENTS)
+      : slim
+
+  const tryWrite = (rows: Client[]) =>
+    safeLocalSetItem(STORAGE_KEY, JSON.stringify(rows))
+
+  if (tryWrite(capped)) return
+
+  // Progressive shrink until it fits (or give up — remote DB is source of truth)
+  for (const limit of [200, 100, 50, 20, 5]) {
+    const smaller = capped.slice(0, limit).map((c) => {
+      const { avatarUrl: _a, adminNotes: _n, medicalConcerns: _m, currentMedications: _med, ...rest } =
+        c
+      return rest
+    })
+    if (tryWrite(smaller)) return
+  }
+  console.warn('[clients] local cache skipped — browser storage full; remote save still used')
 }
 
 function emitChange() {
@@ -160,11 +199,11 @@ export function applyKnownClientProfiles(): number {
   }
 
   if (changed > 0) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...nextById.values()]))
-    localStorage.setItem(PROFILE_ENRICH_FLAG, 'done')
+    writeClientsLocal([...nextById.values()])
+    safeLocalSetItem(PROFILE_ENRICH_FLAG, 'done')
     emitChange()
-  } else if (!localStorage.getItem(PROFILE_ENRICH_FLAG)) {
-    localStorage.setItem(PROFILE_ENRICH_FLAG, 'done')
+  } else if (!safeLocalGetItem(PROFILE_ENRICH_FLAG)) {
+    safeLocalSetItem(PROFILE_ENRICH_FLAG, 'done')
   }
 
   return changed
@@ -214,14 +253,14 @@ export function saveClient(client: Client): Client {
   const idx = extra.findIndex((c) => c.id === client.id)
   const next =
     idx >= 0 ? extra.map((c, i) => (i === idx ? client : c)) : [client, ...extra]
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+  writeClientsLocal(next)
   emitChange()
   return client
 }
 
 export function deleteClient(id: string): void {
   const next = readExtra().filter((c) => c.id !== id)
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+  writeClientsLocal(next)
   emitChange()
 }
 
@@ -308,7 +347,46 @@ export function registerClient(input: NewClientInput & { marketingLeadId?: strin
 export async function registerClientAndSync(
   input: NewClientInput & { marketingLeadId?: string },
 ): Promise<Client> {
-  const local = registerClient(input)
+  let local: Client
+  try {
+    local = registerClient(input)
+  } catch (err) {
+    // Quota used to abort the whole Save — still register remotely for every clinic.
+    console.warn('[clients] local register cache failed', err)
+    const resolvedBranchId =
+      resolveClinicBranchId(input.branchId) ||
+      resolveClinicBranchId(input.branchName) ||
+      input.branchId
+    const branch = getBranches().find((b) => b.id === resolvedBranchId)
+    local = {
+      id: `cl-${Date.now()}`,
+      code: createClientCode(),
+      fullName: [input.firstName, input.middleName, input.lastName]
+        .map((p) => p?.trim())
+        .filter(Boolean)
+        .join(' '),
+      email: input.email.trim(),
+      phone: input.phone.trim(),
+      dateOfBirth: input.dateOfBirth,
+      gender: input.gender,
+      address: input.address.trim(),
+      occupation: input.occupation?.trim() || undefined,
+      middleName: input.middleName?.trim() || undefined,
+      preferredBranchId: resolvedBranchId,
+      preferredBranchName: branch?.name || input.branchName,
+      status: 'active',
+      isVip: false,
+      registeredAt: new Date().toISOString(),
+      totalVisits: 0,
+      totalSpent: 0,
+      emergencyContactName: input.emergencyContactName?.trim() || undefined,
+      emergencyContactPhone: input.emergencyContactPhone?.trim() || undefined,
+      medicalConcerns: input.medicalConcerns?.trim() || undefined,
+      currentMedications: input.currentMedications?.trim() || undefined,
+      adminNotes: input.adminNotes?.trim() || undefined,
+    }
+  }
+
   if (!isSupabaseConfigured || !supabase) return local
 
   try {
@@ -322,7 +400,11 @@ export async function registerClientAndSync(
     })
 
     if (remote.id && remote.id !== local.id) {
-      deleteClient(local.id)
+      try {
+        deleteClient(local.id)
+      } catch {
+        /* ignore */
+      }
     }
 
     const clinicId =
@@ -338,17 +420,22 @@ export async function registerClientAndSync(
       phone: remote.phone || local.phone,
       preferredBranchId: clinicId,
       preferredBranchName: clinic?.name || local.preferredBranchName,
+      // Keep photo in memory for this session; local/DB skip data URLs
+      avatarUrl: input.avatarUrl,
     }
     const saved = saveClient(synced)
     try {
       await persistClientToSupabase(saved)
     } catch (err) {
       console.warn('[clients] profile sync after register', err)
+      throw err instanceof Error ? err : new Error('Could not save customer to the database')
     }
     return saved
   } catch (err) {
-    console.warn('[clients] remote register failed — kept local row', err)
-    return local
+    console.warn('[clients] remote register failed', err)
+    throw err instanceof Error
+      ? err
+      : new Error('Could not save customer. Check connection and try again.')
   }
 }
 
@@ -384,7 +471,7 @@ export function upsertClientsFromSalesImport(imported: Client[]): void {
     if (row.id !== keepId) byId.delete(row.id)
     byId.set(keepId, mergeClientRecords(prev, { ...row, id: keepId }))
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([...byId.values()]))
+  writeClientsLocal([...byId.values()])
   applyKnownClientProfiles()
   emitChange()
 }
@@ -546,7 +633,7 @@ export async function preloadClientsFromSupabase(options?: {
   }
 
   if (changed > 0 || all.length > existing.length) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...byId.values()]))
+    writeClientsLocal([...byId.values()])
     applyKnownClientProfiles()
     emitChange()
   }
@@ -614,6 +701,10 @@ export async function persistClientToSupabase(client: Client): Promise<void> {
   // Only sync UUID clients (local cl-* ids are not in public.clients)
   if (!/^[0-9a-f-]{36}$/i.test(client.id)) return
 
+  // data: URLs are camera photos — never write them into Postgres text (quota + payload)
+  const avatarUrl =
+    client.avatarUrl && !client.avatarUrl.startsWith('data:') ? client.avatarUrl : null
+
   const { error } = await supabase.from('clients').upsert({
     id: client.id,
     code: client.code,
@@ -628,7 +719,7 @@ export async function persistClientToSupabase(client: Client): Promise<void> {
     preferred_branch_id: client.preferredBranchId || null,
     status: client.status,
     is_vip: client.isVip,
-    avatar_url: client.avatarUrl || null,
+    avatar_url: avatarUrl,
     total_visits: client.totalVisits ?? 0,
     total_spent: client.totalSpent ?? 0,
     reward_points: client.rewardPoints ?? 0,
