@@ -498,7 +498,7 @@ export async function recordAttendancePunch(input: {
   return row
 }
 
-/** Staff may delete their own punch (accidental Time In / Out). */
+/** Staff may delete their own punch (accidental Time In / Out). HR/people-ops may delete any. */
 export async function deleteAttendancePunch(input: {
   id: string
   userId: string
@@ -514,6 +514,28 @@ export async function deleteAttendancePunch(input: {
     return
   }
   writeLocal(readLocal().filter((p) => !(p.id === input.id && p.userId === input.userId)))
+}
+
+/** HR: remove a Time In / Time Out session (both punches when complete). */
+export async function deleteAttendanceSession(input: {
+  userId: string
+  session: AttendanceSession
+}): Promise<void> {
+  const ids = [input.session.timeIn.id]
+  if (input.session.timeOut?.id) ids.push(input.session.timeOut.id)
+
+  if (isSupabaseConfigured && supabase) {
+    const { error } = await supabase
+      .from('staff_attendance_logs')
+      .delete()
+      .in('id', ids)
+      .eq('user_id', input.userId)
+    if (error) throw new Error(error.message)
+    emit()
+    return
+  }
+  const drop = new Set(ids)
+  writeLocal(readLocal().filter((p) => !(drop.has(p.id) && p.userId === input.userId)))
 }
 
 /** Manila `datetime-local` value (YYYY-MM-DDTHH:mm) from an ISO timestamp. */

@@ -6,6 +6,7 @@ import {
   MapPin,
   Plus,
   Search,
+  Trash2,
   Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -14,11 +15,13 @@ import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { Dialog } from '@/components/ui/Dialog'
 import { AttendanceSessionModal } from '@/components/attendance/AttendanceSessionModal'
 import { HrAddAttendanceModal } from '@/components/attendance/HrAddAttendanceModal'
 import { useAuth } from '@/contexts/AuthContext'
 import { useBranch } from '@/contexts/BranchContext'
 import {
+  deleteAttendanceSession,
   exportBranchAttendanceXlsx,
   formatAttendanceHours,
   formatManilaDateTime,
@@ -95,7 +98,37 @@ export function GroupAttendancePage({
     session: AttendanceSession
   } | null>(null)
   const [addModalStaff, setAddModalStaff] = useState<StaffAttendanceSummary | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{
+    staff: StaffAttendanceSummary
+    session: AttendanceSession
+  } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const peopleOps = canAccessPeopleOps(user)
+
+  async function confirmDeleteSession() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteAttendanceSession({
+        userId: deleteTarget.staff.userId,
+        session: deleteTarget.session,
+      })
+      toast.success(
+        deleteTarget.session.timeOut
+          ? `Deleted Time In / Out for ${deleteTarget.session.dateKey}`
+          : `Deleted open Time In for ${deleteTarget.session.dateKey}`,
+      )
+      setDeleteTarget(null)
+      if (sessionModal?.session.timeIn.id === deleteTarget.session.timeIn.id) {
+        setSessionModal(null)
+      }
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete attendance')
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const activeBranchIds = useMemo(() => {
     if (branchFilter !== 'all' && branchIds.includes(branchFilter)) return [branchFilter]
@@ -496,6 +529,9 @@ export function GroupAttendancePage({
                           <th className="px-3 py-2.5 font-semibold">Hours</th>
                           <th className="px-3 py-2.5 font-semibold">Location</th>
                           <th className="px-3 py-2.5 font-semibold">Status</th>
+                          {peopleOps ? (
+                            <th className="px-3 py-2.5 font-semibold">Delete</th>
+                          ) : null}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border/70">
@@ -547,6 +583,22 @@ export function GroupAttendancePage({
                                 <Badge variant="warning">Open</Badge>
                               )}
                             </td>
+                            {peopleOps ? (
+                              <td className="px-3 py-3">
+                                <button
+                                  type="button"
+                                  aria-label={`Delete attendance on ${session.dateKey}`}
+                                  title="Delete Time In / Out"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setDeleteTarget({ staff: selected, session })
+                                  }}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </td>
+                            ) : null}
                           </tr>
                         ))}
                       </tbody>
@@ -584,6 +636,24 @@ export function GroupAttendancePage({
           onSaved={() => void load()}
         />
       ) : null}
+
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onClose={() => {
+          if (!deleting) setDeleteTarget(null)
+        }}
+        title="Delete Time In / Out?"
+        description={
+          deleteTarget
+            ? `Remove ${deleteTarget.session.timeOut ? 'Time In and Time Out' : 'this open Time In'} for ${deleteTarget.staff.fullName} on ${deleteTarget.session.dateKey}. Selfies are removed too. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+        destructive
+        onConfirm={() => {
+          if (!deleting) void confirmDeleteSession()
+        }}
+      />
     </div>
   )
 }
