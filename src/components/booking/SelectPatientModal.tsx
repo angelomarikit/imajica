@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/Badge'
@@ -10,7 +10,7 @@ import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import {
   getClients,
   registerClientAndSync,
-  subscribeClients,
+  searchClientsFromSupabase,
 } from '@/services/clientService'
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
@@ -36,9 +36,10 @@ export function SelectPatientModal({
   const effectiveBranchId = useEffectiveBranchId()
   const hqView = isHqRole(user?.role)
   const branchScoped = !hqView && (isBranchOwner(user) || Boolean(forcedBranchId))
-  const [clients, setClients] = useState(() => getClients())
   const [query, setQuery] = useState('')
   const [applied, setApplied] = useState('')
+  const [matches, setMatches] = useState<Client[]>([])
+  const [searching, setSearching] = useState(false)
   const [firstName, setFirstName] = useState('')
   const [middleName, setMiddleName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -52,57 +53,28 @@ export function SelectPatientModal({
   const [emergencyPhone, setEmergencyPhone] = useState('')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => subscribeClients(() => setClients(getClients())), [])
-
   useEffect(() => {
     if (!open) {
       setQuery('')
       setApplied('')
+      setMatches([])
+      setSearching(false)
     }
   }, [open])
 
-  const scopedClients = useMemo(() => {
+  function lookupClinicId(): string | undefined {
     const filterBranchId =
       forcedBranchId ||
-      (hqView && effectiveBranchId !== 'all' ? effectiveBranchId : undefined)
-    if (!branchScoped && !filterBranchId) return clients
-    const rawBranchId = filterBranchId ?? forcedBranchId ?? user?.branchId
-    const clinicId =
-      resolveClinicBranchId(rawBranchId) || resolveClinicBranchId(user?.branchName) || rawBranchId
-    const branchName = user?.branchName?.toLowerCase()
-    const nameToken = branchName?.split(',')[0]?.trim() || ''
-    return clients.filter((c) => {
-      const clientClinicId =
-        resolveClinicBranchId(c.preferredBranchId) ||
-        resolveClinicBranchId(c.preferredBranchName) ||
-        c.preferredBranchId
-      if (clinicId && clientClinicId === clinicId) return true
-      if (rawBranchId && c.preferredBranchId === rawBranchId) return true
-      if (!hqView && branchName && c.preferredBranchName?.toLowerCase() === branchName) return true
-      if (!hqView && nameToken && c.preferredBranchName?.toLowerCase().includes(nameToken))
-        return true
-      return false
-    })
-  }, [
-    clients,
-    branchScoped,
-    forcedBranchId,
-    effectiveBranchId,
-    hqView,
-    user?.branchId,
-    user?.branchName,
-  ])
-
-  const matches = useMemo(() => {
-    const q = applied.trim().toLowerCase()
-    if (!q) return []
-    return scopedClients.filter(
-      (c) =>
-        c.fullName.toLowerCase().includes(q) ||
-        c.email.toLowerCase().includes(q) ||
-        c.phone.replace(/\s/g, '').includes(q.replace(/\s/g, '')),
+      (hqView && effectiveBranchId !== 'all' ? effectiveBranchId : undefined) ||
+      (branchScoped ? user?.branchId : undefined) ||
+      (selectedBranchId !== 'all' ? selectedBranchId : undefined)
+    return (
+      resolveClinicBranchId(filterBranchId) ||
+      resolveClinicBranchId(user?.branchName) ||
+      resolveClinicBranchId(selectedBranch?.name) ||
+      (filterBranchId && isUuid(filterBranchId) ? filterBranchId : undefined)
     )
-  }, [scopedClients, applied])
+  }
 
   function resolveBranch() {
     const headerId =
@@ -132,9 +104,47 @@ export function SelectPatientModal({
     throw new Error('No clinic branch assigned — cannot register patient')
   }
 
-  function handleSearch(e?: FormEvent) {
+  async function handleSearch(e?: FormEvent) {
     e?.preventDefault()
-    setApplied(query)
+    const q = query.trim()
+    setApplied(q)
+    if (!q) {
+      setMatches([])
+      return
+    }
+    setSearching(true)
+    try {
+      const clinicId = lookupClinicId()
+      const remote = await searchClientsFromSupabase({
+        query: q,
+        branchId: clinicId || null,
+      })
+      // Also merge any still-cached locals that match (offline / just-registered)
+      const lower = q.toLowerCase()
+      const phoneQ = q.replace(/\s/g, '')
+      const localHits = getClients().filter(
+        (c) =>
+          c.fullName.toLowerCase().includes(lower) ||
+          c.email.toLowerCase().includes(lower) ||
+          c.phone.replace(/\s/g, '').includes(phoneQ),
+      )
+      const byId = new Map<string, Client>()
+      for (const c of [...remote, ...localHits]) {
+        if (clinicId) {
+          const clientClinic =
+            resolveClinicBranchId(c.preferredBranchId) || c.preferredBranchId
+          // Keep clinic matches and unassigned; drop other clinics when scoped
+          if (clientClinic && clientClinic !== clinicId) continue
+        }
+        byId.set(c.id, c)
+      }
+      setMatches([...byId.values()])
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Patient search failed')
+      setMatches([])
+    } finally {
+      setSearching(false)
+    }
   }
 
   async function handleAddPatient(e: FormEvent) {
@@ -238,7 +248,12 @@ export function SelectPatientModal({
             <p className="mb-3 text-sm text-slate-ui">
               Search by name, email, or contact number to find and select an existing patient.
             </p>
-            <form onSubmit={handleSearch} className="space-y-1.5">
+            <form
+              onSubmit={(e) => {
+                void handleSearch(e)
+              }}
+              className="space-y-1.5"
+            >
               <span className={labelCls}>Search Patient</span>
               <div className="flex gap-2">
                 <input
@@ -247,16 +262,20 @@ export function SelectPatientModal({
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
-                <Button type="submit">
-                  <Search className="h-4 w-4" /> Search
+                <Button type="submit" disabled={searching}>
+                  <Search className="h-4 w-4" /> {searching ? 'Searching…' : 'Search'}
                 </Button>
               </div>
             </form>
             {applied ? (
               <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto">
-                {matches.length === 0 ? (
+                {searching ? (
                   <li className="rounded-[10px] bg-ivory-100 px-3 py-2 text-sm text-slate-ui">
-                    No patients found for “{applied}”.
+                    Searching database…
+                  </li>
+                ) : matches.length === 0 ? (
+                  <li className="rounded-[10px] bg-ivory-100 px-3 py-2 text-sm text-slate-ui">
+                    No patients found for “{applied}”. Try full name or mobile number.
                   </li>
                 ) : (
                   matches.map((c) => (
@@ -274,6 +293,7 @@ export function SelectPatientModal({
                           <p className="font-semibold text-[#073D2C]">{c.fullName}</p>
                           <p className="text-xs text-slate-ui">
                             {c.phone} · {c.email}
+                            {c.preferredBranchName ? ` · ${c.preferredBranchName}` : ''}
                           </p>
                         </div>
                         <span className="text-xs font-semibold text-emerald-800">Select</span>

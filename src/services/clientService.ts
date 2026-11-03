@@ -640,6 +640,101 @@ export async function preloadClientsFromSupabase(options?: {
   return changed || all.length
 }
 
+/**
+ * Live patient lookup for booking Select Patient.
+ * Local cache is capped (~400) while clinics like San Mateo have 1000+ clients —
+ * booking list comes from sales (always has the name), but Select Patient used to
+ * search localStorage only and miss customers such as Cynthia Fegalan.
+ */
+export async function searchClientsFromSupabase(input: {
+  query: string
+  /** Prefer preferred_branch_id match; still includes null-branch matches when useful */
+  branchId?: string | null
+  limit?: number
+}): Promise<Client[]> {
+  const q = input.query.trim()
+  if (!q) return []
+  if (!isSupabaseConfigured || !supabase) {
+    const lower = q.toLowerCase()
+    const phoneQ = q.replace(/\s/g, '')
+    return getClients()
+      .filter(
+        (c) =>
+          c.fullName.toLowerCase().includes(lower) ||
+          c.email.toLowerCase().includes(lower) ||
+          c.phone.replace(/\s/g, '').includes(phoneQ),
+      )
+      .slice(0, input.limit ?? 40)
+  }
+
+  const limit = Math.min(80, Math.max(10, input.limit ?? 40))
+  const branchId =
+    resolveClinicBranchId(input.branchId) || (input.branchId && isUuid(input.branchId) ? input.branchId : null)
+  const selectCols = `
+      id, code, full_name, email, phone, date_of_birth, gender, address,
+      occupation, middle_name, preferred_branch_id, status, is_vip, avatar_url,
+      registered_at, total_visits, total_spent, reward_points,
+      emergency_contact_name, emergency_contact_phone, medical_concerns,
+      current_medications, admin_notes, membership_label
+    `
+
+  const digits = q.replace(/\D/g, '')
+  const orParts = [
+    `full_name.ilike.%${q.replace(/[%_]/g, '')}%`,
+    `email.ilike.%${q.replace(/[%_]/g, '')}%`,
+  ]
+  if (digits.length >= 4) {
+    orParts.push(`phone.ilike.%${digits.slice(-10)}%`)
+  }
+
+  // Fetch by name/phone/email only — branch filter applied in JS so PostgREST
+  // multi-`.or()` quirks cannot hide clinic customers (e.g. Cynthia Fegalan).
+  const fetchLimit = branchId ? Math.min(200, limit * 4) : limit
+  const { data, error } = await supabase
+    .from('clients')
+    .select(selectCols)
+    .or(orParts.join(','))
+    .neq('status', 'inactive')
+    .order('updated_at', { ascending: false })
+    .limit(fetchLimit)
+
+  if (error) {
+    console.warn('[clients] remote search failed', error.message)
+    // Fall back to whatever is cached locally
+    const lower = q.toLowerCase()
+    const phoneQ = q.replace(/\s/g, '')
+    return getClients()
+      .filter(
+        (c) =>
+          c.fullName.toLowerCase().includes(lower) ||
+          c.email.toLowerCase().includes(lower) ||
+          c.phone.replace(/\s/g, '').includes(phoneQ),
+      )
+      .slice(0, limit)
+  }
+
+  const rows = (data as RemoteClientRow[] | null) ?? []
+  let mapped = rows.map(mapRemoteClient)
+
+  if (branchId) {
+    const clinicHits = mapped.filter((c) => c.preferredBranchId === branchId)
+    const unassigned = mapped.filter((c) => !c.preferredBranchId)
+    // Prefer this clinic; keep a few unassigned as fallback; drop other clinics
+    mapped = [...clinicHits, ...unassigned].slice(0, limit)
+  }
+
+  // Keep hits in local cache so Place Order / profile can resolve them
+  for (const client of mapped) {
+    try {
+      saveClient(client)
+    } catch {
+      /* ignore quota */
+    }
+  }
+
+  return mapped
+}
+
 /** Refresh one client profile from Supabase (used on profile details page). */
 export async function hydrateClientFromSupabase(clientId: string): Promise<Client | undefined> {
   if (!isSupabaseConfigured || !supabase || !clientId) {
