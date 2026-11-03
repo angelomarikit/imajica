@@ -53,9 +53,16 @@ export function canAccessMarketing(user: AuthSessionUser | null | undefined): bo
   return isHqRole(user?.role) || isAnyMarketingRole(user?.role)
 }
 
+/** True when user_roles includes HR (primary or secondary dual-role). */
+export function hasHrAccess(user: AuthSessionUser | null | undefined): boolean {
+  if (!user) return false
+  if (isHrRole(user.role)) return true
+  return Boolean(user.roles?.includes('HR'))
+}
+
 /** HQ or HR — can switch All Branches and view people-ops org-wide. */
 export function canAccessPeopleOps(user: AuthSessionUser | null | undefined): boolean {
-  return isHqRole(user?.role) || isHrRole(user?.role)
+  return isHqRole(user?.role) || hasHrAccess(user)
 }
 
 /**

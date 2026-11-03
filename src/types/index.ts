@@ -818,7 +818,13 @@ export interface AuthSessionUser {
   id: string
   email: string
   fullName: string
+  /** Highest-priority role (drives default home / primary UI) */
   role: UserRole
+  /**
+   * All roles from user_roles (e.g. OPERATIONS_MANAGER + HR).
+   * Used for dual-access sidebars and RequireRole checks.
+   */
+  roles?: UserRole[]
   avatarUrl?: string
   branchId?: string
   /** When set from user_roles → branches */

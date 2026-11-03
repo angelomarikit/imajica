@@ -59,6 +59,7 @@ import { cn } from '@/utils/cn'
 import {
   isCsrMarketingRole,
   isFranchiseBranchOwner,
+  canAccessPeopleOps,
   isHrRole,
   isAnyMarketingRole,
   isOperationsManagerRole,
@@ -668,10 +669,13 @@ function buildFranchiseOwnerNavSections(
 
 /**
  * Operations Manager — org-wide: employee My* + Clinic Manager modules + HQ warehouse/stock.
- * No HR people-ops ownership, marketing campaigns, or User Access / Branches CRUD.
+ * When user_roles also includes HR, append full HR and Payroll category (dual-role).
  */
-function buildOperationsManagerNavSections(handoffUnread = 0): NavSection[] {
-  return [
+function buildOperationsManagerNavSections(
+  handoffUnread = 0,
+  options?: { includeHrPeopleOps?: boolean; clinics?: Branch[] },
+): NavSection[] {
+  const sections: NavSection[] = [
     {
       items: [
         { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -823,10 +827,20 @@ function buildOperationsManagerNavSections(handoffUnread = 0): NavSection[] {
         },
       ],
     },
-    {
-      items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
-    },
   ]
+
+  if (options?.includeHrPeopleOps) {
+    sections.push({
+      category: 'HR and Payroll',
+      items: buildHrPeopleOpsNavItems(options.clinics ?? []),
+    })
+  }
+
+  sections.push({
+    items: [{ to: '/admin/settings', label: 'Settings', icon: Settings }],
+  })
+
+  return sections
 }
 
 function linkClass(isActive: boolean) {
@@ -1022,7 +1036,10 @@ export function AdminSidebar({
       })
     }
     if (isOperationsManagerRole(user?.role)) {
-      return buildOperationsManagerNavSections(handoffUnread)
+      return buildOperationsManagerNavSections(handoffUnread, {
+        includeHrPeopleOps: canAccessPeopleOps(user),
+        clinics: hrClinics,
+      })
     }
     if (isHrRole(user?.role)) return buildHrNavSections(hrClinics)
     if (isAnyMarketingRole(user?.role)) return buildMarketingNavSections()

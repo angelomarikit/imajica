@@ -164,8 +164,13 @@ async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthS
     console.error('[auth] failed to load user_roles', roleError)
   }
 
-  const roleIds = (roleRows ?? []).map((r) => String(r.role_id))
+  const roleIds = [...new Set((roleRows ?? []).map((r) => String(r.role_id)))]
   const role = roleIds.length > 0 ? pickHighestRole(roleIds) : meta.role ?? 'CLIENT'
+  const knownRoles = new Set<string>([...ROLE_PRIORITY, ...STAFF_ROLES])
+  const roles: UserRole[] = (
+    roleIds.length > 0 ? roleIds.filter((r) => knownRoles.has(r)) : [role]
+  ) as UserRole[]
+  if (!roles.includes(role)) roles.unshift(role)
   const hqSentinel = '00000000-0000-0000-0000-000000000001'
   // Org-wide roles — never attach a clinic branch (e.g. San Mateo) from user_roles.
   const orgWideNoClinic =
@@ -264,6 +269,7 @@ async function resolveSupabaseSessionUser(authUser: SupabaseUser): Promise<AuthS
     email,
     fullName: profile?.full_name || meta.full_name || authUser.email || '',
     role,
+    roles: roles.length ? roles : [role],
     branchId,
     branchType,
     branchName,
@@ -494,7 +500,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const hasRole = useCallback(
-    (...roles: UserRole[]) => (user ? roles.includes(user.role) : false),
+    (...needed: UserRole[]) => {
+      if (!user) return false
+      const held = user.roles?.length ? user.roles : [user.role]
+      return needed.some((r) => held.includes(r))
+    },
     [user],
   )
 

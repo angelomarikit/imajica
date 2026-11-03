@@ -119,7 +119,11 @@ export function AdminHeader({
               </div>
               <div className="hidden text-left sm:block">
                 <p className="text-sm font-medium leading-tight">{user?.fullName}</p>
-                <p className="text-[11px] text-slate-ui">{formatRoleLabel(user?.role)}</p>
+                <p className="text-[11px] text-slate-ui">
+                  {user?.roles && user.roles.length > 1
+                    ? [...new Set(user.roles)].map((r) => formatRoleLabel(r)).join(' · ')
+                    : formatRoleLabel(user?.role)}
+                </p>
               </div>
               <ChevronDown className="h-4 w-4 text-slate-ui" />
             </button>
