@@ -30,7 +30,11 @@ import { upsertEmployeePayFromDirectory } from '@/services/payrollProfileService
 import type { EmployeeBenefitLine, Staff } from '@/types'
 import { formatPeso, formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { canAccessPeopleOps, isFranchiseBranchOwner } from '@/utils/franchiseAccess'
+import {
+  canAccessPeopleOps,
+  isFranchiseBranchOwner,
+  isOperationsManagerRole,
+} from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
 
 function newBenefitId() {
@@ -61,6 +65,8 @@ export function StaffPage() {
   const { user } = useAuth()
   const peopleOps = canAccessPeopleOps(user)
   const franchiseOwner = isFranchiseBranchOwner(user)
+  const operationsManager = isOperationsManagerRole(user?.role)
+  const canManagePay = peopleOps || franchiseOwner || operationsManager
   const forcedBranchId = useForcedBranchId()
   const effectiveBranchId = useEffectiveBranchId()
   const [staffRows, setStaffRows] = useState<Staff[]>([])
@@ -295,11 +301,15 @@ export function StaffPage() {
                         >
                           <Eye className="h-3.5 w-3.5" />
                         </Link>
-                        {peopleOps || franchiseOwner ? (
+                        {canManagePay ? (
                           <Link
                             to={`/admin/staff/${s.id}?edit=1`}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-orange-50 text-orange-700 hover:bg-orange-100"
-                            title={franchiseOwner && !peopleOps ? 'Edit daily rate & benefits' : 'Edit HR details'}
+                            title={
+                              peopleOps || operationsManager
+                                ? 'Edit HR details & benefits'
+                                : 'Edit daily rate & benefits'
+                            }
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </Link>
@@ -343,9 +353,10 @@ export function StaffDetailPage() {
   const { user } = useAuth()
   const peopleOps = canAccessPeopleOps(user)
   const franchiseOwner = isFranchiseBranchOwner(user)
-  /** Clinic managers may edit daily rate + benefits; HR may edit full profile. */
-  const canEditPay = peopleOps || franchiseOwner
-  const canEditHr = peopleOps
+  const operationsManager = isOperationsManagerRole(user?.role)
+  /** Clinic managers, OM, and HR may edit daily rate + benefits; HR/people-ops get full profile. */
+  const canEditPay = peopleOps || franchiseOwner || operationsManager
+  const canEditHr = peopleOps || operationsManager
   const navigate = useNavigate()
   const editRequested = searchParams.get('edit') === '1'
 

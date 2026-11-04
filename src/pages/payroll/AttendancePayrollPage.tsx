@@ -30,6 +30,7 @@ import {
 import { getBranches } from '@/services/branchService'
 import {
   computeAttendancePayroll,
+  shouldApplyMonthlyBenefits,
   type AttendancePayrollRow,
 } from '@/services/payrollAttendanceService'
 import {
@@ -330,6 +331,9 @@ export function AttendancePayrollPage({
           'SSS+MPF',
           'Pag-IBIG',
           'PhilHealth',
+          'Other Deduction',
+          'Benefits (2nd cut)',
+          '2nd Cut?',
           'Total Deductions',
           'Net Pay (incl. OT + incentives)',
         ],
@@ -355,6 +359,9 @@ export function AttendancePayrollPage({
           r.sssDeduction,
           r.pagibigDeduction,
           r.philhealthDeduction,
+          r.otherDeduction || 0,
+          r.benefitsDeduction || 0,
+          r.isSecondCut ? 'Yes' : 'No',
           netDeductions,
           netWithIncentives,
         ]),
@@ -441,6 +448,26 @@ export function AttendancePayrollPage({
         />
       </div>
 
+      {shouldApplyMonthlyBenefits(from, to) ? (
+        <Card className="border-emerald-200 bg-emerald-50/70 p-4 sm:px-5">
+          <p className="text-sm font-semibold text-[#073D2C]">2nd cut (16–end) — monthly deductions active</p>
+          <p className="mt-1 text-xs text-slate-ui">
+            This range deducts SSS / Pag-IBIG / PhilHealth / other deduction and Employee Database
+            benefits (monthly cost) once. If Deductions show ₱0, set amounts under{' '}
+            <strong>HR → Deductions &amp; Benefits</strong> and employee benefits on{' '}
+            <strong>Employee Database</strong>, then Apply again.
+          </p>
+        </Card>
+      ) : (
+        <Card className="border-amber-200 bg-amber-50/70 p-4 sm:px-5">
+          <p className="text-sm font-semibold text-[#6b5420]">1st cut (1–15) — basic pay only</p>
+          <p className="mt-1 text-xs text-slate-ui">
+            Monthly benefits and statutory deductions apply on the 2nd cut (16–end of month), not on
+            this range.
+          </p>
+        </Card>
+      )}
+
       <Card className="p-4 sm:p-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end">
           <label className="block min-w-[9rem] flex-1 text-xs font-medium text-slate-ui">
@@ -478,7 +505,8 @@ export function AttendancePayrollPage({
             <div>
               <p className="text-sm font-semibold text-[#073D2C]">Staff payroll</p>
               <p className="text-[11px] text-slate-ui">
-                1–15 = basic only · 16–end includes My Commission + incentives + allowance
+                1–15 = basic only · 16–end includes commissions, incentives, allowance, statutory &amp;
+                benefits
               </p>
             </div>
             <div className="relative w-full max-w-xs">
@@ -591,8 +619,17 @@ export function AttendancePayrollPage({
                         <td className="whitespace-nowrap px-2 py-3 tabular-nums text-[#6b5420]">
                           {formatPeso(incentives)}
                         </td>
-                        <td className="whitespace-nowrap px-2 py-3 tabular-nums text-amber-800">
-                          {formatPeso(netDeductions)}
+                        <td className="px-2 py-3 text-amber-800">
+                          <p className="font-medium tabular-nums">{formatPeso(netDeductions)}</p>
+                          {r.isSecondCut ? (
+                            <p className="text-[10px] text-slate-ui">
+                              late {formatPeso(r.lateDeduction)} · statutory{' '}
+                              {formatPeso(r.statutoryTotal)} · benefits{' '}
+                              {formatPeso(r.benefitsDeduction || 0)}
+                            </p>
+                          ) : (
+                            <p className="text-[10px] text-slate-ui">late / undertime only</p>
+                          )}
                         </td>
                         <td className="whitespace-nowrap px-2 py-3 font-semibold tabular-nums text-[#073D2C]">
                           {formatPeso(netWithIncentives)}
