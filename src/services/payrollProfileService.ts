@@ -46,6 +46,8 @@ export type PayrollProfileRecord = PayrollRosterEmployee & {
   allowance: number
   notes?: string
   status: 'active' | 'inactive'
+  /** Server or last-save timestamp. A browser cache without a newer stamp must not hide HR edits. */
+  updatedAt?: string
 }
 
 function emit() {
@@ -114,6 +116,7 @@ function mapDbRow(row: {
   benefits?: unknown
   notes?: string | null
   status: string
+  updated_at?: string
 }): PayrollProfileRecord {
   const firstName = row.first_name
   const middleName = row.middle_name || ''
@@ -162,6 +165,104 @@ function mapDbRow(row: {
     benefits: normalizeBenefitLines(row.benefits),
     notes: row.notes || undefined,
     status: row.status === 'inactive' ? 'inactive' : 'active',
+    updatedAt: row.updated_at,
+  }
+}
+
+const MONEY_FIELDS = [
+  'salaryPerDay',
+  'sssEmployee',
+  'mpfEmployee',
+  'pagibigEmployee',
+  'philhealthEmployee',
+  'sssEmployer',
+  'mpfEmployer',
+  'ecEmployer',
+  'pagibigEmployer',
+  'philhealthEmployer',
+  'otherDeduction',
+  'allowance',
+] as const
+
+function nameTokens(fullName: string): string[] {
+  return fullName
+    .toLowerCase()
+    .replace(/[.,]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t && t !== '—' && t !== '-')
+}
+
+/** True when two payroll names are the same person (middle name present on only one row). */
+function sameEmployeeName(a: string, b: string): boolean {
+  const ta = nameTokens(a)
+  const tb = nameTokens(b)
+  if (ta.length < 2 || tb.length < 2) return false
+  const [shorter, longer] = ta.length <= tb.length ? [ta, tb] : [tb, ta]
+  const set = new Set(longer)
+  return shorter.every((t) => set.has(t))
+}
+
+/** Keep a filled amount. Fill a blank from the other row (personal-email duplicate). */
+function fillMoneyFromSibling(
+  primary: PayrollProfileRecord,
+  extra: PayrollProfileRecord,
+): PayrollProfileRecord {
+  const next: PayrollProfileRecord = { ...primary }
+  for (const key of MONEY_FIELDS) {
+    const current = Number(next[key]) || 0
+    const alt = Number(extra[key]) || 0
+    if (current <= 0 && alt > 0) next[key] = alt
+  }
+  if (!next.benefits?.length && extra.benefits?.length) next.benefits = extra.benefits
+  if (!next.tin && extra.tin) next.tin = extra.tin
+  if (!next.sssNo && extra.sssNo) next.sssNo = extra.sssNo
+  if (!next.pagibigNo && extra.pagibigNo) next.pagibigNo = extra.pagibigNo
+  if (!next.philhealthNo && extra.philhealthNo) next.philhealthNo = extra.philhealthNo
+  next.matchEmails = [
+    ...new Set(
+      [...(next.matchEmails || []), ...(extra.matchEmails || []), next.email, extra.email].filter(
+        Boolean,
+      ),
+    ),
+  ]
+  return next
+}
+
+function combineProfiles(
+  prev: PayrollProfileRecord,
+  incoming: PayrollProfileRecord,
+): PayrollProfileRecord {
+  const incomingNewer = Boolean(
+    incoming.updatedAt && (!prev.updatedAt || incoming.updatedAt > prev.updatedAt),
+  )
+  const prevIsServer = Boolean(prev.dbId)
+  const incomingIsServer = Boolean(incoming.dbId)
+  // Browser cache must not cover deductions HR already saved on the server.
+  const serverWins = prevIsServer && !incomingIsServer && !incomingNewer
+  const base = serverWins || (incomingIsServer && !prevIsServer) ? { ...incoming, ...prev } : { ...prev, ...incoming }
+  if (serverWins) {
+    return {
+      ...incoming,
+      ...prev,
+      matchEmails: [
+        ...new Set([...(prev.matchEmails || []), ...(incoming.matchEmails || [])]),
+      ],
+      benefits: prev.benefits?.length ? prev.benefits : incoming.benefits,
+    }
+  }
+  if (incomingIsServer && !prevIsServer) {
+    return {
+      ...prev,
+      ...incoming,
+      matchEmails: [
+        ...new Set([...(prev.matchEmails || []), ...(incoming.matchEmails || [])]),
+      ],
+      benefits: incoming.benefits?.length ? incoming.benefits : prev.benefits,
+    }
+  }
+  return {
+    ...base,
+    matchEmails: [...new Set([...(prev.matchEmails || []), ...(incoming.matchEmails || [])])],
   }
 }
 
@@ -226,12 +327,16 @@ function mergeProfiles(base: PayrollProfileRecord[]): PayrollProfileRecord[] {
   const keyOf = (p: PayrollProfileRecord) =>
     (p.email || '').trim().toLowerCase() || p.userId || p.id
 
-  for (const p of base) byKey.set(keyOf(p), p)
+  for (const p of base) {
+    const key = keyOf(p)
+    const prev = byKey.get(key)
+    byKey.set(key, prev ? combineProfiles(prev, p) : p)
+  }
 
   for (const local of readLocal()) {
     const key = keyOf(local)
     const prev = byKey.get(key)
-    byKey.set(key, prev ? { ...prev, ...local, matchEmails: prev.matchEmails } : local)
+    byKey.set(key, prev ? combineProfiles(prev, local) : local)
   }
 
   return [...byKey.values()].sort((a, b) => a.fullName.localeCompare(b.fullName))
@@ -471,7 +576,13 @@ export async function listPayrollProfilesForHr(): Promise<PayrollProfileRecord[]
 
   const out: PayrollProfileRecord[] = []
   for (const person of canonical.values()) {
-    const overlay = findOverlay(overlays, person)
+    let overlay = findOverlay(overlays, person)
+    for (const sibling of overlays) {
+      if (overlay && sibling === overlay) continue
+      if (!sameEmployeeName(sibling.fullName, person.fullName)) continue
+      if (overlay && sibling.email.trim().toLowerCase() === overlay.email.trim().toLowerCase()) continue
+      overlay = overlay ? fillMoneyFromSibling(overlay, sibling) : sibling
+    }
     const roleTitle = formatRoleLabel(person.role)
     const stub = stubFromDirectory({
       id: person.id,
@@ -582,12 +693,13 @@ export async function savePayrollProfile(profile: PayrollProfileRecord): Promise
       pagibig_employer: next.pagibigEmployer,
       philhealth_employer: next.philhealthEmployer,
       other_deduction: next.otherDeduction,
-      allowance: next.allowance,
-      benefits: next.benefits ?? [],
-      notes: next.notes || null,
-      status: next.status,
-      updated_at: now,
-    }
+    allowance: next.allowance,
+    benefits: next.benefits ?? [],
+    notes: next.notes || null,
+    status: next.status,
+    updated_at: now,
+  }
+  next.updatedAt = now
 
     let data: Parameters<typeof mapDbRow>[0] | null = null
     let error: { message: string } | null = null
