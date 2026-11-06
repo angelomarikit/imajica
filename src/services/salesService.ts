@@ -10,20 +10,85 @@ import { getClientById, getClients, saveClient } from '@/services/clientService'
 import { mapBookingAuthError, requireSupabaseSession } from '@/utils/supabaseSession'
 import { isUuid } from '@/utils/uuid'
 
-/** Clinic share of a doctor's-procedure order (customer still pays 100%). */
+/** Clinic share of an outsourced doctor's-procedure order (customer still pays 100%). */
 export const CLINIC_NET_RATE = 0.8
 export const DOCTOR_FEE_RATE = 0.2
+/** Hendra Sandigan is staff — her name on a doctor's procedure pays 5%, not the 20% outsourced rate. */
+export const HENDRA_DOCTOR_EMAIL = 'hendra.sandigan@imajica.com'
+export const HENDRA_DOCTOR_FEE_RATE = 0.05
+
+function roundMoney(n: number) {
+  return Math.round(n * 100) / 100
+}
+
+/** True when the typed doctor is Hendra (name or her clinic email). */
+export function isHendraDoctorName(value: string | null | undefined): boolean {
+  const raw = (value || '').trim().toLowerCase()
+  if (!raw) return false
+  if (raw.includes(HENDRA_DOCTOR_EMAIL)) return true
+  const name = raw
+    .replace(/^(dr\.?|dra\.?)\s+/, '')
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (name === 'hendra') return true
+  return name.startsWith('hendra ') && name.includes('sandigan')
+}
+
+export function doctorFeeRateForName(name: string | null | undefined): number {
+  return isHendraDoctorName(name) ? HENDRA_DOCTOR_FEE_RATE : DOCTOR_FEE_RATE
+}
+
+/** Her login — Doctors Commission page and the 16–end payroll line. */
+export function isHendraCommissionAccount(input: {
+  email?: string | null
+  fullName?: string | null
+  matchEmails?: string[] | null
+}): boolean {
+  const emails = [input.email, ...(input.matchEmails ?? [])]
+    .map((e) => (e || '').trim().toLowerCase())
+    .filter(Boolean)
+  if (emails.includes(HENDRA_DOCTOR_EMAIL)) return true
+  const name = (input.fullName || '').toLowerCase()
+  return name.includes('hendra') && name.includes('sandigan')
+}
+
+export function resolveDoctorProcedureSplit(input: {
+  serviceTotal: number
+  doctorName?: string | null
+  storedFee?: number | null
+  storedNet?: number | null
+}): { rate: number; doctorFeeAmount: number; clinicNetAmount: number } {
+  const total = Math.max(0, Number(input.serviceTotal) || 0)
+  const rate = doctorFeeRateForName(input.doctorName)
+  if (isHendraDoctorName(input.doctorName)) {
+    const doctorFeeAmount = roundMoney(total * rate)
+    return { rate, doctorFeeAmount, clinicNetAmount: roundMoney(total - doctorFeeAmount) }
+  }
+  const doctorFeeAmount =
+    input.storedFee != null && Number.isFinite(Number(input.storedFee))
+      ? Number(input.storedFee)
+      : roundMoney(total * rate)
+  const clinicNetAmount =
+    input.storedNet != null && Number.isFinite(Number(input.storedNet))
+      ? Number(input.storedNet)
+      : roundMoney(total - doctorFeeAmount)
+  return { rate, doctorFeeAmount, clinicNetAmount }
+}
 
 /**
  * Amount recognized as clinic sales for dashboards, cashflow, commissions, and reports.
- * Doctor's procedure lines use 80% of line total (never sum header clinic_net across lines).
+ * Doctor's procedure lines use the clinic share of that line (80% outsourced, 95% when the doctor is Hendra).
  */
 export function clinicRecognizedAmount(
-  sale: Pick<Sale, 'totalAmount' | 'isDoctorsProcedure'>,
+  sale: Pick<Sale, 'totalAmount' | 'isDoctorsProcedure' | 'doctorName'>,
 ): number {
   const gross = sale.totalAmount || 0
   if (!sale.isDoctorsProcedure) return gross
-  return Math.round(gross * CLINIC_NET_RATE * 100) / 100
+  return resolveDoctorProcedureSplit({
+    serviceTotal: gross,
+    doctorName: sale.doctorName,
+  }).clinicNetAmount
 }
 
 const EXTRA_KEY = 'imajica_analytics_sales'
@@ -872,7 +937,10 @@ export async function recordBookingCheckout(
       isDoctorsProcedure && head.clinicNetAmount != null && Number.isFinite(Number(head.clinicNetAmount))
         ? Number(head.clinicNetAmount)
         : isDoctorsProcedure
-          ? Math.round(totalAmount * 0.8 * 100) / 100
+          ? resolveDoctorProcedureSplit({
+              serviceTotal: totalAmount,
+              doctorName: head.doctorName,
+            }).clinicNetAmount
           : null
 
     const { error: saleError } = await supabase.from('sales').insert({
@@ -1236,18 +1304,16 @@ export function getBookingRows(opts?: {
       .map((l) => l.treatmentOrPackage)
     const grossPayment = sorted.reduce((sum, l) => sum + (l.totalAmount || 0), 0)
     const isDoctorsProcedure = Boolean(head.isDoctorsProcedure)
-    const clinicNet =
-      isDoctorsProcedure && head.clinicNetAmount != null && Number.isFinite(head.clinicNetAmount)
-        ? Number(head.clinicNetAmount)
-        : isDoctorsProcedure
-          ? Math.round(grossPayment * 0.8 * 100) / 100
-          : grossPayment
-    const doctorFee =
-      isDoctorsProcedure && head.doctorFeeAmount != null && Number.isFinite(head.doctorFeeAmount)
-        ? Number(head.doctorFeeAmount)
-        : isDoctorsProcedure
-          ? Math.round(grossPayment * 0.2 * 100) / 100
-          : 0
+    const split = isDoctorsProcedure
+      ? resolveDoctorProcedureSplit({
+          serviceTotal: grossPayment,
+          doctorName: head.doctorName,
+          storedFee: head.doctorFeeAmount,
+          storedNet: head.clinicNetAmount,
+        })
+      : null
+    const clinicNet = split ? split.clinicNetAmount : grossPayment
+    const doctorFee = split ? split.doctorFeeAmount : 0
     const paid = sorted.every((l) => l.status === 'paid')
     rows.push({
       bookingKey,
@@ -1305,14 +1371,14 @@ export function listDoctorFees(opts?: {
     const sorted = [...lines].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     const head = sorted[0]!
     const serviceTotal = sorted.reduce((sum, l) => sum + (l.totalAmount || 0), 0)
-    const doctorFee =
-      head.doctorFeeAmount != null && Number.isFinite(head.doctorFeeAmount)
-        ? Number(head.doctorFeeAmount)
-        : Math.round(serviceTotal * 0.2 * 100) / 100
-    const clinicNet =
-      head.clinicNetAmount != null && Number.isFinite(head.clinicNetAmount)
-        ? Number(head.clinicNetAmount)
-        : Math.round(serviceTotal * 0.8 * 100) / 100
+    const split = resolveDoctorProcedureSplit({
+      serviceTotal,
+      doctorName: head.doctorName,
+      storedFee: head.doctorFeeAmount,
+      storedNet: head.clinicNetAmount,
+    })
+    const doctorFee = split.doctorFeeAmount
+    const clinicNet = split.clinicNetAmount
     rows.push({
       saleId: headerId,
       bookingRef: head.bookingRef || head.invoiceNumber || headerId.slice(0, 8),
@@ -1332,6 +1398,23 @@ export function listDoctorFees(opts?: {
   }
 
   return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+/** Hendra's 5% on doctor's-procedure sales where her name (or clinic email) was typed. */
+export function listHendraDoctorCommission(opts?: {
+  from?: string
+  to?: string
+  paidOnly?: boolean
+}): { rows: DoctorFeeRow[]; serviceTotal: number; commission: number } {
+  const rows = listDoctorFees({ from: opts?.from, to: opts?.to }).filter((row) => {
+    if (!isHendraDoctorName(row.doctorName)) return false
+    if (!opts?.paidOnly) return true
+    const status = (row.status || '').toLowerCase()
+    return status === 'paid'
+  })
+  const serviceTotal = roundMoney(rows.reduce((sum, row) => sum + row.serviceTotal, 0))
+  const commission = roundMoney(rows.reduce((sum, row) => sum + row.doctorFeeAmount, 0))
+  return { rows, serviceTotal, commission }
 }
 
 /** Line items belonging to one booking (invoice / bookingRef). */

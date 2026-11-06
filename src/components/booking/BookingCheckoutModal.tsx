@@ -11,6 +11,8 @@ import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import { deleteClient, getClients, saveClient } from '@/services/clientService'
 import {
   DOCTOR_FEE_RATE,
+  doctorFeeRateForName,
+  isHendraDoctorName,
   recordBookingCheckout,
 } from '@/services/salesService'
 import {
@@ -225,10 +227,11 @@ export function BookingCheckoutModal({
   const [saving, setSaving] = useState(false)
 
   const isSplitPayment = paymentType === 'Split Payment'
-  const doctorFeeAmount = isDoctorsProcedure ? roundMoney(total * DOCTOR_FEE_RATE) : 0
-  const clinicNetAmount = isDoctorsProcedure
-    ? roundMoney(total * (1 - DOCTOR_FEE_RATE))
-    : total
+  const doctorFeeRate = isDoctorsProcedure ? doctorFeeRateForName(doctorName) : DOCTOR_FEE_RATE
+  const doctorFeePercent = Math.round(doctorFeeRate * 100)
+  const hendraDoctor = isDoctorsProcedure && isHendraDoctorName(doctorName)
+  const doctorFeeAmount = isDoctorsProcedure ? roundMoney(total * doctorFeeRate) : 0
+  const clinicNetAmount = isDoctorsProcedure ? roundMoney(total - doctorFeeAmount) : total
 
   useEffect(() => {
     if (!open) return
@@ -878,8 +881,9 @@ export function BookingCheckoutModal({
                       Doctor&apos;s Procedure
                     </span>
                     <span className="mt-0.5 block text-[11px] text-slate-ui">
-                      Outsourced doctor earns 20%. Customer still pays full amount; clinic net sale
-                      becomes 80%.
+                      {hendraDoctor
+                        ? 'Hendra earns 5% doctor’s commission. Customer still pays full amount; clinic net sale becomes 95%.'
+                        : 'Outsourced doctor earns 20%. Customer still pays full amount; clinic net sale becomes 80%.'}
                     </span>
                   </span>
                 </label>
@@ -902,13 +906,13 @@ export function BookingCheckoutModal({
                         <span className="font-medium">{formatPesoExact(total)}</span>
                       </div>
                       <div className="flex justify-between gap-3">
-                        <span className="text-slate-ui">Doctor fee (20%)</span>
+                        <span className="text-slate-ui">Doctor fee ({doctorFeePercent}%)</span>
                         <span className="font-semibold text-amber-800">
                           {formatPesoExact(doctorFeeAmount)}
                         </span>
                       </div>
                       <div className="flex justify-between gap-3 border-t border-emerald-200/80 pt-1">
-                        <span className="font-medium">Clinic net sale (80%)</span>
+                        <span className="font-medium">Clinic net sale ({100 - doctorFeePercent}%)</span>
                         <span className="font-semibold">{formatPesoExact(clinicNetAmount)}</span>
                       </div>
                     </div>

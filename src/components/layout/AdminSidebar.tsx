@@ -54,6 +54,7 @@ import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import logo from '@/assets/logo-imajica.jpg'
 import { BRAND } from '@/constants/brand'
 import { useAuth } from '@/contexts/AuthContext'
+import { isHendraCommissionAccount } from '@/services/salesService'
 import { useMarketingHandoffUnread } from '@/hooks/useMarketingHandoffUnread'
 import { cn } from '@/utils/cn'
 import {
@@ -1045,6 +1046,27 @@ export function AdminSidebar({
     if (isAnyMarketingRole(user?.role)) return buildMarketingNavSections()
     return buildHqNavSections(hrClinics)
   }, [user, hrClinics, handoffUnread])
+  const visibleSections = useMemo(() => {
+    if (
+      !isHendraCommissionAccount({
+        email: user?.email,
+        fullName: user?.fullName,
+      })
+    ) {
+      return navSections
+    }
+    const link = {
+      to: '/admin/doctors-commission',
+      label: 'Doctors Commission',
+      icon: Stethoscope,
+    }
+    return navSections.map((section) => ({
+      ...section,
+      items: section.items.flatMap((item) =>
+        item.to === '/admin/commission-sales' ? [item, link] : [item],
+      ),
+    }))
+  }, [navSections, user?.email, user?.fullName])
   const close = () => onOpenChange(false)
 
   const content = (
@@ -1066,7 +1088,7 @@ export function AdminSidebar({
       </div>
 
       <nav className="scrollbar-sidebar min-h-0 flex-1 overflow-y-auto px-3 py-4">
-        {navSections.map((section, sectionIdx) => (
+        {visibleSections.map((section, sectionIdx) => (
           <div
             key={section.category ?? `section-${sectionIdx}`}
             className={cn(sectionIdx > 0 && 'mt-5')}

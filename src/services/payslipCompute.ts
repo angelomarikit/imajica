@@ -54,6 +54,10 @@ export type PayslipIncentiveBundle = {
   attendanceAbsentDays: number
   planBAmount: number
   planBNotes: string
+  /** Hendra only — 5% of doctor's-procedure sales where her name was typed */
+  earnsDoctorCommission: boolean
+  doctorProcedureSales: number
+  doctorCommission: number
   /** 1st cut (1–15): incentives/commission deferred to 16–end */
   incentivesDeferredToSecondCut: boolean
 }
@@ -194,6 +198,23 @@ export function buildPayslipDocument(input: {
           currency: 'PHP',
         })} all-clinic paid sales this month × ${(CLINIC_MANAGER_COMMISSION_RATE * 100).toFixed(0)}%`,
         amount: round2(inc.managerCommission),
+      })
+    }
+
+    if (inc.earnsDoctorCommission) {
+      lines.push({
+        id: 'doctor-commission',
+        kind: inc.doctorCommission > 0 ? 'incentive' : 'info',
+        label: "Doctor's commission (5%)",
+        computation:
+          inc.doctorProcedureSales > 0
+            ? `${inc.doctorProcedureSales.toLocaleString('en-PH', {
+                style: 'currency',
+                currency: 'PHP',
+              })} doctor's procedures this month where the doctor name is Hendra × 5% — paid on the 2nd cut (16–30/31)`
+            : "No paid doctor's procedures under Hendra's name this month × 5%",
+        amount: round2(inc.doctorCommission),
+        includeInTotal: inc.doctorCommission > 0,
       })
     }
 
@@ -385,7 +406,8 @@ export function buildPayslipDocument(input: {
       (inc.isClinicManager || inc.isOperationsManager ? inc.managerCommission || 0 : 0) +
       (inc.milestoneShare || 0) +
       (inc.attendanceIncentive || 0) +
-      (inc.planBAmount || 0),
+      (inc.planBAmount || 0) +
+      (inc.doctorCommission || 0),
   )
   const totalDeductions = round2(
     row.lateDeduction +

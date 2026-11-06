@@ -19,6 +19,7 @@ import {
   resolveEmployeeMatchNames,
   staffNamesMatch,
 } from '@/services/staffCommissionService'
+import { isHendraCommissionAccount, listHendraDoctorCommission } from '@/services/salesService'
 import { getAccessUsers } from '@/services/userAccessService'
 import type { PayslipIncentiveBundle } from '@/services/payslipCompute'
 import type { AttendancePunch } from '@/types'
@@ -198,6 +199,19 @@ export function gatherPayslipIncentives(input: {
     .filter(Boolean)
     .join(' · ')
 
+  const earnsDoctorCommission = isHendraCommissionAccount({
+    email: row.employee.email,
+    fullName: row.employee.fullName,
+    matchEmails: row.employee.matchEmails,
+  })
+  const doctorSales = earnsDoctorCommission
+    ? listHendraDoctorCommission({
+        from: salesRange.from,
+        to: salesRange.to,
+        paidOnly: true,
+      })
+    : { rows: [], serviceTotal: 0, commission: 0 }
+
   // 1st cut (1–15): basic ± late/absent/OT only — defer all incentives to 16–end
   if (!secondCut) {
     return {
@@ -222,6 +236,9 @@ export function gatherPayslipIncentives(input: {
       attendanceAbsentDays: absentDays,
       planBAmount: 0,
       planBNotes: planBNotes || 'Pass the KPI set by the branch',
+      earnsDoctorCommission,
+      doctorProcedureSales: doctorSales.serviceTotal,
+      doctorCommission: 0,
       incentivesDeferredToSecondCut: true,
     }
   }
@@ -248,6 +265,9 @@ export function gatherPayslipIncentives(input: {
     attendanceAbsentDays: absentDays,
     planBAmount,
     planBNotes: planBNotes || 'Pass the KPI set by the branch',
+    earnsDoctorCommission,
+    doctorProcedureSales: doctorSales.serviceTotal,
+    doctorCommission: doctorSales.commission,
     incentivesDeferredToSecondCut: false,
   }
 }

@@ -105,7 +105,8 @@ function sumIncentives(
     (inc.managerCommission || 0) +
     (inc.milestoneShare || 0) +
     (inc.attendanceIncentive || 0) +
-    (inc.planBAmount || 0)
+    (inc.planBAmount || 0) +
+    (inc.doctorCommission || 0)
   // Absences already zero out gross days — do not list them again in deductions vs net
   const netDeductions = Math.round(
     (row.lateDeduction +

@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   ensureBranchOpsSales,
+  doctorFeeRateForName,
   listDoctorFees,
   type DoctorFeeRow,
 } from '@/services/salesService'
@@ -216,8 +217,8 @@ export function DoctorsFeePage() {
                 <th className="px-2 py-2.5">Doctor</th>
                 <th className="px-2 py-2.5">Branch</th>
                 <th className="px-2 py-2.5 text-right">Service total</th>
-                <th className="px-2 py-2.5 text-right">Doctor fee (20%)</th>
-                <th className="px-2 py-2.5 text-right">Clinic net (80%)</th>
+                <th className="px-2 py-2.5 text-right">Doctor fee</th>
+                <th className="px-2 py-2.5 text-right">Clinic net</th>
                 <th className="px-2 py-2.5">Status</th>
               </tr>
             </thead>
@@ -250,6 +251,7 @@ export function DoctorsFeePage() {
                       {formatPesoExact(r.serviceTotal)}
                     </td>
                     <td className="px-2 py-2.5 text-right font-semibold tabular-nums text-amber-800">
+                      {Math.round(doctorFeeRateForName(r.doctorName) * 100)}% ·{' '}
                       {formatPesoExact(r.doctorFeeAmount)}
                     </td>
                     <td className="px-2 py-2.5 text-right tabular-nums text-[#073D2C]">
