@@ -881,15 +881,16 @@ function BranchOpsDashboard() {
       const beginning = sumConfirmedCash(companyCashScopes, yKey)
       const manualDeducted = sumManualCashDeducted(companyCashScopes, todayKey)
       const todaySalesTotal = sales
-        .filter(
-          (s) => saleDateKey(s) === todayKey && Boolean(s.branchId) && companySet.has(s.branchId),
-        )
+        .filter((s) => {
+          const branchId = s.branchId
+          return saleDateKey(s) === todayKey && branchId != null && companySet.has(branchId)
+        })
         .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
       const expenseCashOut = expenses
         .filter((e) => {
           if (e.expenseDate !== todayKey || e.status !== 'active' || !e.deductCash) return false
           const branchId = e.branchId
-          return Boolean(branchId) && companySet.has(branchId)
+          return branchId != null && companySet.has(branchId)
         })
         .reduce((n, e) => n + (e.amount || 0), 0)
       const deducted = expenseCashOut + manualDeducted
