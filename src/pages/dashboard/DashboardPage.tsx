@@ -29,10 +29,13 @@ import {
   toDateKey,
 } from '@/services/appointmentService'
 import { getClients, preloadClientsFromSupabase, subscribeClients } from '@/services/clientService'
+import { COMPANY_OWNED_BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import {
   readConfirmedCash,
   readManualCashDeducted,
   subscribeCashDrawer,
+  sumConfirmedCash,
+  sumManualCashDeducted,
   writeConfirmedCash,
   writeManualCashDeducted,
 } from '@/services/cashDrawerService'
@@ -594,6 +597,9 @@ function BranchOpsDashboard() {
     setBreakdown({ title, subtitle, sales: lines, branchLabel })
   }
 
+  /** HQ All Branches = San Mateo + Pasig + Cainta + Lipa combined. Single clinic = that drawer. */
+  const companyCashScopes = COMPANY_OWNED_BRANCH_IDS
+  const showCompanyCashOnHand = hqView && !scopeBranchId
   const cashScope = scopeBranchId ?? 'all'
   const todayKey = todayDateKey()
   const now = useMemo(() => new Date(), [todayKey])
@@ -869,6 +875,43 @@ function BranchOpsDashboard() {
     const yesterday = new Date()
     yesterday.setDate(yesterday.getDate() - 1)
     const yKey = todayDateKey(yesterday)
+    const companySet = new Set(companyCashScopes)
+
+    if (showCompanyCashOnHand) {
+      const beginning = sumConfirmedCash(companyCashScopes, yKey)
+      const manualDeducted = sumManualCashDeducted(companyCashScopes, todayKey)
+      const todaySalesTotal = sales
+        .filter(
+          (s) => saleDateKey(s) === todayKey && s.branchId && companySet.has(s.branchId),
+        )
+        .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
+      const expenseCashOut = expenses
+        .filter(
+          (e) =>
+            e.expenseDate === todayKey &&
+            e.status === 'active' &&
+            e.deductCash &&
+            e.branchId &&
+            companySet.has(e.branchId),
+        )
+        .reduce((n, e) => n + (e.amount || 0), 0)
+      const deducted = expenseCashOut + manualDeducted
+      const ending = beginning + todaySalesTotal - deducted
+      const confirmedToday =
+        companyCashScopes.every((id) => readConfirmedCash(id, todayKey) != null)
+          ? ending
+          : null
+      return {
+        beginning,
+        ending,
+        deducted,
+        expenseCashOut,
+        manualDeducted,
+        confirmedToday,
+        companyCombined: true as const,
+      }
+    }
+
     const beginning = readConfirmedCash(cashScope, yKey) ?? 0
     const manualDeducted = readManualCashDeducted(cashScope, todayKey)
     // Cash drawer is always today's ops — not the selected reporting range.
@@ -897,8 +940,21 @@ function BranchOpsDashboard() {
       expenseCashOut,
       manualDeducted,
       confirmedToday,
+      companyCombined: false as const,
     }
-  }, [cashScope, todayKey, scopedSales, scopedExpenses, cashTick, scopeBranchId, rpcSummary])
+  }, [
+    cashScope,
+    todayKey,
+    scopedSales,
+    scopedExpenses,
+    cashTick,
+    scopeBranchId,
+    rpcSummary,
+    showCompanyCashOnHand,
+    companyCashScopes,
+    sales,
+    expenses,
+  ])
 
   const customerBirthdays = useMemo(() => {
     const todayList: BirthdayCard[] = []
@@ -953,9 +1009,40 @@ function BranchOpsDashboard() {
   }, [scopeBranchId, now])
 
   function confirmCash() {
+    if (showCompanyCashOnHand) {
+      const yesterday = new Date()
+      yesterday.setDate(yesterday.getDate() - 1)
+      const yKey = todayDateKey(yesterday)
+      for (const branchId of companyCashScopes) {
+        const beginning = readConfirmedCash(branchId, yKey) ?? 0
+        const manualDeducted = readManualCashDeducted(branchId, todayKey)
+        const todaySalesTotal = sales
+          .filter((s) => saleDateKey(s) === todayKey && s.branchId === branchId)
+          .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
+        const expenseCashOut = expenses
+          .filter(
+            (e) =>
+              e.expenseDate === todayKey &&
+              e.status === 'active' &&
+              e.deductCash &&
+              e.branchId === branchId,
+          )
+          .reduce((n, e) => n + (e.amount || 0), 0)
+        writeConfirmedCash(
+          branchId,
+          todayKey,
+          beginning + todaySalesTotal - expenseCashOut - manualDeducted,
+        )
+      }
+      setCashTick((n) => n + 1)
+      toast.success('Cash on hand confirmed', {
+        description: `Combined ending ${formatPesoExact(cash.ending)} saved for San Mateo, Pasig, Cainta, and Lipa (${todayKey}).`,
+      })
+      return
+    }
     writeConfirmedCash(cashScope, todayKey, cash.ending)
     setCashTick((n) => n + 1)
-    toast.success('Cash confirmed', {
+    toast.success('Cash on hand confirmed', {
       description: `Ending balance ${formatPesoExact(cash.ending)} saved for ${todayKey}.`,
     })
   }
@@ -1311,7 +1398,7 @@ function BranchOpsDashboard() {
               <Wallet className="h-4 w-4" />
             </span>
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-              Cash Flow Snapshot
+              Cash on Hand
             </p>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-3">
@@ -1332,9 +1419,14 @@ function BranchOpsDashboard() {
               </p>
             </div>
           </div>
+          {cash.companyCombined ? (
+            <p className="mt-2 text-[11px] font-medium text-[#073D2C]">
+              This is the cash on hand on these 4 branches: San Mateo, Pasig, Cainta, and Lipa.
+            </p>
+          ) : null}
           <p className="mt-2 text-[11px] text-slate-500">
             Ending = beginning + daily clinic sales − cash expenses. Doctor&apos;s procedures
-            count at 80% clinic net.
+            count at clinic net.
             {cash.expenseCashOut > 0
               ? ` Expenses (${formatPesoExact(cash.expenseCashOut)})`
               : ''}

@@ -515,7 +515,7 @@ export function ExpensesPage() {
             <span>
               Deduct cash
               <span className="mt-0.5 block text-xs font-normal text-slate-ui">
-                When checked, this amount reduces today&apos;s Cash Flow Snapshot ending balance.
+                When checked, this amount reduces today&apos;s Cash on Hand ending balance.
               </span>
             </span>
           </label>

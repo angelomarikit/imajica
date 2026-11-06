@@ -77,7 +77,7 @@ export function resolveDoctorProcedureSplit(input: {
 }
 
 /**
- * Amount recognized as clinic sales for dashboards, cashflow, commissions, and reports.
+ * Amount recognized as clinic sales for dashboards, cash on hand, commissions, and reports.
  * Doctor's procedure lines use the clinic share of that line (80% outsourced, 95% when the doctor is Hendra).
  */
 export function clinicRecognizedAmount(
