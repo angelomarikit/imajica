@@ -875,25 +875,22 @@ function BranchOpsDashboard() {
     const yesterday = new Date()
     yesterday.setDate(yesterday.getDate() - 1)
     const yKey = todayDateKey(yesterday)
-    const companySet = new Set(companyCashScopes)
+    const companySet = new Set<string>(companyCashScopes)
 
     if (showCompanyCashOnHand) {
       const beginning = sumConfirmedCash(companyCashScopes, yKey)
       const manualDeducted = sumManualCashDeducted(companyCashScopes, todayKey)
       const todaySalesTotal = sales
         .filter(
-          (s) => saleDateKey(s) === todayKey && s.branchId && companySet.has(s.branchId),
+          (s) => saleDateKey(s) === todayKey && Boolean(s.branchId) && companySet.has(s.branchId),
         )
         .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
       const expenseCashOut = expenses
-        .filter(
-          (e) =>
-            e.expenseDate === todayKey &&
-            e.status === 'active' &&
-            e.deductCash &&
-            e.branchId &&
-            companySet.has(e.branchId),
-        )
+        .filter((e) => {
+          if (e.expenseDate !== todayKey || e.status !== 'active' || !e.deductCash) return false
+          const branchId = e.branchId
+          return Boolean(branchId) && companySet.has(branchId)
+        })
         .reduce((n, e) => n + (e.amount || 0), 0)
       const deducted = expenseCashOut + manualDeducted
       const ending = beginning + todaySalesTotal - deducted

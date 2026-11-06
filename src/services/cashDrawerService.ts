@@ -64,10 +64,10 @@ export function cashScopeForBranch(branchId?: string | null): string {
 }
 
 /** Sum confirmed / deducted drawer amounts across several clinic scopes (e.g. company-owned). */
-export function sumConfirmedCash(scopes: string[], dateKey: string): number {
+export function sumConfirmedCash(scopes: readonly string[], dateKey: string): number {
   return scopes.reduce((sum, scope) => sum + (readConfirmedCash(scope, dateKey) ?? 0), 0)
 }
 
-export function sumManualCashDeducted(scopes: string[], dateKey: string): number {
+export function sumManualCashDeducted(scopes: readonly string[], dateKey: string): number {
   return scopes.reduce((sum, scope) => sum + readManualCashDeducted(scope, dateKey), 0)
 }
