@@ -1055,14 +1055,14 @@ export function AdminSidebar({
     ) {
       return navSections
     }
-    const link = {
+    const link: NavItem = {
       to: '/admin/doctors-commission',
       label: 'Doctors Commission',
       icon: Stethoscope,
     }
-    return navSections.map((section) => ({
+    return navSections.map((section): NavSection => ({
       ...section,
-      items: section.items.flatMap((item) =>
+      items: section.items.flatMap((item): NavItem[] =>
         item.to === '/admin/commission-sales' ? [item, link] : [item],
       ),
     }))
