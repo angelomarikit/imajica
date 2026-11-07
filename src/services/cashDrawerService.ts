@@ -249,54 +249,51 @@ export async function writeManualCashDeducted(
   await upsertRemote({ scope, dateKey, manualDeducted: Math.max(0, amount) })
 }
 
-/** Scan localStorage for legacy confirm/deduct keys and upsert once into Supabase. */
-async function migrateLocalStorageOnce(scopes: readonly string[]): Promise<void> {
-  if (!isSupabaseConfigured || !supabase) return
-  try {
-    if (localStorage.getItem(MIGRATED_FLAG) === '1') return
-  } catch {
-    return
-  }
+/**
+ * Push every localStorage cash confirm on this browser into Supabase.
+ * Safe to call repeatedly — only upserts when local is higher than remote/cache.
+ * Branch PCs must open the dashboard once while online to recover their drawer.
+ */
+export async function migrateLocalCashDrawerToSupabase(): Promise<{
+  uploaded: number
+  scopes: string[]
+}> {
+  if (!isSupabaseConfigured || !supabase) return { uploaded: 0, scopes: [] }
 
-  const scopeSet = new Set<string>([HQ_CASH_SCOPE, ...scopes])
   const jobs: Array<Promise<unknown>> = []
+  const touched = new Set<string>()
 
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)
       if (!key) continue
       const confirmMatch = /^imajica_cash_confirm_(.+)_(20\d{2}-\d{2}-\d{2})$/.exec(key)
-      if (confirmMatch) {
-        const scope = confirmMatch[1]!
-        const dateKey = confirmMatch[2]!
-        if (!scopeSet.has(scope) && scope !== HQ_CASH_SCOPE) {
-          // Still migrate any clinic UUID we find
-          if (!isUuid(scope)) continue
-        }
-        const ending = readLocalConfirmed(scope, dateKey)
-        const manual = readLocalManual(scope, dateKey)
-        if (ending == null && manual <= 0) continue
-        const existing = cache.get(cacheKey(scope, dateKey))
-        const nextEnding = Math.max(ending ?? 0, existing?.confirmedEnding ?? 0)
-        const nextManual = Math.max(manual, existing?.manualDeducted ?? 0)
-        // Skip if remote already holds the same or higher amounts
-        if (
-          existing &&
-          existing.confirmedEnding >= nextEnding &&
-          existing.manualDeducted >= nextManual
-        ) {
-          continue
-        }
-        jobs.push(
-          upsertRemote({
-            scope,
-            dateKey,
-            confirmedEnding: nextEnding,
-            manualDeducted: nextManual,
-          }),
-        )
+      if (!confirmMatch) continue
+      const scope = confirmMatch[1]!
+      const dateKey = confirmMatch[2]!
+      if (scope !== HQ_CASH_SCOPE && !isUuid(scope)) continue
+      const ending = readLocalConfirmed(scope, dateKey)
+      const manual = readLocalManual(scope, dateKey)
+      if (ending == null && manual <= 0) continue
+      const existing = cache.get(cacheKey(scope, dateKey))
+      const nextEnding = Math.max(ending ?? 0, existing?.confirmedEnding ?? 0)
+      const nextManual = Math.max(manual, existing?.manualDeducted ?? 0)
+      if (
+        existing &&
+        existing.confirmedEnding >= nextEnding &&
+        existing.manualDeducted >= nextManual
+      ) {
         continue
       }
+      touched.add(scope)
+      jobs.push(
+        upsertRemote({
+          scope,
+          dateKey,
+          confirmedEnding: nextEnding,
+          manualDeducted: nextManual,
+        }),
+      )
     }
   } catch {
     /* ignore */
@@ -308,6 +305,33 @@ async function migrateLocalStorageOnce(scopes: readonly string[]): Promise<void>
   } catch {
     /* quota */
   }
+  return { uploaded: jobs.length, scopes: [...touched] }
+}
+
+/**
+ * HQ recovery: save each clinic’s last known ending for a date (usually yesterday)
+ * so Beginning on HQ All Branches can show the combined Cash on Hand.
+ */
+export async function recoverCompanyCashOnHand(input: {
+  dateKey: string
+  clinics: Array<{ branchId: string; confirmedEnding: number }>
+}): Promise<number> {
+  let total = 0
+  for (const clinic of input.clinics) {
+    const amount = Math.max(0, Number(clinic.confirmedEnding) || 0)
+    total += amount
+    await upsertRemote({
+      scope: clinic.branchId,
+      dateKey: input.dateKey,
+      confirmedEnding: amount,
+    })
+  }
+  await upsertRemote({
+    scope: HQ_CASH_SCOPE,
+    dateKey: input.dateKey,
+    confirmedEnding: total,
+  })
+  return total
 }
 
 /**
@@ -353,7 +377,7 @@ export async function preloadCashDrawer(input: {
     }
   }
 
-  await migrateLocalStorageOnce(scopes)
+  await migrateLocalCashDrawerToSupabase()
   emit()
 }
 

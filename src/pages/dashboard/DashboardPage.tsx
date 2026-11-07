@@ -29,15 +29,17 @@ import {
   toDateKey,
 } from '@/services/appointmentService'
 import { getClients, preloadClientsFromSupabase, subscribeClients } from '@/services/clientService'
-import { COMPANY_OWNED_BRANCH_IDS } from '@/constants/teamAccountsSeed'
+import { BRANCH_IDS, COMPANY_OWNED_BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import {
   HQ_CASH_SCOPE,
+  migrateLocalCashDrawerToSupabase,
   preloadCashDrawer,
   readCompanyCashBeginning,
   readCompanyConfirmedToday,
   readCompanyManualCashDeducted,
   readConfirmedCash,
   readManualCashDeducted,
+  recoverCompanyCashOnHand,
   subscribeCashDrawer,
   writeConfirmedCash,
   writeManualCashDeducted,
@@ -540,6 +542,14 @@ function BranchOpsDashboard() {
   const [deductOpen, setDeductOpen] = useState(false)
   const [deductAmount, setDeductAmount] = useState('')
   const [deductSaving, setDeductSaving] = useState(false)
+  const [recoverOpen, setRecoverOpen] = useState(false)
+  const [recoverSaving, setRecoverSaving] = useState(false)
+  const [recoverAmounts, setRecoverAmounts] = useState<Record<string, string>>({
+    [BRANCH_IDS.sanMateo]: '',
+    [BRANCH_IDS.pasig]: '',
+    [BRANCH_IDS.cainta]: '',
+    [BRANCH_IDS.lipa]: '',
+  })
   /** Server aggregates — source of truth for clinic dashboard cards (fast; includes migration + live). */
   const [rpcSummary, setRpcSummary] = useState<BranchDashboardSalesSummary | null>(null)
   /** HQ All Branches: today sales for the 4 company clinics (RPC, not cold local cache). */
@@ -574,15 +584,15 @@ function BranchOpsDashboard() {
 
   useEffect(() => {
     const today = todayDateKey()
-    const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    const yKey = todayDateKey(yesterday)
+    const fromDate = new Date()
+    fromDate.setDate(fromDate.getDate() - 14)
+    const fromKey = todayDateKey(fromDate)
     const scopes = scopeBranchId
       ? [scopeBranchId]
       : [...COMPANY_OWNED_BRANCH_IDS, HQ_CASH_SCOPE]
-    void preloadCashDrawer({ scopes, from: yKey, to: today }).then(() => {
-      setCashTick((n) => n + 1)
-    })
+    void preloadCashDrawer({ scopes, from: fromKey, to: today })
+      .then(() => migrateLocalCashDrawerToSupabase())
+      .then(() => setCashTick((n) => n + 1))
   }, [scopeBranchId])
 
   useEffect(() => {
@@ -1126,6 +1136,51 @@ function BranchOpsDashboard() {
     setDeductOpen(true)
   }
 
+  function openRecoverCash() {
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    const yKey = todayDateKey(yesterday)
+    setRecoverAmounts({
+      [BRANCH_IDS.sanMateo]: String(readConfirmedCash(BRANCH_IDS.sanMateo, yKey) ?? ''),
+      [BRANCH_IDS.pasig]: String(readConfirmedCash(BRANCH_IDS.pasig, yKey) ?? ''),
+      [BRANCH_IDS.cainta]: String(readConfirmedCash(BRANCH_IDS.cainta, yKey) ?? ''),
+      [BRANCH_IDS.lipa]: String(readConfirmedCash(BRANCH_IDS.lipa, yKey) ?? ''),
+    })
+    setRecoverOpen(true)
+  }
+
+  async function submitRecoverCash() {
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    const yKey = todayDateKey(yesterday)
+    const clinics = [
+      { branchId: BRANCH_IDS.sanMateo, label: 'San Mateo' },
+      { branchId: BRANCH_IDS.pasig, label: 'Pasig' },
+      { branchId: BRANCH_IDS.cainta, label: 'Cainta' },
+      { branchId: BRANCH_IDS.lipa, label: 'Lipa' },
+    ].map((c) => ({
+      branchId: c.branchId,
+      confirmedEnding: Math.max(0, Number(String(recoverAmounts[c.branchId] ?? '').replace(/[^\d.]/g, '')) || 0),
+    }))
+    if (clinics.every((c) => c.confirmedEnding <= 0)) {
+      toast.error('Enter at least one clinic’s cash on hand amount')
+      return
+    }
+    setRecoverSaving(true)
+    try {
+      const total = await recoverCompanyCashOnHand({ dateKey: yKey, clinics })
+      setCashTick((n) => n + 1)
+      setRecoverOpen(false)
+      toast.success('Cash on hand recovered', {
+        description: `Saved ${formatPesoExact(total)} to Supabase as yesterday’s beginning for the 4 company clinics.`,
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not recover cash on hand')
+    } finally {
+      setRecoverSaving(false)
+    }
+  }
+
   async function submitDeductCash() {
     const amount = Number(String(deductAmount).replace(/[^\d.]/g, ''))
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -1210,6 +1265,50 @@ function BranchOpsDashboard() {
             Available ending cash: {formatPesoExact(cash.ending)}
           </span>
         </label>
+      </Dialog>
+
+      <Dialog
+        open={recoverOpen}
+        onClose={() => {
+          if (recoverSaving) return
+          setRecoverOpen(false)
+        }}
+        title="Recover clinic cash on hand"
+        description="Old balances lived only on each clinic PC. Enter the last Ending cash from San Mateo, Pasig, Cainta, and Lipa (call each branch or open Dashboard once on that clinic computer while online). Amounts save to Supabase as yesterday’s beginning."
+        confirmLabel={recoverSaving ? 'Saving…' : 'Save to Supabase'}
+        onConfirm={submitRecoverCash}
+        wide
+      >
+        <div className="space-y-3">
+          {(
+            [
+              [BRANCH_IDS.sanMateo, 'San Mateo'],
+              [BRANCH_IDS.pasig, 'Pasig'],
+              [BRANCH_IDS.cainta, 'Cainta'],
+              [BRANCH_IDS.lipa, 'Lipa'],
+            ] as const
+          ).map(([id, label]) => (
+            <label key={id} className="block text-sm">
+              <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-600">
+                {label} ending (₱)
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                className="h-11 w-full rounded-[10px] border border-border bg-white px-3 text-sm text-[#073D2C] outline-none focus:border-emerald-800/40 focus:ring-2 focus:ring-emerald-900/10"
+                placeholder="0.00"
+                value={recoverAmounts[id] ?? ''}
+                onChange={(e) =>
+                  setRecoverAmounts((prev) => ({ ...prev, [id]: e.target.value }))
+                }
+              />
+            </label>
+          ))}
+          <p className="text-xs text-slate-500">
+            Tip: On each clinic PC, open Admin Dashboard while signed in — that also uploads
+            local cash confirms to Supabase automatically.
+          </p>
+        </div>
       </Dialog>
 
       {/* Welcome */}
@@ -1524,6 +1623,16 @@ function BranchOpsDashboard() {
                 Confirm Cash
               </Button>
             )}
+            {cash.companyCombined ? (
+              <Button
+                type="button"
+                variant="secondary"
+                className="rounded-xl"
+                onClick={openRecoverCash}
+              >
+                Recover clinic cash
+              </Button>
+            ) : null}
             <Link
               to="/admin/operations/expenses"
               className="text-xs font-semibold text-slate-500 hover:text-emerald-800"
