@@ -32,6 +32,7 @@ import { getClients, preloadClientsFromSupabase, subscribeClients } from '@/serv
 import { COMPANY_OWNED_BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import {
   HQ_CASH_SCOPE,
+  preloadCashDrawer,
   readCompanyCashBeginning,
   readCompanyConfirmedToday,
   readCompanyManualCashDeducted,
@@ -541,6 +542,9 @@ function BranchOpsDashboard() {
   const [deductSaving, setDeductSaving] = useState(false)
   /** Server aggregates — source of truth for clinic dashboard cards (fast; includes migration + live). */
   const [rpcSummary, setRpcSummary] = useState<BranchDashboardSalesSummary | null>(null)
+  /** HQ All Branches: today sales for the 4 company clinics (RPC, not cold local cache). */
+  const [companyTodaySalesRpc, setCompanyTodaySalesRpc] = useState<number | null>(null)
+  const [companyTodayByBranch, setCompanyTodayByBranch] = useState<Record<string, number>>({})
 
   useEffect(() => {
     const refreshSales = () => setSales(getSales())
@@ -566,6 +570,19 @@ function BranchOpsDashboard() {
       subscribeCashDrawer(() => setCashTick((n) => n + 1)),
     ]
     return () => unsubs.forEach((u) => u())
+  }, [scopeBranchId])
+
+  useEffect(() => {
+    const today = todayDateKey()
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    const yKey = todayDateKey(yesterday)
+    const scopes = scopeBranchId
+      ? [scopeBranchId]
+      : [...COMPANY_OWNED_BRANCH_IDS, HQ_CASH_SCOPE]
+    void preloadCashDrawer({ scopes, from: yKey, to: today }).then(() => {
+      setCashTick((n) => n + 1)
+    })
   }, [scopeBranchId])
 
   useEffect(() => {
@@ -605,6 +622,40 @@ function BranchOpsDashboard() {
   const cashScope = scopeBranchId ?? 'all'
   const todayKey = todayDateKey()
   const now = useMemo(() => new Date(), [todayKey])
+
+  useEffect(() => {
+    if (!showCompanyCashOnHand) {
+      setCompanyTodaySalesRpc(null)
+      setCompanyTodayByBranch({})
+      return
+    }
+    let cancelled = false
+    const today = todayKey
+    void Promise.all(
+      COMPANY_OWNED_BRANCH_IDS.map(async (branchId) => {
+        const summary = await fetchBranchDashboardSalesSummary({
+          branchId,
+          from: today,
+          to: today,
+          today,
+        })
+        return [branchId, summary?.todaySales ?? 0] as const
+      }),
+    ).then((pairs) => {
+      if (cancelled) return
+      const byBranch: Record<string, number> = {}
+      let total = 0
+      for (const [id, amount] of pairs) {
+        byBranch[id] = amount
+        total += amount
+      }
+      setCompanyTodayByBranch(byBranch)
+      setCompanyTodaySalesRpc(total)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [showCompanyCashOnHand, todayKey])
 
   const scopedSales = useMemo(
     () => (scopeBranchId ? sales.filter((s) => s.branchId === scopeBranchId) : sales),
@@ -880,15 +931,16 @@ function BranchOpsDashboard() {
     const companySet = new Set<string>(companyCashScopes)
 
     if (showCompanyCashOnHand) {
-      // Keep legacy HQ `all` balance when per-clinic confirms are empty (rename must not zero out).
       const beginning = readCompanyCashBeginning(companyCashScopes, yKey)
       const manualDeducted = readCompanyManualCashDeducted(companyCashScopes, todayKey)
-      const todaySalesTotal = sales
+      const memorySales = sales
         .filter((s) => {
           const branchId = s.branchId
           return saleDateKey(s) === todayKey && branchId != null && companySet.has(branchId)
         })
         .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
+      const todaySalesTotal =
+        companyTodaySalesRpc != null ? companyTodaySalesRpc : memorySales
       const expenseCashOut = expenses
         .filter((e) => {
           if (e.expenseDate !== todayKey || e.status !== 'active' || !e.deductCash) return false
@@ -956,6 +1008,7 @@ function BranchOpsDashboard() {
     companyCashScopes,
     sales,
     expenses,
+    companyTodaySalesRpc,
   ])
 
   const customerBirthdays = useMemo(() => {
@@ -1010,21 +1063,62 @@ function BranchOpsDashboard() {
     return { today: todayList, upcoming: upcoming.slice(0, 12) }
   }, [scopeBranchId, now])
 
-  function confirmCash() {
+  async function confirmCash() {
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    const yKey = todayDateKey(yesterday)
+
     if (showCompanyCashOnHand) {
-      // Same drawer key as before the rename (`all`) — never wipe the existing HQ balance.
-      writeConfirmedCash(HQ_CASH_SCOPE, todayKey, cash.ending)
-      setCashTick((n) => n + 1)
-      toast.success('Cash on hand confirmed', {
-        description: `Combined ending ${formatPesoExact(cash.ending)} saved for San Mateo, Pasig, Cainta, and Lipa (${todayKey}).`,
-      })
+      try {
+        // Always persist HQ combined row (source of truth across devices).
+        await writeConfirmedCash(HQ_CASH_SCOPE, todayKey, cash.ending)
+        const clinicsHaveCarry =
+          companyCashScopes.some((id) => readConfirmedCash(id, yKey) != null)
+        // Only write per-clinic rows when those clinics already have drawer history —
+        // otherwise clinic zeros would override the combined `all` beginning tomorrow.
+        if (clinicsHaveCarry) {
+          await Promise.all(
+            companyCashScopes.map(async (branchId) => {
+              const beginning = readConfirmedCash(branchId, yKey) ?? 0
+              const manualDeducted = readManualCashDeducted(branchId, todayKey)
+              const todaySales =
+                companyTodayByBranch[branchId] ??
+                sales
+                  .filter((s) => saleDateKey(s) === todayKey && s.branchId === branchId)
+                  .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
+              const expenseCashOut = expenses
+                .filter(
+                  (e) =>
+                    e.expenseDate === todayKey &&
+                    e.status === 'active' &&
+                    e.deductCash &&
+                    e.branchId === branchId,
+                )
+                .reduce((n, e) => n + (e.amount || 0), 0)
+              const ending = beginning + todaySales - expenseCashOut - manualDeducted
+              await writeConfirmedCash(branchId, todayKey, ending)
+            }),
+          )
+        }
+        setCashTick((n) => n + 1)
+        toast.success('Cash on hand confirmed', {
+          description: `Combined ending ${formatPesoExact(cash.ending)} saved to Supabase for San Mateo, Pasig, Cainta, and Lipa (${todayKey}).`,
+        })
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Could not save cash on hand')
+      }
       return
     }
-    writeConfirmedCash(cashScope, todayKey, cash.ending)
-    setCashTick((n) => n + 1)
-    toast.success('Cash on hand confirmed', {
-      description: `Ending balance ${formatPesoExact(cash.ending)} saved for ${todayKey}.`,
-    })
+
+    try {
+      await writeConfirmedCash(cashScope, todayKey, cash.ending)
+      setCashTick((n) => n + 1)
+      toast.success('Cash on hand confirmed', {
+        description: `Ending balance ${formatPesoExact(cash.ending)} saved to Supabase for ${todayKey}.`,
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save cash on hand')
+    }
   }
 
   function openDeductCash() {
@@ -1032,7 +1126,7 @@ function BranchOpsDashboard() {
     setDeductOpen(true)
   }
 
-  function submitDeductCash() {
+  async function submitDeductCash() {
     const amount = Number(String(deductAmount).replace(/[^\d.]/g, ''))
     if (!Number.isFinite(amount) || amount <= 0) {
       toast.error('Please enter exact cash')
@@ -1044,14 +1138,18 @@ function BranchOpsDashboard() {
     }
     setDeductSaving(true)
     try {
-      writeManualCashDeducted(cashScope, todayKey, cash.manualDeducted + amount)
-      writeConfirmedCash(cashScope, todayKey, cash.ending - amount)
+      const nextManual = cash.manualDeducted + amount
+      const scope = showCompanyCashOnHand ? HQ_CASH_SCOPE : cashScope
+      await writeManualCashDeducted(scope, todayKey, nextManual)
+      await writeConfirmedCash(scope, todayKey, cash.ending - amount)
       setCashTick((n) => n + 1)
       setDeductOpen(false)
       setDeductAmount('')
       toast.success('Cash deducted', {
-        description: `${formatPesoExact(amount)} removed from ${branchLabel} drawer.`,
+        description: `${formatPesoExact(amount)} removed from ${branchLabel} drawer (saved to Supabase).`,
       })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not deduct cash')
     } finally {
       setDeductSaving(false)
     }
