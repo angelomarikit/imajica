@@ -31,11 +31,13 @@ import {
 import { getClients, preloadClientsFromSupabase, subscribeClients } from '@/services/clientService'
 import { COMPANY_OWNED_BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import {
+  HQ_CASH_SCOPE,
+  readCompanyCashBeginning,
+  readCompanyConfirmedToday,
+  readCompanyManualCashDeducted,
   readConfirmedCash,
   readManualCashDeducted,
   subscribeCashDrawer,
-  sumConfirmedCash,
-  sumManualCashDeducted,
   writeConfirmedCash,
   writeManualCashDeducted,
 } from '@/services/cashDrawerService'
@@ -878,8 +880,9 @@ function BranchOpsDashboard() {
     const companySet = new Set<string>(companyCashScopes)
 
     if (showCompanyCashOnHand) {
-      const beginning = sumConfirmedCash(companyCashScopes, yKey)
-      const manualDeducted = sumManualCashDeducted(companyCashScopes, todayKey)
+      // Keep legacy HQ `all` balance when per-clinic confirms are empty (rename must not zero out).
+      const beginning = readCompanyCashBeginning(companyCashScopes, yKey)
+      const manualDeducted = readCompanyManualCashDeducted(companyCashScopes, todayKey)
       const todaySalesTotal = sales
         .filter((s) => {
           const branchId = s.branchId
@@ -895,10 +898,11 @@ function BranchOpsDashboard() {
         .reduce((n, e) => n + (e.amount || 0), 0)
       const deducted = expenseCashOut + manualDeducted
       const ending = beginning + todaySalesTotal - deducted
-      const confirmedToday =
-        companyCashScopes.every((id) => readConfirmedCash(id, todayKey) != null)
-          ? ending
-          : null
+      const confirmedToday = readCompanyConfirmedToday(
+        companyCashScopes,
+        todayKey,
+        ending,
+      )
       return {
         beginning,
         ending,
@@ -1008,30 +1012,8 @@ function BranchOpsDashboard() {
 
   function confirmCash() {
     if (showCompanyCashOnHand) {
-      const yesterday = new Date()
-      yesterday.setDate(yesterday.getDate() - 1)
-      const yKey = todayDateKey(yesterday)
-      for (const branchId of companyCashScopes) {
-        const beginning = readConfirmedCash(branchId, yKey) ?? 0
-        const manualDeducted = readManualCashDeducted(branchId, todayKey)
-        const todaySalesTotal = sales
-          .filter((s) => saleDateKey(s) === todayKey && s.branchId === branchId)
-          .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
-        const expenseCashOut = expenses
-          .filter(
-            (e) =>
-              e.expenseDate === todayKey &&
-              e.status === 'active' &&
-              e.deductCash &&
-              e.branchId === branchId,
-          )
-          .reduce((n, e) => n + (e.amount || 0), 0)
-        writeConfirmedCash(
-          branchId,
-          todayKey,
-          beginning + todaySalesTotal - expenseCashOut - manualDeducted,
-        )
-      }
+      // Same drawer key as before the rename (`all`) — never wipe the existing HQ balance.
+      writeConfirmedCash(HQ_CASH_SCOPE, todayKey, cash.ending)
       setCashTick((n) => n + 1)
       toast.success('Cash on hand confirmed', {
         description: `Combined ending ${formatPesoExact(cash.ending)} saved for San Mateo, Pasig, Cainta, and Lipa (${todayKey}).`,

@@ -63,6 +63,9 @@ export function cashScopeForBranch(branchId?: string | null): string {
   return branchId || 'all'
 }
 
+/** Legacy HQ Cash Flow Snapshot / Cash on Hand drawer (All Branches). */
+export const HQ_CASH_SCOPE = 'all'
+
 /** Sum confirmed / deducted drawer amounts across several clinic scopes (e.g. company-owned). */
 export function sumConfirmedCash(scopes: readonly string[], dateKey: string): number {
   return scopes.reduce((sum, scope) => sum + (readConfirmedCash(scope, dateKey) ?? 0), 0)
@@ -70,4 +73,36 @@ export function sumConfirmedCash(scopes: readonly string[], dateKey: string): nu
 
 export function sumManualCashDeducted(scopes: readonly string[], dateKey: string): number {
   return scopes.reduce((sum, scope) => sum + readManualCashDeducted(scope, dateKey), 0)
+}
+
+/**
+ * Company Cash on Hand beginning.
+ * Prefer the legacy HQ `all` drawer (same key as Cash Flow Snapshot) so renaming
+ * the card never resets an already-confirmed balance to ₱0. Fall back to summing
+ * the four clinic drawers only when `all` has never been confirmed.
+ */
+export function readCompanyCashBeginning(
+  scopes: readonly string[],
+  dateKey: string,
+): number {
+  const hqAll = readConfirmedCash(HQ_CASH_SCOPE, dateKey)
+  if (hqAll != null) return hqAll
+  return sumConfirmedCash(scopes, dateKey)
+}
+
+export function readCompanyManualCashDeducted(
+  scopes: readonly string[],
+  dateKey: string,
+): number {
+  const hqAll = readManualCashDeducted(HQ_CASH_SCOPE, dateKey)
+  if (hqAll > 0) return hqAll
+  return sumManualCashDeducted(scopes, dateKey)
+}
+
+export function readCompanyConfirmedToday(
+  _scopes: readonly string[],
+  dateKey: string,
+  _ending: number,
+): number | null {
+  return readConfirmedCash(HQ_CASH_SCOPE, dateKey)
 }
