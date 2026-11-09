@@ -548,11 +548,10 @@ export const IMAJICA_FORM_TEMPLATES: FormTemplateDef[] = [
     label: 'Terms-Conditions.pdf',
     typeLabel: 'Terms-Condition',
   },
-  // PDF not in folder yet — kept for when Medical History is added
   {
     id: 'medical-history',
     fileName: 'Medical-History-Client-Form.pdf',
-    label: 'Medical History-Client Form.pdf (add PDF to imajica_forms)',
+    label: 'Medical History-Client Form.pdf',
     typeLabel: 'Medical-History-Client',
     primaryFields: [
       {
@@ -585,6 +584,41 @@ export const IMAJICA_FORM_TEMPLATES: FormTemplateDef[] = [
   },
 ]
 
+/**
+ * PDFs shipped in `public/imajica_forms/` for every clinic (HQ + franchise).
+ * Keep in sync when adding files — used to avoid listing broken templates.
+ */
+export const SHIPPED_FORM_PDF_FILES = [
+  'BioMicroInfusion-Form-3.pdf',
+  'Botox-Consent-Form.pdf',
+  'Client-Info-Form.pdf',
+  'CO2-Laser-Consent-Imajica.pdf',
+  'Dermal-Filler-Consent-Form-HIPLA.pdf',
+  'Facial-Form.pdf',
+  'Gluta-Consent-Form.pdf',
+  'Hair-Loss-Treatment-Consent-Form.pdf',
+  'Hair-Removal-Consent-Form.pdf',
+  'HIFU-Consent-Form.pdf',
+  'Hiko-Consent-Form.pdf',
+  'IMAJICA SLIM (Tirzepatide) Screening Form.pdf',
+  'IMAJICA SLIM WAIVER FORM.pdf',
+  'Keloid-Subcision-Consent-Form.pdf',
+  'Mesolipo-Consent-Form.pdf',
+  'MESOtheraphy-Consent-Form.pdf',
+  'Microneedling-Consent-Form.pdf',
+  'MPOX-ASSESSMENT-FORM.pdf',
+  'Photo-Video-Consent.pdf',
+  'Picolaser-Consent-Form.pdf',
+  'RF-Cavi-Consent-Form.pdf',
+  'Skin-Lightening-Consent-form.pdf',
+  'Skin-Tag-Warts-Removal-Consent-Form.pdf',
+  'Tattoo-Removal-Consent-Form.pdf',
+  'Terms-Conditions.pdf',
+  'Medical-History-Client-Form.pdf',
+] as const
+
+const SHIPPED_SET = new Set<string>(SHIPPED_FORM_PDF_FILES)
+
 /** Public template path — encode path segments without turning `/` into `%2F`. */
 export function formPdfUrl(fileName: string) {
   const safe = String(fileName || '')
@@ -593,6 +627,15 @@ export function formPdfUrl(fileName: string) {
     .map((part) => encodeURIComponent(part))
     .join('/')
   return `/imajica_forms/${safe}`
+}
+
+export function isShippedFormPdf(fileName: string) {
+  return SHIPPED_SET.has(fileName)
+}
+
+/** Templates available on every branch account (file present in public deploy). */
+export function listSelectableFormTemplates() {
+  return IMAJICA_FORM_TEMPLATES.filter((t) => isShippedFormPdf(t.fileName))
 }
 
 export function getFormTemplate(id: string) {

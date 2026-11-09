@@ -19,7 +19,8 @@ import { useAuth } from '@/contexts/AuthContext'
 import {
   formPdfUrl,
   getFormTemplate,
-  IMAJICA_FORM_TEMPLATES,
+  isShippedFormPdf,
+  listSelectableFormTemplates,
   type FormFieldDef,
 } from '@/constants/imajicaFormTemplates'
 import {
@@ -48,7 +49,8 @@ function formatSubmitted(iso: string) {
 export function ImajicaFormsPage() {
   const { user } = useAuth()
   const franchiseOwner = isFranchiseBranchOwner(user)
-  const [templateId, setTemplateId] = useState(IMAJICA_FORM_TEMPLATES[0]?.id ?? '')
+  const selectableTemplates = useMemo(() => listSelectableFormTemplates(), [])
+  const [templateId, setTemplateId] = useState(selectableTemplates[0]?.id ?? '')
   const [patientName, setPatientName] = useState('')
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [clientSig, setClientSig] = useState('')
@@ -61,8 +63,10 @@ export function ImajicaFormsPage() {
   const [viewing, setViewing] = useState<GeneratedFormRecord | null>(null)
   const [viewPdfUrl, setViewPdfUrl] = useState<string | null>(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [previewFailed, setPreviewFailed] = useState(false)
 
-  const template = getFormTemplate(templateId) ?? IMAJICA_FORM_TEMPLATES[0]
+  const template =
+    getFormTemplate(templateId) ?? selectableTemplates[0] ?? listSelectableFormTemplates()[0]
 
   useEffect(() => {
     return () => {
@@ -81,7 +85,36 @@ export function ImajicaFormsPage() {
     setOtherSig('')
     setPrimaryOpen(true)
     setAssessmentOpen(false)
+    setPreviewFailed(false)
   }, [templateId])
+
+  useEffect(() => {
+    if (!template?.fileName) return
+    let cancelled = false
+    setPreviewFailed(false)
+    void fetch(formPdfUrl(template.fileName), { cache: 'no-cache' })
+      .then(async (res) => {
+        if (cancelled) return
+        if (!res.ok) {
+          setPreviewFailed(true)
+          return
+        }
+        const head = new Uint8Array(await res.arrayBuffer().then((b) => b.slice(0, 5)))
+        const isPdf =
+          head.length >= 4 &&
+          head[0] === 0x25 &&
+          head[1] === 0x50 &&
+          head[2] === 0x44 &&
+          head[3] === 0x46
+        if (!isPdf) setPreviewFailed(true)
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [template?.fileName])
 
   const filteredHistory = useMemo(() => {
     let list = history
@@ -192,6 +225,16 @@ export function ImajicaFormsPage() {
   const hasPrimary = !!template?.primaryFields?.length
   const hasAssessment = !!template?.assessmentFields?.length
   const hasMeta = !!template?.metaFields?.length
+  const templateShipped = template ? isShippedFormPdf(template.fileName) : false
+  const previewUrl = template ? `${formPdfUrl(template.fileName)}#view=FitH` : ''
+
+  if (!template) {
+    return (
+      <Card className="p-5">
+        <p className="text-sm text-slate-ui">No form templates are available in this deploy.</p>
+      </Card>
+    )
+  }
 
   return (
     <div className="space-y-5">
@@ -211,7 +254,7 @@ export function ImajicaFormsPage() {
               value={templateId}
               onChange={(e) => setTemplateId(e.target.value)}
             >
-              {IMAJICA_FORM_TEMPLATES.map((t) => (
+              {selectableTemplates.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.label}
                 </option>
@@ -288,18 +331,30 @@ export function ImajicaFormsPage() {
               Template Document Preview
             </p>
             <div className="overflow-hidden rounded-[10px] border border-border bg-[#525659]">
-              <object
-                title="Form template preview"
-                data={`${formPdfUrl(template.fileName)}#view=FitH`}
-                type="application/pdf"
-                className="h-[520px] w-full bg-white"
-              >
-                <iframe
-                  title="Form template preview fallback"
-                  src={`${formPdfUrl(template.fileName)}#view=FitH`}
+              {!templateShipped || previewFailed ? (
+                <div className="flex h-[520px] flex-col items-center justify-center gap-2 bg-white px-6 text-center">
+                  <p className="text-sm font-semibold text-charcoal">{template.label}</p>
+                  <p className="max-w-sm text-xs text-slate-ui">
+                    Template preview is unavailable on this device. Answers and signatures still
+                    generate a final PDF for every clinic.
+                  </p>
+                </div>
+              ) : (
+                <object
+                  title="Form template preview"
+                  data={previewUrl}
+                  type="application/pdf"
                   className="h-[520px] w-full bg-white"
-                />
-              </object>
+                  onError={() => setPreviewFailed(true)}
+                >
+                  <iframe
+                    title="Form template preview fallback"
+                    src={previewUrl}
+                    className="h-[520px] w-full bg-white"
+                    onError={() => setPreviewFailed(true)}
+                  />
+                </object>
+              )}
               <p className="bg-[#3a3d40] px-3 py-2 text-center text-xs text-white/80">
                 Preview:{' '}
                 <a
@@ -311,7 +366,7 @@ export function ImajicaFormsPage() {
                   {template.fileName}
                 </a>
                 {' · '}
-                Generate Final PDF still works if the preview pane fails on this tablet.
+                Generate Final PDF works for all branches even if preview fails.
               </p>
             </div>
           </div>

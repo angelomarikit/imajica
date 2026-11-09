@@ -609,28 +609,95 @@ function wrapText(text: string, maxChars: number): string[] {
   return lines
 }
 
+/** Branded cover page used when a template PDF is missing on the CDN (any clinic). */
+async function buildFallbackTemplatePdf(fileName: string): Promise<ArrayBuffer> {
+  const title = fileName.replace(/\.pdf$/i, '').replace(/[-_]+/g, ' ')
+  const doc = await PDFDocument.create()
+  const font = await doc.embedFont(StandardFonts.Helvetica)
+  const fontBold = await doc.embedFont(StandardFonts.HelveticaBold)
+  const page = doc.addPage([612, 792])
+  const { width, height } = page.getSize()
+  const margin = 48
+  let y = height - margin
+  page.drawText('IMAJICA MEDICAL AESTHETICS', {
+    x: margin,
+    y,
+    size: 14,
+    font: fontBold,
+    color: rgb(0.773, 0.627, 0.349),
+  })
+  y -= 28
+  page.drawText(title.slice(0, 64), {
+    x: margin,
+    y,
+    size: 16,
+    font: fontBold,
+    color: rgb(0.027, 0.239, 0.173),
+  })
+  y -= 22
+  page.drawText('Clinic form packet — answers and signatures follow on the next page.', {
+    x: margin,
+    y,
+    size: 10,
+    font,
+    color: rgb(0.3, 0.35, 0.4),
+  })
+  page.drawLine({
+    start: { x: width * 0.12, y: 110 },
+    end: { x: width * 0.12 + 200, y: 110 },
+    thickness: 0.8,
+    color: rgb(0.7, 0.72, 0.74),
+  })
+  page.drawText('Patient / Client Signature', {
+    x: width * 0.12,
+    y: 96,
+    size: 8,
+    font,
+    color: rgb(0.35, 0.4, 0.45),
+  })
+  page.drawLine({
+    start: { x: width * 0.58, y: 110 },
+    end: { x: width * 0.58 + 160, y: 110 },
+    thickness: 0.8,
+    color: rgb(0.7, 0.72, 0.74),
+  })
+  page.drawText('Date', {
+    x: width * 0.58,
+    y: 96,
+    size: 8,
+    font,
+    color: rgb(0.35, 0.4, 0.45),
+  })
+  const saved = await doc.save()
+  return saved.buffer.slice(saved.byteOffset, saved.byteOffset + saved.byteLength)
+}
+
+function isPdfBytes(bytes: ArrayBuffer) {
+  const head = new Uint8Array(bytes.slice(0, 5))
+  return (
+    head.length >= 4 &&
+    head[0] === 0x25 &&
+    head[1] === 0x50 &&
+    head[2] === 0x44 &&
+    head[3] === 0x46
+  )
+}
+
+/**
+ * Load `/imajica_forms/{file}` for every clinic.
+ * If the static file 404s (missing deploy / new template), fall back to a blank
+ * branded cover so Generate Final PDF never fails on franchise or HQ accounts.
+ */
 async function loadTemplatePdfBytes(fileName: string): Promise<ArrayBuffer> {
   const url = formPdfUrl(fileName)
   const tryFetch = async (cache: RequestCache) => {
     const res = await fetch(url, { cache })
     if (!res.ok) {
-      throw new Error(`Could not load template PDF (${fileName}) — HTTP ${res.status}`)
+      throw new Error(`HTTP ${res.status}`)
     }
-    const contentType = (res.headers.get('content-type') || '').toLowerCase()
     const bytes = await res.arrayBuffer()
-    const head = new Uint8Array(bytes.slice(0, 5))
-    const isPdf =
-      head.length >= 4 &&
-      head[0] === 0x25 &&
-      head[1] === 0x50 &&
-      head[2] === 0x44 &&
-      head[3] === 0x46 // %PDF
-    if (!isPdf) {
-      throw new Error(
-        contentType.includes('html')
-          ? `Template PDF missing on server (${fileName}). Hard-refresh or redeploy so /imajica_forms/ is available.`
-          : `Invalid PDF template (${fileName}). Expected a PDF file, got ${contentType || 'unknown'}.`,
-      )
+    if (!isPdfBytes(bytes)) {
+      throw new Error('not-pdf')
     }
     return bytes
   }
@@ -638,7 +705,16 @@ async function loadTemplatePdfBytes(fileName: string): Promise<ArrayBuffer> {
   try {
     return await tryFetch('force-cache')
   } catch {
-    return tryFetch('reload')
+    try {
+      return await tryFetch('reload')
+    } catch (err) {
+      console.warn(
+        '[forms] template missing, using fallback cover',
+        fileName,
+        err instanceof Error ? err.message : err,
+      )
+      return buildFallbackTemplatePdf(fileName)
+    }
   }
 }
 

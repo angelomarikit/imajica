@@ -49,13 +49,13 @@ import {
   fetchBranchDashboardSalesSummary,
   type BranchDashboardSalesSummary,
 } from '@/services/dashboardSalesSummaryService'
+import { manilaDateKey } from '@/services/attendanceService'
 import {
   clinicRecognizedAmount,
   getBookingRows,
   getSales,
   preloadSalesData,
   subscribeSalesData,
-  todayDateKey,
 } from '@/services/salesService'
 import { getDirectoryStaff } from '@/services/staffDirectoryService'
 import type { Appointment, Client, OperationalExpense, Sale, Staff } from '@/types'
@@ -116,19 +116,27 @@ function birthdayMeta(dob: Date, from: Date) {
   return { daysUntil, age: Math.max(0, age), displayDate }
 }
 
-function monthBounds(d = new Date()): { from: string; to: string } {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const last = new Date(y, d.getMonth() + 1, 0).getDate()
+/** Calendar month bounds from a YYYY-MM-DD key (Manila-aligned). */
+function monthBoundsFromKey(dateKey: string): { from: string; to: string } {
+  const [yRaw, mRaw] = dateKey.split('-')
+  const y = Number(yRaw)
+  const m = Number(mRaw)
+  if (!y || !m) {
+    const fallback = manilaDateKey()
+    return monthBoundsFromKey(fallback)
+  }
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  const mm = String(m).padStart(2, '0')
   return {
-    from: `${y}-${m}-01`,
-    to: `${y}-${m}-${String(last).padStart(2, '0')}`,
+    from: `${y}-${mm}-01`,
+    to: `${y}-${mm}-${String(last).padStart(2, '0')}`,
   }
 }
 
+/** Every clinic starts on Manila month-to-date — never snap to an older sales month. */
 function defaultDashboardRange(): { from: string; to: string } {
-  const today = todayDateKey()
-  const { from } = monthBounds()
+  const today = manilaDateKey()
+  const { from } = monthBoundsFromKey(today)
   return { from, to: today }
 }
 
@@ -138,7 +146,13 @@ function inDateRange(dateKey: string, from: string, to: string) {
 }
 
 function saleDateKey(sale: Sale) {
-  return todayDateKey(new Date(sale.createdAt))
+  return manilaDateKey(new Date(sale.createdAt))
+}
+
+function manilaYesterdayKey(today = manilaDateKey()) {
+  const [y, m, d] = today.split('-').map(Number)
+  const prev = new Date(Date.UTC(y, m - 1, d - 1))
+  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}-${String(prev.getUTCDate()).padStart(2, '0')}`
 }
 
 function formatRangeLabel(from: string, to: string) {
@@ -531,7 +545,6 @@ function BranchOpsDashboard() {
   const [fromDraft, setFromDraft] = useState(initialRange.from)
   const [toDraft, setToDraft] = useState(initialRange.to)
   const [rangeOpen, setRangeOpen] = useState(false)
-  const [rangeBootstrapped, setRangeBootstrapped] = useState(false)
 
   const [sales, setSales] = useState<Sale[]>(() => getSales())
   const [clients, setClients] = useState<Client[]>(() => getClients())
@@ -583,10 +596,10 @@ function BranchOpsDashboard() {
   }, [scopeBranchId])
 
   useEffect(() => {
-    const today = todayDateKey()
-    const fromDate = new Date()
-    fromDate.setDate(fromDate.getDate() - 14)
-    const fromKey = todayDateKey(fromDate)
+    const today = manilaDateKey()
+    const [y, m, d] = today.split('-').map(Number)
+    const fromUtc = new Date(Date.UTC(y, m - 1, d - 14))
+    const fromKey = `${fromUtc.getUTCFullYear()}-${String(fromUtc.getUTCMonth() + 1).padStart(2, '0')}-${String(fromUtc.getUTCDate()).padStart(2, '0')}`
     const scopes = scopeBranchId
       ? [scopeBranchId]
       : [...COMPANY_OWNED_BRANCH_IDS, HQ_CASH_SCOPE]
@@ -605,7 +618,7 @@ function BranchOpsDashboard() {
       branchId: scopeBranchId,
       from: rangeFrom,
       to: rangeTo,
-      today: todayDateKey(),
+      today: manilaDateKey(),
     }).then((summary) => {
       if (!cancelled) setRpcSummary(summary)
     })
@@ -630,7 +643,7 @@ function BranchOpsDashboard() {
   const companyCashScopes = COMPANY_OWNED_BRANCH_IDS
   const showCompanyCashOnHand = hqView && !scopeBranchId
   const cashScope = scopeBranchId ?? 'all'
-  const todayKey = todayDateKey()
+  const todayKey = manilaDateKey()
   const now = useMemo(() => new Date(), [todayKey])
 
   useEffect(() => {
@@ -683,50 +696,6 @@ function BranchOpsDashboard() {
     if (!scopeBranchId) return expenses
     return expenses.filter((e) => !e.branchId || e.branchId === scopeBranchId)
   }, [expenses, scopeBranchId])
-
-  // If current month has no sales yet, snap once to latest sale month (RPC or in-memory).
-  useEffect(() => {
-    if (rangeBootstrapped) return
-    if (rpcSummary && scopeBranchId) {
-      if (rpcSummary.rangeCount > 0 || rpcSummary.rangeSales > 0) {
-        setRangeBootstrapped(true)
-        return
-      }
-      if (rpcSummary.latestSaleDate) {
-        const bounds = monthBounds(new Date(`${rpcSummary.latestSaleDate}T12:00:00`))
-        setRangeFrom(bounds.from)
-        setRangeTo(bounds.to)
-        setFromDraft(bounds.from)
-        setToDraft(bounds.to)
-        setRangeBootstrapped(true)
-        return
-      }
-      setRangeBootstrapped(true)
-      return
-    }
-    if (!scopedSales.length) return
-    const hasInRange = scopedSales.some((s) =>
-      inDateRange(saleDateKey(s), rangeFrom, rangeTo),
-    )
-    if (hasInRange) {
-      setRangeBootstrapped(true)
-      return
-    }
-    const latest = scopedSales.reduce((acc, s) => {
-      const k = saleDateKey(s)
-      return k > acc ? k : acc
-    }, '')
-    if (!latest) {
-      setRangeBootstrapped(true)
-      return
-    }
-    const bounds = monthBounds(new Date(`${latest}T12:00:00`))
-    setRangeFrom(bounds.from)
-    setRangeTo(bounds.to)
-    setFromDraft(bounds.from)
-    setToDraft(bounds.to)
-    setRangeBootstrapped(true)
-  }, [scopedSales, rangeFrom, rangeTo, rangeBootstrapped, rpcSummary, scopeBranchId])
 
   const metrics = useMemo(() => {
     const rangeSales = scopedSales.filter((s) => inDateRange(saleDateKey(s), rangeFrom, rangeTo))
@@ -781,7 +750,7 @@ function BranchOpsDashboard() {
 
     const bookingRows = getBookingRows({ branchId: scopeBranchId })
     const periodBookingRows = bookingRows.filter((r) =>
-      inDateRange(todayDateKey(new Date(r.dateIso)), rangeFrom, rangeTo),
+      inDateRange(manilaDateKey(new Date(r.dateIso)), rangeFrom, rangeTo),
     )
     const completedBookings = useRpc
       ? rpcSummary!.bookings
@@ -856,7 +825,7 @@ function BranchOpsDashboard() {
         .filter((s) => saleDateKey(s) === todayKey)
         .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
       const bookingCount = getBookingRows({ branchId: b.id }).filter((r) =>
-        inDateRange(todayDateKey(new Date(r.dateIso)), rangeFrom, rangeTo),
+        inDateRange(manilaDateKey(new Date(r.dateIso)), rangeFrom, rangeTo),
       ).length
       const apptCount = appointments.filter(
         (a) =>
@@ -900,34 +869,38 @@ function BranchOpsDashboard() {
   }
 
   function applyPreset(kind: 'today' | 'week' | 'month' | 'lastMonth') {
-    const today = new Date()
+    const todayKeyManila = manilaDateKey()
     if (kind === 'today') {
-      const key = todayDateKey(today)
-      setFromDraft(key)
-      setToDraft(key)
-      applyDateRange(key, key)
+      setFromDraft(todayKeyManila)
+      setToDraft(todayKeyManila)
+      applyDateRange(todayKeyManila, todayKeyManila)
       return
     }
     if (kind === 'week') {
-      const start = new Date(today)
-      start.setDate(today.getDate() - ((today.getDay() + 6) % 7))
-      const from = todayDateKey(start)
-      const to = todayDateKey(today)
+      const [y, m, d] = todayKeyManila.split('-').map(Number)
+      const todayUtc = new Date(Date.UTC(y, m - 1, d))
+      const dow = todayUtc.getUTCDay() // 0 Sun … 6 Sat
+      const mondayOffset = (dow + 6) % 7
+      const startUtc = new Date(todayUtc)
+      startUtc.setUTCDate(todayUtc.getUTCDate() - mondayOffset)
+      const from = `${startUtc.getUTCFullYear()}-${String(startUtc.getUTCMonth() + 1).padStart(2, '0')}-${String(startUtc.getUTCDate()).padStart(2, '0')}`
       setFromDraft(from)
-      setToDraft(to)
-      applyDateRange(from, to)
+      setToDraft(todayKeyManila)
+      applyDateRange(from, todayKeyManila)
       return
     }
     if (kind === 'month') {
-      const bounds = monthBounds(today)
-      const to = todayDateKey(today)
+      const bounds = monthBoundsFromKey(todayKeyManila)
       setFromDraft(bounds.from)
-      setToDraft(to)
-      applyDateRange(bounds.from, to)
+      setToDraft(todayKeyManila)
+      applyDateRange(bounds.from, todayKeyManila)
       return
     }
-    const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1)
-    const bounds = monthBounds(prev)
+    const [y, m] = todayKeyManila.split('-').map(Number)
+    const prevMonth = m === 1 ? 12 : m - 1
+    const prevYear = m === 1 ? y - 1 : y
+    const prevKey = `${prevYear}-${String(prevMonth).padStart(2, '0')}-01`
+    const bounds = monthBoundsFromKey(prevKey)
     setFromDraft(bounds.from)
     setToDraft(bounds.to)
     applyDateRange(bounds.from, bounds.to)
@@ -935,9 +908,7 @@ function BranchOpsDashboard() {
 
   const cash = useMemo(() => {
     void cashTick
-    const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    const yKey = todayDateKey(yesterday)
+    const yKey = manilaYesterdayKey(todayKey)
     const companySet = new Set<string>(companyCashScopes)
 
     if (showCompanyCashOnHand) {
@@ -1074,9 +1045,7 @@ function BranchOpsDashboard() {
   }, [scopeBranchId, now])
 
   async function confirmCash() {
-    const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    const yKey = todayDateKey(yesterday)
+    const yKey = manilaYesterdayKey(todayKey)
 
     if (showCompanyCashOnHand) {
       try {
@@ -1137,9 +1106,7 @@ function BranchOpsDashboard() {
   }
 
   function openRecoverCash() {
-    const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    const yKey = todayDateKey(yesterday)
+    const yKey = manilaYesterdayKey(todayKey)
     setRecoverAmounts({
       [BRANCH_IDS.sanMateo]: String(readConfirmedCash(BRANCH_IDS.sanMateo, yKey) ?? ''),
       [BRANCH_IDS.pasig]: String(readConfirmedCash(BRANCH_IDS.pasig, yKey) ?? ''),
@@ -1150,9 +1117,7 @@ function BranchOpsDashboard() {
   }
 
   async function submitRecoverCash() {
-    const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    const yKey = todayDateKey(yesterday)
+    const yKey = manilaYesterdayKey(todayKey)
     const clinics = [
       { branchId: BRANCH_IDS.sanMateo, label: 'San Mateo' },
       { branchId: BRANCH_IDS.pasig, label: 'Pasig' },
