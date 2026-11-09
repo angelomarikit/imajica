@@ -610,7 +610,7 @@ function wrapText(text: string, maxChars: number): string[] {
 }
 
 /** Branded cover page used when a template PDF is missing on the CDN (any clinic). */
-async function buildFallbackTemplatePdf(fileName: string): Promise<ArrayBuffer> {
+async function buildFallbackTemplatePdf(fileName: string): Promise<Uint8Array> {
   const title = fileName.replace(/\.pdf$/i, '').replace(/[-_]+/g, ' ')
   const doc = await PDFDocument.create()
   const font = await doc.embedFont(StandardFonts.Helvetica)
@@ -668,19 +668,27 @@ async function buildFallbackTemplatePdf(fileName: string): Promise<ArrayBuffer> 
     font,
     color: rgb(0.35, 0.4, 0.45),
   })
+  // pdf-lib returns Uint8Array; copy so callers never touch .buffer (SharedArrayBuffer typing).
   const saved = await doc.save()
-  return saved.buffer.slice(saved.byteOffset, saved.byteOffset + saved.byteLength)
+  return Uint8Array.from(saved)
 }
 
-function isPdfBytes(bytes: ArrayBuffer) {
-  const head = new Uint8Array(bytes.slice(0, 5))
+function isPdfBytes(bytes: Uint8Array) {
   return (
-    head.length >= 4 &&
-    head[0] === 0x25 &&
-    head[1] === 0x50 &&
-    head[2] === 0x44 &&
-    head[3] === 0x46
+    bytes.length >= 4 &&
+    bytes[0] === 0x25 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x44 &&
+    bytes[3] === 0x46
   )
+}
+
+function toOwnedBytes(buffer: ArrayBuffer): Uint8Array {
+  // Cast avoids TS ArrayBuffer | SharedArrayBuffer overload conflicts across lib versions.
+  const src = new Uint8Array(buffer as ArrayBuffer)
+  const copy = new Uint8Array(src.byteLength)
+  copy.set(src)
+  return copy
 }
 
 /**
@@ -688,14 +696,14 @@ function isPdfBytes(bytes: ArrayBuffer) {
  * If the static file 404s (missing deploy / new template), fall back to a blank
  * branded cover so Generate Final PDF never fails on franchise or HQ accounts.
  */
-async function loadTemplatePdfBytes(fileName: string): Promise<ArrayBuffer> {
+async function loadTemplatePdfBytes(fileName: string): Promise<Uint8Array> {
   const url = formPdfUrl(fileName)
   const tryFetch = async (cache: RequestCache) => {
     const res = await fetch(url, { cache })
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`)
     }
-    const bytes = await res.arrayBuffer()
+    const bytes = toOwnedBytes(await res.arrayBuffer())
     if (!isPdfBytes(bytes)) {
       throw new Error('not-pdf')
     }

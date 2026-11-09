@@ -99,13 +99,16 @@ export function ImajicaFormsPage() {
           setPreviewFailed(true)
           return
         }
-        const head = new Uint8Array(await res.arrayBuffer().then((b) => b.slice(0, 5)))
+        // Cast + copy avoids TS ArrayBuffer/SharedArrayBuffer overload conflicts.
+        const src = new Uint8Array((await res.arrayBuffer()) as ArrayBuffer)
+        const bytes = new Uint8Array(src.byteLength)
+        bytes.set(src)
         const isPdf =
-          head.length >= 4 &&
-          head[0] === 0x25 &&
-          head[1] === 0x50 &&
-          head[2] === 0x44 &&
-          head[3] === 0x46
+          bytes.length >= 4 &&
+          bytes[0] === 0x25 &&
+          bytes[1] === 0x50 &&
+          bytes[2] === 0x44 &&
+          bytes[3] === 0x46
         if (!isPdf) setPreviewFailed(true)
       })
       .catch(() => {
