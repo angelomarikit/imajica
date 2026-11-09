@@ -31,9 +31,14 @@ import {
 import { getClients, preloadClientsFromSupabase, subscribeClients } from '@/services/clientService'
 import { BRANCH_IDS, COMPANY_OWNED_BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import {
+  CASH_DAY_CUTOVER_HOUR_MANILA,
   HQ_CASH_SCOPE,
+  cashBusinessDateKey,
+  cashBusinessDateKeyForInstant,
+  cashPriorBusinessDateKey,
   migrateLocalCashDrawerToSupabase,
   preloadCashDrawer,
+  readCashBeginning,
   readCompanyCashBeginning,
   readCompanyConfirmedToday,
   readCompanyManualCashDeducted,
@@ -150,11 +155,6 @@ function saleDateKey(sale: Sale) {
   return manilaDateKey(new Date(sale.createdAt))
 }
 
-function manilaYesterdayKey(today = manilaDateKey()) {
-  const [y, m, d] = today.split('-').map(Number)
-  const prev = new Date(Date.UTC(y, m - 1, d - 1))
-  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}-${String(prev.getUTCDate()).padStart(2, '0')}`
-}
 
 function formatRangeLabel(from: string, to: string) {
   const fmt = (key: string) =>
@@ -717,17 +717,24 @@ function BranchOpsDashboard() {
   }, [scopeBranchId])
 
   useEffect(() => {
-    const today = manilaDateKey()
-    const [y, m, d] = today.split('-').map(Number)
+    const cashDay = cashBusinessDateKey()
+    const prior = cashPriorBusinessDateKey(cashDay)
+    const [y, m, d] = prior.split('-').map(Number)
     const fromUtc = new Date(Date.UTC(y, m - 1, d - 14))
     const fromKey = `${fromUtc.getUTCFullYear()}-${String(fromUtc.getUTCMonth() + 1).padStart(2, '0')}-${String(fromUtc.getUTCDate()).padStart(2, '0')}`
     const scopes = scopeBranchId
       ? [scopeBranchId]
       : [...COMPANY_OWNED_BRANCH_IDS, HQ_CASH_SCOPE]
-    void preloadCashDrawer({ scopes, from: fromKey, to: today })
+    void preloadCashDrawer({ scopes, from: fromKey, to: cashDay })
       .then(() => migrateLocalCashDrawerToSupabase())
       .then(() => setCashTick((n) => n + 1))
   }, [scopeBranchId])
+
+  // Refresh Cash on Hand when the 8:00 AM Manila business day flips.
+  useEffect(() => {
+    const id = window.setInterval(() => setCashTick((n) => n + 1), 30_000)
+    return () => window.clearInterval(id)
+  }, [])
 
   useEffect(() => {
     if (!scopeBranchId) {
@@ -1050,23 +1057,32 @@ function BranchOpsDashboard() {
 
   const cash = useMemo(() => {
     void cashTick
-    const yKey = manilaYesterdayKey(todayKey)
+    // Business day (8:00 AM Manila cutover) — Ending today becomes Beginning tomorrow at 8 AM.
+    const cashDay = cashBusinessDateKey()
+    const priorCashDay = cashPriorBusinessDateKey(cashDay)
     const companySet = new Set<string>(companyCashScopes)
 
     if (showCompanyCashOnHand) {
-      const beginning = readCompanyCashBeginning(companyCashScopes, yKey)
-      const manualDeducted = readCompanyManualCashDeducted(companyCashScopes, todayKey)
+      const beginning = readCompanyCashBeginning(companyCashScopes, priorCashDay)
+      const manualDeducted = readCompanyManualCashDeducted(companyCashScopes, cashDay)
       const memorySales = sales
         .filter((s) => {
           const branchId = s.branchId
-          return saleDateKey(s) === todayKey && branchId != null && companySet.has(branchId)
+          return (
+            cashBusinessDateKeyForInstant(s.createdAt) === cashDay &&
+            branchId != null &&
+            companySet.has(branchId)
+          )
         })
         .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
+      // RPC is calendar-day; prefer memory when still before 8 AM cutover vs calendar today.
       const todaySalesTotal =
-        companyTodaySalesRpc != null ? companyTodaySalesRpc : memorySales
+        cashDay === todayKey && companyTodaySalesRpc != null
+          ? companyTodaySalesRpc
+          : memorySales
       const expenseCashOut = expenses
         .filter((e) => {
-          if (e.expenseDate !== todayKey || e.status !== 'active' || !e.deductCash) return false
+          if (e.expenseDate !== cashDay || e.status !== 'active' || !e.deductCash) return false
           const branchId = e.branchId
           return branchId != null && companySet.has(branchId)
         })
@@ -1075,7 +1091,7 @@ function BranchOpsDashboard() {
       const ending = beginning + todaySalesTotal - deducted
       const confirmedToday = readCompanyConfirmedToday(
         companyCashScopes,
-        todayKey,
+        cashDay,
         ending,
       )
       return {
@@ -1085,31 +1101,30 @@ function BranchOpsDashboard() {
         expenseCashOut,
         manualDeducted,
         confirmedToday,
+        cashDay,
+        priorCashDay,
         companyCombined: true as const,
       }
     }
 
-    const beginning = readConfirmedCash(cashScope, yKey) ?? 0
-    const manualDeducted = readManualCashDeducted(cashScope, todayKey)
-    // Cash drawer is always today's ops — not the selected reporting range.
+    const beginning = readCashBeginning(cashScope, cashDay)
+    const manualDeducted = readManualCashDeducted(cashScope, cashDay)
+    const daySalesLines = scopedSales.filter(
+      (s) => cashBusinessDateKeyForInstant(s.createdAt) === cashDay,
+    )
+    // Prefer live sales for the cash business day (not the reporting date range).
     const todaySalesTotal =
-      scopeBranchId && rpcSummary
+      cashDay === todayKey && scopeBranchId && rpcSummary
         ? rpcSummary.todaySales
-        : scopedSales
-            .filter((s) => saleDateKey(s) === todayKey)
-            .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
-    // Only expenses marked "Deduct cash" reduce the drawer (reporting expenses do not).
+        : daySalesLines.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
     const expenseCashOut = scopedExpenses
       .filter(
-        (e) =>
-          e.expenseDate === todayKey &&
-          e.status === 'active' &&
-          e.deductCash,
+        (e) => e.expenseDate === cashDay && e.status === 'active' && e.deductCash,
       )
       .reduce((n, e) => n + (e.amount || 0), 0)
     const deducted = expenseCashOut + manualDeducted
     const ending = beginning + todaySalesTotal - deducted
-    const confirmedToday = readConfirmedCash(cashScope, todayKey)
+    const confirmedToday = readConfirmedCash(cashScope, cashDay)
     return {
       beginning,
       ending,
@@ -1117,6 +1132,8 @@ function BranchOpsDashboard() {
       expenseCashOut,
       manualDeducted,
       confirmedToday,
+      cashDay,
+      priorCashDay,
       companyCombined: false as const,
     }
   }, [
@@ -1187,43 +1204,56 @@ function BranchOpsDashboard() {
   }, [scopeBranchId, now])
 
   async function confirmCash() {
-    const yKey = manilaYesterdayKey(todayKey)
+    const cashDay = cash.cashDay
+    const priorCashDay = cash.priorCashDay
 
     if (showCompanyCashOnHand) {
       try {
         // Always persist HQ combined row (source of truth across devices).
-        await writeConfirmedCash(HQ_CASH_SCOPE, todayKey, cash.ending)
+        await writeConfirmedCash(HQ_CASH_SCOPE, cashDay, cash.ending)
         const clinicsHaveCarry =
-          companyCashScopes.some((id) => readConfirmedCash(id, yKey) != null)
+          companyCashScopes.some((id) => readConfirmedCash(id, priorCashDay) != null)
         // Only write per-clinic rows when those clinics already have drawer history —
         // otherwise clinic zeros would override the combined `all` beginning tomorrow.
         if (clinicsHaveCarry) {
           await Promise.all(
             companyCashScopes.map(async (branchId) => {
-              const beginning = readConfirmedCash(branchId, yKey) ?? 0
-              const manualDeducted = readManualCashDeducted(branchId, todayKey)
+              const beginning = readCashBeginning(branchId, cashDay)
+              const manualDeducted = readManualCashDeducted(branchId, cashDay)
               const todaySales =
-                companyTodayByBranch[branchId] ??
-                sales
-                  .filter((s) => saleDateKey(s) === todayKey && s.branchId === branchId)
-                  .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
+                cashDay === todayKey
+                  ? (companyTodayByBranch[branchId] ??
+                    sales
+                      .filter(
+                        (s) =>
+                          cashBusinessDateKeyForInstant(s.createdAt) === cashDay &&
+                          s.branchId === branchId,
+                      )
+                      .reduce((n, s) => n + clinicRecognizedAmount(s), 0))
+                  : sales
+                      .filter(
+                        (s) =>
+                          cashBusinessDateKeyForInstant(s.createdAt) === cashDay &&
+                          s.branchId === branchId,
+                      )
+                      .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
               const expenseCashOut = expenses
                 .filter(
                   (e) =>
-                    e.expenseDate === todayKey &&
+                    e.expenseDate === cashDay &&
                     e.status === 'active' &&
                     e.deductCash &&
                     e.branchId === branchId,
                 )
                 .reduce((n, e) => n + (e.amount || 0), 0)
               const ending = beginning + todaySales - expenseCashOut - manualDeducted
-              await writeConfirmedCash(branchId, todayKey, ending)
+              await writeConfirmedCash(branchId, cashDay, ending)
             }),
           )
         }
         setCashTick((n) => n + 1)
         toast.success('Cash on hand confirmed', {
-          description: `Combined ending ${formatPesoExact(cash.ending)} saved to Supabase for San Mateo, Pasig, Cainta, and Lipa (${todayKey}).`,
+          description: `Ending ${formatPesoExact(cash.ending)} saved for ${cashDay}. Becomes Beginning after ${CASH_DAY_CUTOVER_HOUR_MANILA}:00 AM Manila.`,
         })
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Could not save cash on hand')
@@ -1232,10 +1262,10 @@ function BranchOpsDashboard() {
     }
 
     try {
-      await writeConfirmedCash(cashScope, todayKey, cash.ending)
+      await writeConfirmedCash(cashScope, cashDay, cash.ending)
       setCashTick((n) => n + 1)
       toast.success('Cash on hand confirmed', {
-        description: `Ending balance ${formatPesoExact(cash.ending)} saved to Supabase for ${todayKey}.`,
+        description: `Ending ${formatPesoExact(cash.ending)} saved for ${cashDay}. Becomes Beginning after ${CASH_DAY_CUTOVER_HOUR_MANILA}:00 AM Manila.`,
       })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save cash on hand')
@@ -1248,18 +1278,18 @@ function BranchOpsDashboard() {
   }
 
   function openRecoverCash() {
-    const yKey = manilaYesterdayKey(todayKey)
+    const priorCashDay = cash.priorCashDay
     setRecoverAmounts({
-      [BRANCH_IDS.sanMateo]: String(readConfirmedCash(BRANCH_IDS.sanMateo, yKey) ?? ''),
-      [BRANCH_IDS.pasig]: String(readConfirmedCash(BRANCH_IDS.pasig, yKey) ?? ''),
-      [BRANCH_IDS.cainta]: String(readConfirmedCash(BRANCH_IDS.cainta, yKey) ?? ''),
-      [BRANCH_IDS.lipa]: String(readConfirmedCash(BRANCH_IDS.lipa, yKey) ?? ''),
+      [BRANCH_IDS.sanMateo]: String(readConfirmedCash(BRANCH_IDS.sanMateo, priorCashDay) ?? ''),
+      [BRANCH_IDS.pasig]: String(readConfirmedCash(BRANCH_IDS.pasig, priorCashDay) ?? ''),
+      [BRANCH_IDS.cainta]: String(readConfirmedCash(BRANCH_IDS.cainta, priorCashDay) ?? ''),
+      [BRANCH_IDS.lipa]: String(readConfirmedCash(BRANCH_IDS.lipa, priorCashDay) ?? ''),
     })
     setRecoverOpen(true)
   }
 
   async function submitRecoverCash() {
-    const yKey = manilaYesterdayKey(todayKey)
+    const priorCashDay = cash.priorCashDay
     const clinics = [
       { branchId: BRANCH_IDS.sanMateo, label: 'San Mateo' },
       { branchId: BRANCH_IDS.pasig, label: 'Pasig' },
@@ -1275,11 +1305,11 @@ function BranchOpsDashboard() {
     }
     setRecoverSaving(true)
     try {
-      const total = await recoverCompanyCashOnHand({ dateKey: yKey, clinics })
+      const total = await recoverCompanyCashOnHand({ dateKey: priorCashDay, clinics })
       setCashTick((n) => n + 1)
       setRecoverOpen(false)
       toast.success('Cash on hand recovered', {
-        description: `Saved ${formatPesoExact(total)} to Supabase as yesterday’s beginning for the 4 company clinics.`,
+        description: `Saved ${formatPesoExact(total)} as prior-day ending (today’s Beginning) for the 4 company clinics.`,
       })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not recover cash on hand')
@@ -1302,8 +1332,9 @@ function BranchOpsDashboard() {
     try {
       const nextManual = cash.manualDeducted + amount
       const scope = showCompanyCashOnHand ? HQ_CASH_SCOPE : cashScope
-      await writeManualCashDeducted(scope, todayKey, nextManual)
-      await writeConfirmedCash(scope, todayKey, cash.ending - amount)
+      const cashDay = cash.cashDay
+      await writeManualCashDeducted(scope, cashDay, nextManual)
+      await writeConfirmedCash(scope, cashDay, cash.ending - amount)
       setCashTick((n) => n + 1)
       setDeductOpen(false)
       setDeductAmount('')
@@ -1700,27 +1731,30 @@ function BranchOpsDashboard() {
             </p>
           ) : null}
           <p className="mt-2 text-[11px] text-slate-500">
-            Ending = beginning + daily clinic sales − cash expenses. Doctor&apos;s procedures
-            count at clinic net.
+            Beginning = prior day&apos;s confirmed Ending (rolls over at{' '}
+            {CASH_DAY_CUTOVER_HOUR_MANILA}:00 AM Manila). Ending = beginning + today&apos;s sales −
+            cash out.
             {cash.expenseCashOut > 0
               ? ` Expenses (${formatPesoExact(cash.expenseCashOut)})`
               : ''}
             {cash.manualDeducted > 0
               ? ` − manual deductions (${formatPesoExact(cash.manualDeducted)})`
               : ''}
-            {cash.confirmedToday != null ? ' · confirmed' : ''}.
+            {cash.confirmedToday != null
+              ? ' · confirmed for tonight’s carryover'
+              : ' · tap Confirm Cash at end of shift so Ending becomes tomorrow’s Beginning'}
+            .
           </p>
           <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
-            {branchOwner ? (
-              <Button type="button" variant="gold" className="rounded-xl" onClick={openDeductCash}>
+            <Button type="button" variant="gold" className="rounded-xl" onClick={() => void confirmCash()}>
+              Confirm Cash
+            </Button>
+            {(branchOwner || hqView) ? (
+              <Button type="button" variant="secondary" className="rounded-xl" onClick={openDeductCash}>
                 <Minus className="mr-1.5 h-3.5 w-3.5" />
                 Deduct Cash
               </Button>
-            ) : (
-              <Button type="button" variant="gold" className="rounded-xl" onClick={confirmCash}>
-                Confirm Cash
-              </Button>
-            )}
+            ) : null}
             {cash.companyCombined ? (
               <Button
                 type="button"

@@ -11,6 +11,67 @@ const MIGRATED_FLAG = 'imajica_cash_drawer_migrated_v1'
 /** Legacy HQ Cash Flow Snapshot / Cash on Hand combined scope. */
 export const HQ_CASH_SCOPE = 'all'
 
+/**
+ * Cash drawer business day flips at 08:00 Asia/Manila.
+ * Ending confirmed for day D becomes Beginning on day D+1 at 8:00 AM.
+ */
+export const CASH_DAY_CUTOVER_HOUR_MANILA = 8
+
+function manilaParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(now)
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? '0'
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hour: Number(get('hour')),
+  }
+}
+
+function formatDateKey(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+function shiftDateKey(dateKey: string, deltaDays: number) {
+  const [y, m, d] = dateKey.split('-').map(Number)
+  const utc = new Date(Date.UTC(y, m - 1, d + deltaDays))
+  return formatDateKey(utc.getUTCFullYear(), utc.getUTCMonth() + 1, utc.getUTCDate())
+}
+
+/** Current cash business date (before 8:00 AM Manila = previous calendar day). */
+export function cashBusinessDateKey(now = new Date()): string {
+  const { year, month, day, hour } = manilaParts(now)
+  const calendar = formatDateKey(year, month, day)
+  if (hour < CASH_DAY_CUTOVER_HOUR_MANILA) return shiftDateKey(calendar, -1)
+  return calendar
+}
+
+/** Prior cash business date — source of Beginning (yesterday’s Ending). */
+export function cashPriorBusinessDateKey(businessDay = cashBusinessDateKey()): string {
+  return shiftDateKey(businessDay, -1)
+}
+
+/** Which cash business day a sale/expense timestamp belongs to. */
+export function cashBusinessDateKeyForInstant(isoOrDate: string | Date): string {
+  return cashBusinessDateKey(typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate)
+}
+
+/**
+ * Beginning cash for a business day = confirmed Ending of the prior business day.
+ * Missing confirm → ₱0 (e.g. after depositing all cash to the owner).
+ */
+export function readCashBeginning(scope: string, businessDay: string): number {
+  return readConfirmedCash(scope, cashPriorBusinessDateKey(businessDay)) ?? 0
+}
+
 type CashDrawerRow = {
   scope: string
   branchId: string | null
