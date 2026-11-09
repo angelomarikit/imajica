@@ -7,9 +7,9 @@ import {
   Gift,
   Minus,
   Package,
-  Plus,
   Receipt,
   Sparkles,
+  Stethoscope,
   TrendingUp,
   Users,
   Wallet,
@@ -55,15 +55,16 @@ import {
   getBookingRows,
   getSales,
   preloadSalesData,
+  saleGrossAmount,
   subscribeSalesData,
+  summarizeDoctorCommissionsByDoctor,
+  type DoctorCommissionSummaryRow,
 } from '@/services/salesService'
 import { getDirectoryStaff } from '@/services/staffDirectoryService'
 import type { Appointment, Client, OperationalExpense, Sale, Staff } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import { isBranchOwner, isHqRole, isOperationsManagerRole } from '@/utils/franchiseAccess'
-
-const COMMISSION_RATE = 0.05
 
 type BirthdayCard = {
   id: string
@@ -274,10 +275,24 @@ type SalesBreakdownView = {
   subtitle: string
   sales: Sale[]
   branchLabel: string
+  /** Gross = customer-paid total; clinic = dashboard-recognized (net of doctor fee). */
+  amountMode?: 'gross' | 'clinic'
 }
 
-function buildSalesBrief(sales: Sale[]) {
-  const total = sales.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
+type DoctorFeeBreakdownView = {
+  title: string
+  subtitle: string
+  branchLabel: string
+  totalFee: number
+  rows: DoctorCommissionSummaryRow[]
+}
+
+function lineAmount(sale: Sale, mode: 'gross' | 'clinic') {
+  return mode === 'gross' ? saleGrossAmount(sale) : clinicRecognizedAmount(sale)
+}
+
+function buildSalesBrief(sales: Sale[], amountMode: 'gross' | 'clinic' = 'clinic') {
+  const total = sales.reduce((n, s) => n + lineAmount(s, amountMode), 0)
   const byType = {
     service: 0,
     package: 0,
@@ -289,7 +304,7 @@ function buildSalesBrief(sales: Sale[]) {
   const bookings = new Set<string>()
 
   for (const s of sales) {
-    const amount = clinicRecognizedAmount(s)
+    const amount = lineAmount(s, amountMode)
     const type = s.itemType === 'package' || s.itemType === 'product' ? s.itemType : 'service'
     byType[type] += amount
     const pay = (s.paymentMethod || 'other').replaceAll('_', ' ')
@@ -330,7 +345,8 @@ function SalesBreakdownModal({
   onClose: () => void
 }) {
   if (!open || !view) return null
-  const brief = buildSalesBrief(view.sales)
+  const amountMode = view.amountMode ?? 'clinic'
+  const brief = buildSalesBrief(view.sales, amountMode)
   const maxType = Math.max(brief.byType.service, brief.byType.package, brief.byType.product, 1)
   const typeRows = [
     { key: 'service', label: 'Services', amount: brief.byType.service, tone: 'from-[#0A2E26] to-[#1a5c4a]' },
@@ -361,6 +377,11 @@ function SalesBreakdownModal({
               <h3 className="mt-3 text-xl font-semibold tracking-tight sm:text-2xl">{view.title}</h3>
               <p className="mt-2 text-sm leading-relaxed text-white/65">{view.subtitle}</p>
               <p className="mt-1.5 text-xs font-medium text-[#C5A059]">{view.branchLabel}</p>
+              {amountMode === 'gross' ? (
+                <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-[#F3E6C8]/80">
+                  Gross sales · no commission deducted
+                </p>
+              ) : null}
             </div>
             <button
               type="button"
@@ -475,6 +496,105 @@ function SalesBreakdownModal({
   )
 }
 
+function DoctorFeeBreakdownModal({
+  open,
+  view,
+  onClose,
+}: {
+  open: boolean
+  view: DoctorFeeBreakdownView | null
+  onClose: () => void
+}) {
+  if (!open || !view) return null
+  const maxFee = Math.max(...view.rows.map((r) => r.fee), 1)
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-end justify-center p-3 sm:items-center sm:p-6">
+      <button
+        type="button"
+        className="absolute inset-0 bg-[#041c18]/55 backdrop-blur-[2px]"
+        aria-label="Close medical procedure breakdown"
+        onClick={onClose}
+      />
+      <div className="relative z-10 flex max-h-[min(92vh,52rem)] w-full max-w-2xl flex-col overflow-hidden rounded-[1.5rem] border border-white/10 bg-[#FBF8F2] shadow-[0_28px_80px_rgba(4,28,24,0.45)]">
+        <div className="relative shrink-0 overflow-hidden bg-[#05281F] px-6 py-6 text-white sm:px-8 sm:py-7">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -right-8 -top-10 h-36 w-36 rounded-full bg-[radial-gradient(circle,rgba(197,160,89,0.35)_0%,transparent_70%)]"
+          />
+          <div className="relative flex items-start justify-between gap-4">
+            <div className="min-w-0 pr-2">
+              <p className="inline-flex items-center gap-1.5 rounded-full bg-[#C5A059]/20 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[#F3E6C8]">
+                <Stethoscope className="h-3 w-3 text-[#C5A059]" />
+                Medical procedure
+              </p>
+              <h3 className="mt-3 text-xl font-semibold tracking-tight sm:text-2xl">{view.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-white/65">{view.subtitle}</p>
+              <p className="mt-1.5 text-xs font-medium text-[#C5A059]">{view.branchLabel}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-full border border-white/15 bg-white/10 p-2.5 text-white hover:bg-white/15"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <p className="relative mt-6 font-metric text-[2.15rem] font-semibold leading-none tracking-tight sm:text-[2.35rem]">
+            {formatPesoExact(view.totalFee)}
+          </p>
+          <p className="relative mt-2 text-xs text-white/65">
+            Total doctor commission in this range · {view.rows.length} doctor
+            {view.rows.length === 1 ? '' : 's'}
+          </p>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-6 sm:px-8 sm:py-7">
+          {view.rows.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500">
+              No medical procedure commissions in this date range.
+            </div>
+          ) : (
+            <ul className="space-y-4">
+              {view.rows.map((row) => (
+                <li
+                  key={row.doctorName}
+                  className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">{row.doctorName}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        {row.procedures} procedure{row.procedures === 1 ? '' : 's'} · {row.ratePercent}%
+                        fee · service {formatPesoExact(row.serviceTotal)}
+                      </p>
+                    </div>
+                    <p className="shrink-0 font-metric text-base font-semibold text-slate-900">
+                      {formatPesoExact(row.fee)}
+                    </p>
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-[#0A2E26] to-[#C5A059]"
+                      style={{ width: `${Math.round((row.fee / maxFee) * 100)}%` }}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-6 flex justify-end">
+            <Button type="button" variant="gold" className="rounded-xl" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function BirthdayPersonCard({ item }: { item: BirthdayCard }) {
   return (
     <div className="flex min-w-[240px] max-w-[280px] shrink-0 items-start gap-3 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
@@ -552,6 +672,7 @@ function BranchOpsDashboard() {
   const [expenses, setExpenses] = useState<OperationalExpense[]>(() => getExpenses())
   const [cashTick, setCashTick] = useState(0)
   const [breakdown, setBreakdown] = useState<SalesBreakdownView | null>(null)
+  const [doctorBreakdown, setDoctorBreakdown] = useState<DoctorFeeBreakdownView | null>(null)
   const [deductOpen, setDeductOpen] = useState(false)
   const [deductAmount, setDeductAmount] = useState('')
   const [deductSaving, setDeductSaving] = useState(false)
@@ -635,8 +756,24 @@ function BranchOpsDashboard() {
     return 'All Branches'
   }, [forcedBranchId, branchOwner, user?.branchName, scopeBranchId, branches])
 
-  function openSalesBreakdown(title: string, subtitle: string, lines: Sale[]) {
-    setBreakdown({ title, subtitle, sales: lines, branchLabel })
+  function openSalesBreakdown(
+    title: string,
+    subtitle: string,
+    lines: Sale[],
+    amountMode: 'gross' | 'clinic' = 'clinic',
+  ) {
+    setDoctorBreakdown(null)
+    setBreakdown({ title, subtitle, sales: lines, branchLabel, amountMode })
+  }
+
+  function openDoctorFeeBreakdown(
+    title: string,
+    subtitle: string,
+    rows: DoctorCommissionSummaryRow[],
+    totalFee: number,
+  ) {
+    setBreakdown(null)
+    setDoctorBreakdown({ title, subtitle, branchLabel, rows, totalFee })
   }
 
   /** HQ All Branches = San Mateo + Pasig + Cainta + Lipa combined. Single clinic = that drawer. */
@@ -770,12 +907,15 @@ function BranchOpsDashboard() {
     const patientsInRange = useRpc
       ? rpcSummary!.patients
       : patientIds.size || rangeAppts.length
-    const commissions = periodSalesTotal * COMMISSION_RATE
     const isSingleDay = rangeFrom === rangeTo
     const includesToday = inDateRange(todayKey, rangeFrom, rangeTo)
     const paymentsCount = useRpc
       ? rpcSummary!.rangeCount
       : rangeSales.length || rangeAppts.length
+
+    /** Gross customer-paid sales in range — no doctor fee deducted. */
+    const actualSales = rangeSales.reduce((n, s) => n + saleGrossAmount(s), 0)
+    const doctorSummary = summarizeDoctorCommissionsByDoctor(rangeSales)
 
     return {
       completedBookings: completedBookings || periodBookingRows.length,
@@ -787,12 +927,14 @@ function BranchOpsDashboard() {
       todaySales: dailySales,
       dailySales: includesToday ? dailySales : periodSalesTotal,
       periodSales: periodSalesTotal,
+      actualSales,
+      medicalProcedureCommission: doctorSummary.totalFee,
+      doctorCommissionRows: doctorSummary.byDoctor,
       monthlySales,
       monthlyLabel,
       rangeSalesLines: rangeSales,
       todaySalesLines: todaySales,
       monthSalesLines,
-      commissions,
       todayExpenses: includesToday && isSingleDay ? todayExpenseTotal : rangeExpenseTotal,
       rangeExpenseTotal,
       todayExpenseTotal,
@@ -1176,16 +1318,15 @@ function BranchOpsDashboard() {
   }
 
   const rangeLabel = formatRangeLabel(rangeFrom, rangeTo)
-  const periodSalesHint =
-    metrics.isSingleDay
-      ? `Sales for ${rangeLabel}.`
-      : `Sales across ${metrics.daySpan} days (${rangeLabel}).`
+  const actualSalesHint = metrics.isSingleDay
+    ? `Gross sales for ${rangeLabel} (no commissions deducted).`
+    : `Gross sales across ${metrics.daySpan} days (${rangeLabel}) — no commissions deducted.`
+  const medicalProcedureHint = metrics.isSingleDay
+    ? `Doctor commissions for medical procedures on ${rangeLabel}.`
+    : `Doctor commissions for medical procedures in ${rangeLabel}.`
   const patientsHint = metrics.isSingleDay
     ? "Clients scheduled for today's services."
     : 'Unique clients with bookings or sales in the selected range.'
-  const expensesHint = metrics.isSingleDay
-    ? 'Expenses captured for the selected day.'
-    : 'Expenses captured in the selected range.'
 
   return (
     <div className="-mx-1 space-y-6 sm:mx-0">
@@ -1193,6 +1334,11 @@ function BranchOpsDashboard() {
         open={Boolean(breakdown)}
         view={breakdown}
         onClose={() => setBreakdown(null)}
+      />
+      <DoctorFeeBreakdownModal
+        open={Boolean(doctorBreakdown)}
+        view={doctorBreakdown}
+        onClose={() => setDoctorBreakdown(null)}
       />
 
       <Dialog
@@ -1456,14 +1602,19 @@ function BranchOpsDashboard() {
           }
         />
         <StatCard
-          title="Range Sales"
-          value={formatPesoExact(metrics.periodSales)}
-          hint={periodSalesHint}
-          tag="Range"
+          title="Medical Procedure"
+          value={formatPesoExact(metrics.medicalProcedureCommission)}
+          hint={medicalProcedureHint}
+          tag="Doctors"
           tagTone="amber"
-          icon={<TrendingUp className="h-4 w-4" />}
+          icon={<Stethoscope className="h-4 w-4" />}
           onClick={() =>
-            openSalesBreakdown('Range Sales', periodSalesHint, metrics.rangeSalesLines)
+            openDoctorFeeBreakdown(
+              'Medical Procedure',
+              medicalProcedureHint,
+              metrics.doctorCommissionRows,
+              metrics.medicalProcedureCommission,
+            )
           }
         />
       </div>
@@ -1500,40 +1651,22 @@ function BranchOpsDashboard() {
             )
           }
         />
-        {branchOwner ? (
-          <StatCard
-            title={metrics.isSingleDay ? "Today's Expenses" : 'Period Expenses'}
-            value={formatPesoExact(metrics.todayExpenses)}
-            hint={expensesHint}
-            tag="Costs"
-            tagTone="rose"
-            icon={<Receipt className="h-4 w-4" />}
-            action={
-              <Link
-                to="/admin/operations/expenses"
-                className="text-xs font-semibold text-emerald-800 hover:underline"
-              >
-                Log expense
-              </Link>
-            }
-          />
-        ) : (
-          <StatCard
-            title="Total Commissions"
-            value={formatPesoExact(metrics.commissions)}
-            hint={`Estimated staff fees (${Math.round(COMMISSION_RATE * 100)}% of range sales).`}
-            tag="Fees"
-            tagTone="rose"
-            action={
-              <Link
-                to="/admin/staff/sales"
-                className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-rose-700"
-              >
-                <Plus className="h-3 w-3" /> Details
-              </Link>
-            }
-          />
-        )}
+        <StatCard
+          title="Actual Sales"
+          value={formatPesoExact(metrics.actualSales)}
+          hint={actualSalesHint}
+          tag="Gross"
+          tagTone="emerald"
+          icon={<Receipt className="h-4 w-4" />}
+          onClick={() =>
+            openSalesBreakdown(
+              'Actual Sales',
+              actualSalesHint,
+              metrics.rangeSalesLines,
+              'gross',
+            )
+          }
+        />
         <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
           <div className="flex items-center gap-2.5">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-50 text-[#0A2E26] ring-1 ring-slate-200/80">

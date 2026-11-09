@@ -1352,14 +1352,19 @@ export function listDoctorFees(opts?: {
   branchId?: string
   from?: string
   to?: string
+  /** When set, only these sale rows are considered (already branch/date filtered). */
+  sales?: Sale[]
 }): DoctorFeeRow[] {
+  const source = opts?.sales ?? getSales()
   const byHeader = new Map<string, Sale[]>()
-  for (const s of getSales()) {
+  for (const s of source) {
     if (!s.isDoctorsProcedure) continue
     if (opts?.branchId && s.branchId !== opts.branchId) continue
-    const day = localDateKey(s.createdAt)
-    if (opts?.from && day < opts.from) continue
-    if (opts?.to && day > opts.to) continue
+    if (!opts?.sales) {
+      const day = manilaDateKey(new Date(s.createdAt))
+      if (opts?.from && day < opts.from) continue
+      if (opts?.to && day > opts.to) continue
+    }
     const headerId = saleHeaderId(s.id)
     const list = byHeader.get(headerId) ?? []
     list.push(s)
@@ -1398,6 +1403,48 @@ export function listDoctorFees(opts?: {
   }
 
   return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+export type DoctorCommissionSummaryRow = {
+  doctorName: string
+  fee: number
+  procedures: number
+  serviceTotal: number
+  ratePercent: number
+}
+
+/** Aggregate doctor's-procedure commissions by doctor for dashboard cards. */
+export function summarizeDoctorCommissionsByDoctor(sales: Sale[]): {
+  totalFee: number
+  totalService: number
+  byDoctor: DoctorCommissionSummaryRow[]
+} {
+  const rows = listDoctorFees({ sales })
+  const map = new Map<string, DoctorCommissionSummaryRow>()
+  for (const row of rows) {
+    const key = row.doctorName.trim().toLowerCase() || '—'
+    const ratePercent = Math.round(doctorFeeRateForName(row.doctorName) * 100)
+    const prev = map.get(key) ?? {
+      doctorName: row.doctorName.trim() || '—',
+      fee: 0,
+      procedures: 0,
+      serviceTotal: 0,
+      ratePercent,
+    }
+    prev.fee = roundMoney(prev.fee + row.doctorFeeAmount)
+    prev.procedures += 1
+    prev.serviceTotal = roundMoney(prev.serviceTotal + row.serviceTotal)
+    map.set(key, prev)
+  }
+  const byDoctor = [...map.values()].sort((a, b) => b.fee - a.fee || a.doctorName.localeCompare(b.doctorName))
+  const totalFee = roundMoney(byDoctor.reduce((n, r) => n + r.fee, 0))
+  const totalService = roundMoney(byDoctor.reduce((n, r) => n + r.serviceTotal, 0))
+  return { totalFee, totalService, byDoctor }
+}
+
+/** Gross sale amount (no doctor-fee / clinic-net split). */
+export function saleGrossAmount(sale: Pick<Sale, 'totalAmount'>): number {
+  return Math.max(0, Number(sale.totalAmount) || 0)
 }
 
 /** Hendra's 5% on doctor's-procedure sales where her name (or clinic email) was typed. */
