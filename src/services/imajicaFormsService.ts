@@ -2,6 +2,11 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 import { formPdfUrl } from '@/constants/imajicaFormTemplates'
 import type { FormTemplateDef } from '@/constants/imajicaFormTemplates'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import {
+  mapBookingAuthError,
+  requireSupabaseSession,
+  softRefreshSupabaseSession,
+} from '@/utils/supabaseSession'
 import { isUuid } from '@/utils/uuid'
 
 const LEGACY_STORAGE_KEY = 'imajica_generated_forms'
@@ -225,6 +230,16 @@ async function persistRemote(record: GeneratedFormRecord): Promise<void> {
     throw new Error('Supabase is not configured — cannot save form to the database')
   }
 
+  // Warm JWT before RLS writes — long-open PC/tablet desks (company, franchise, OM).
+  await softRefreshSupabaseSession()
+  try {
+    await requireSupabaseSession()
+  } catch (err) {
+    throw new Error(
+      mapBookingAuthError(err instanceof Error ? err.message : 'Session expired'),
+    )
+  }
+
   const id = isUuid(record.id) ? record.id : crypto.randomUUID()
 
   const [clientPath, otherPath] = await Promise.all([
@@ -266,7 +281,8 @@ async function persistRemote(record: GeneratedFormRecord): Promise<void> {
     { onConflict: 'id' },
   )
   if (error) {
-    throw new Error(error.message || 'Could not save form to the database')
+    const msg = error.message || 'Could not save form to the database'
+    throw new Error(mapBookingAuthError(msg))
   }
 
   record.id = id
@@ -274,7 +290,17 @@ async function persistRemote(record: GeneratedFormRecord): Promise<void> {
   record.otherSignaturePath = otherPath || undefined
 }
 
-export async function preloadGeneratedForms(): Promise<void> {
+export type FormsPreloadOptions = {
+  /**
+   * Clinic name/code stored in `branch_code` (e.g. "Bacoor, Cavite").
+   * When set with orgWide=false, preload only that clinic’s rows.
+   */
+  branch?: string | null
+  /** OM / HQ All Branches — larger org window, no clinic filter. */
+  orgWide?: boolean
+}
+
+export async function preloadGeneratedForms(options?: FormsPreloadOptions): Promise<void> {
   clearLegacyBrowserStorage()
 
   if (!isSupabaseConfigured || !supabase) {
@@ -282,13 +308,27 @@ export async function preloadGeneratedForms(): Promise<void> {
     return
   }
 
-  const { data, error } = await supabase
+  const orgWide = Boolean(options?.orgWide)
+  const branch = options?.branch?.trim() || ''
+  const limit = orgWide ? 120 : 80
+
+  let query = supabase
     .from('imajica_forms')
     .select(
       'id, client_name, form_type, template_file, branch_code, field_values, submitted_at, title, client_signature_path, other_signature_path',
     )
     .order('submitted_at', { ascending: false })
-    .limit(80)
+    .limit(limit)
+
+  // Single-clinic sessions (company or franchise): do not let HQ volume starve history.
+  if (!orgWide && branch) {
+    const token = branch.split(',')[0]?.trim() || branch
+    // branch_code stores display name (e.g. "Bacoor, Cavite"); match city/token only
+    // (avoid .or() with commas — PostgREST treats commas as separators).
+    query = query.ilike('branch_code', `%${token}%`)
+  }
+
+  const { data, error } = await query
 
   if (error) {
     console.warn('[forms] preload failed', error.message)
@@ -300,7 +340,8 @@ export async function preloadGeneratedForms(): Promise<void> {
   emit()
 }
 
-export async function createGeneratedForm(input: {
+/** Build an in-memory form record (compressed signatures) — no network yet. */
+export async function prepareGeneratedForm(input: {
   template: FormTemplateDef
   clientName: string
   branch?: string
@@ -317,7 +358,7 @@ export async function createGeneratedForm(input: {
       : Promise.resolve(undefined),
   ])
 
-  const record: GeneratedFormRecord = {
+  return {
     id: crypto.randomUUID(),
     clientName: input.clientName.trim() || 'Guest',
     formType: input.template.typeLabel,
@@ -329,13 +370,46 @@ export async function createGeneratedForm(input: {
     clientSignature,
     otherSignature,
   }
+}
 
-  // Database is the source of truth — never write form payloads to localStorage
-  await persistRemote(record)
-
+/** Keep a generated packet in session history even when remote save fails. */
+export function rememberGeneratedFormLocally(record: GeneratedFormRecord): void {
   setMemory([record, ...memoryCache.filter((r) => r.id !== record.id)])
   emit()
+}
+
+/** Persist to Supabase and refresh in-memory history (retries once after reclaim). */
+export async function saveGeneratedForm(record: GeneratedFormRecord): Promise<GeneratedFormRecord> {
+  clearLegacyBrowserStorage()
+  try {
+    await persistRemote(record)
+  } catch (firstErr) {
+    // One quiet retry — common after long-open desks lose JWT mid-click.
+    await softRefreshSupabaseSession()
+    try {
+      await persistRemote(record)
+    } catch {
+      throw firstErr instanceof Error ? firstErr : new Error(String(firstErr))
+    }
+  }
+  rememberGeneratedFormLocally(record)
   return record
+}
+
+/**
+ * Prepare + save. Prefer `prepareGeneratedForm` + PDF download + `saveGeneratedForm`
+ * on the Forms page so staff still get the PDF if history save fails.
+ */
+export async function createGeneratedForm(input: {
+  template: FormTemplateDef
+  clientName: string
+  branch?: string
+  fieldValues: Record<string, unknown>
+  clientSignature: string
+  otherSignature?: string
+}): Promise<GeneratedFormRecord> {
+  const record = await prepareGeneratedForm(input)
+  return saveGeneratedForm(record)
 }
 
 export function deleteGeneratedForm(id: string) {
@@ -410,7 +484,11 @@ async function embedSignature(pdfDoc: PDFDocument, dataUrl: string) {
 }
 
 async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord) {
-  const pages = pdfDoc.getPages()
+  let pages = pdfDoc.getPages()
+  if (!pages.length) {
+    pdfDoc.addPage([612, 792])
+    pages = pdfDoc.getPages()
+  }
   const page = pages[pages.length - 1]!
   const { width, height } = page.getSize()
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
@@ -431,14 +509,17 @@ async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord
 
   if (record.clientSignature) {
     const img = await embedSignature(pdfDoc, record.clientSignature)
-    if (img) {
-      page.drawImage(img, {
-        x: sigX,
-        y: sigY,
-        width: sigWidth,
-        height: sigHeight,
-      })
+    if (!img) {
+      throw new Error(
+        'Could not stamp client signature onto the PDF. Ask the client to sign again, then Generate.',
+      )
     }
+    page.drawImage(img, {
+      x: sigX,
+      y: sigY,
+      width: sigWidth,
+      height: sigHeight,
+    })
   }
 
   page.drawText('Patient / Client Signature', {
@@ -506,12 +587,28 @@ async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord
 async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecord) {
   if (!hasFilledFields(record.fieldValues)) return
 
-  const page = pdfDoc.addPage()
-  const { width, height } = page.getSize()
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
   const margin = 40
+
+  let page = pdfDoc.addPage()
+  let { width, height } = page.getSize()
   let y = height - margin
+
+  const ensureSpace = (need: number) => {
+    if (y >= need) return
+    page = pdfDoc.addPage()
+    ;({ width, height } = page.getSize())
+    y = height - margin
+    page.drawText(`${record.formType} — answers (continued)`, {
+      x: margin,
+      y,
+      size: 11,
+      font: fontBold,
+      color: rgb(0.027, 0.239, 0.173),
+    })
+    y -= 22
+  }
 
   page.drawText('Imajica Medical Aesthetics', {
     x: margin,
@@ -542,9 +639,10 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
   y -= 24
 
   for (const [key, value] of Object.entries(record.fieldValues)) {
-    if (y < 70) break
     const label = key.replaceAll('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())
     const text = formatFieldValue(value)
+    const lines = wrapText(text, 90)
+    ensureSpace(40 + lines.length * 13)
     page.drawText(label, {
       x: margin,
       y,
@@ -553,9 +651,8 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
       color: rgb(0.4, 0.45, 0.5),
     })
     y -= 12
-    const lines = wrapText(text, 90)
     for (const line of lines) {
-      if (y < 50) break
+      ensureSpace(50)
       page.drawText(line, {
         x: margin,
         y,
@@ -570,8 +667,9 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
   }
 
   if (record.clientSignature) {
+    ensureSpace(100)
     const img = await embedSignature(pdfDoc, record.clientSignature)
-    if (img && y > 90) {
+    if (img) {
       y -= 10
       page.drawText('Client Signature', {
         x: margin,
@@ -692,9 +790,9 @@ function toOwnedBytes(buffer: ArrayBuffer): Uint8Array {
 }
 
 /**
- * Load `/imajica_forms/{file}` for every clinic.
- * If the static file 404s (missing deploy / new template), fall back to a blank
- * branded cover so Generate Final PDF never fails on franchise or HQ accounts.
+ * Load `/imajica_forms/{file}` for every clinic (company + franchise + OM).
+ * If the static file 404s (missing deploy / new template), fall back to a branded
+ * cover so Generate Final PDF still produces a signed packet.
  */
 async function loadTemplatePdfBytes(fileName: string): Promise<Uint8Array> {
   const url = formPdfUrl(fileName)
@@ -711,7 +809,7 @@ async function loadTemplatePdfBytes(fileName: string): Promise<Uint8Array> {
   }
 
   try {
-    return await tryFetch('force-cache')
+    return await tryFetch('no-cache')
   } catch {
     try {
       return await tryFetch('reload')
@@ -726,7 +824,15 @@ async function loadTemplatePdfBytes(fileName: string): Promise<Uint8Array> {
   }
 }
 
+/** Warm the template fetch before Generate so staff get a clear error early. */
+export async function ensureFormTemplateReady(fileName: string): Promise<void> {
+  await loadTemplatePdfBytes(fileName)
+}
+
 export async function buildGeneratedFormPdf(record: GeneratedFormRecord): Promise<Uint8Array> {
+  if (!record.templateFile) {
+    throw new Error('This form has no template file — cannot generate PDF.')
+  }
   const hydrated = await hydrateFormSignatures(record)
   const templateBytes = await loadTemplatePdfBytes(hydrated.templateFile)
   const pdfDoc = await PDFDocument.load(templateBytes)
@@ -734,7 +840,8 @@ export async function buildGeneratedFormPdf(record: GeneratedFormRecord): Promis
   await stampConsentPage(pdfDoc, hydrated)
   await appendAnswersPage(pdfDoc, hydrated)
 
-  return pdfDoc.save()
+  const saved = await pdfDoc.save()
+  return Uint8Array.from(saved)
 }
 
 function toPdfBlob(bytes: Uint8Array) {
@@ -743,13 +850,51 @@ function toPdfBlob(bytes: Uint8Array) {
   return new Blob([copy], { type: 'application/pdf' })
 }
 
+function isAppleTouchDevice() {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  if (/iPad|iPhone|iPod/i.test(ua)) return true
+  // iPadOS may report as MacIntel with touch
+  return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+}
+
 function triggerDownload(bytes: Uint8Array, fileName: string) {
   const url = URL.createObjectURL(toPdfBlob(bytes))
+  // Keep blob alive long enough for PC Chrome, Android, and iOS to finish reading it.
+  const revokeLater = () => {
+    window.setTimeout(() => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch {
+        /* ignore */
+      }
+    }, 60_000)
+  }
+
+  // iOS Safari often ignores <a download> for blobs — open so staff can share/save.
+  if (isAppleTouchDevice()) {
+    const opened = window.open(url, '_blank', 'noopener,noreferrer')
+    if (!opened) {
+      const a = document.createElement('a')
+      a.href = url
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    }
+    revokeLater()
+    return
+  }
+
   const a = document.createElement('a')
   a.href = url
   a.download = fileName
+  a.rel = 'noopener'
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  a.remove()
+  revokeLater()
 }
 
 export async function downloadGeneratedPacket(record: GeneratedFormRecord) {

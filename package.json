@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "check:forms": "node scripts/check-form-pdfs.mjs",
+    "build": "npm run check:forms && tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
     "import:sales": "node scripts/import-sales-from-xlsx.mjs"

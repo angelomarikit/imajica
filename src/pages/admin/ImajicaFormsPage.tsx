@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { useAuth } from '@/contexts/AuthContext'
+import { useBranch } from '@/contexts/BranchContext'
 import {
   formPdfUrl,
   getFormTemplate,
@@ -24,17 +25,25 @@ import {
   type FormFieldDef,
 } from '@/constants/imajicaFormTemplates'
 import {
-  createGeneratedForm,
   deleteGeneratedForm,
   downloadGeneratedPacket,
+  ensureFormTemplateReady,
   getGeneratedForms,
   openGeneratedFormPdf,
   preloadGeneratedForms,
+  prepareGeneratedForm,
+  rememberGeneratedFormLocally,
+  saveGeneratedForm,
   subscribeGeneratedForms,
   type GeneratedFormRecord,
 } from '@/services/imajicaFormsService'
 import { cn } from '@/utils/cn'
-import { isFranchiseBranchOwner } from '@/utils/franchiseAccess'
+import {
+  isFranchiseBranchOwner,
+  isHqRole,
+  isOperationsManagerRole,
+} from '@/utils/franchiseAccess'
+import { mapBookingAuthError } from '@/utils/supabaseSession'
 
 function formatSubmitted(iso: string) {
   return new Date(iso).toLocaleString('en-US', {
@@ -48,7 +57,10 @@ function formatSubmitted(iso: string) {
 
 export function ImajicaFormsPage() {
   const { user } = useAuth()
+  const { selectedBranchId, selectedBranch, isAllBranches } = useBranch()
   const franchiseOwner = isFranchiseBranchOwner(user)
+  const orgWideUser =
+    isHqRole(user?.role) || isOperationsManagerRole(user?.role)
   const selectableTemplates = useMemo(() => listSelectableFormTemplates(), [])
   const [templateId, setTemplateId] = useState(selectableTemplates[0]?.id ?? '')
   const [patientName, setPatientName] = useState('')
@@ -68,6 +80,21 @@ export function ImajicaFormsPage() {
   const template =
     getFormTemplate(templateId) ?? selectableTemplates[0] ?? listSelectableFormTemplates()[0]
 
+  /** Clinic name for save/preload: locked clinic, or OM/HQ header filter when not All Branches. */
+  const activeClinicName = useMemo(() => {
+    if (orgWideUser) {
+      if (isAllBranches || selectedBranchId === 'all') return null
+      return selectedBranch?.name || null
+    }
+    return user?.branchName || selectedBranch?.name || null
+  }, [
+    orgWideUser,
+    isAllBranches,
+    selectedBranchId,
+    selectedBranch?.name,
+    user?.branchName,
+  ])
+
   useEffect(() => {
     return () => {
       if (viewPdfUrl) URL.revokeObjectURL(viewPdfUrl)
@@ -75,9 +102,13 @@ export function ImajicaFormsPage() {
   }, [viewPdfUrl])
 
   useEffect(() => {
-    void preloadGeneratedForms().then(() => setHistory(getGeneratedForms()))
+    const orgWide = orgWideUser && !activeClinicName
+    void preloadGeneratedForms({
+      branch: activeClinicName,
+      orgWide,
+    }).then(() => setHistory(getGeneratedForms()))
     return subscribeGeneratedForms(() => setHistory(getGeneratedForms()))
-  }, [])
+  }, [activeClinicName, orgWideUser])
 
   useEffect(() => {
     setValues({})
@@ -121,13 +152,23 @@ export function ImajicaFormsPage() {
 
   const filteredHistory = useMemo(() => {
     let list = history
-    // Clinic-scoped staff (all clinics, not only franchise): only their branch history
-    const branchName = user?.branchName
-    if (branchName && (franchiseOwner || user?.role === 'BRANCH_ADMIN' || Boolean(user?.branchId))) {
+    // Clinic-scoped staff, or OM/HQ when a single clinic is selected in the header
+    const branchName = activeClinicName
+    if (
+      branchName &&
+      (franchiseOwner ||
+        user?.role === 'BRANCH_ADMIN' ||
+        Boolean(user?.branchId) ||
+        orgWideUser)
+    ) {
       const token = branchName.split(',')[0]?.trim().toLowerCase() || branchName.toLowerCase()
       list = list.filter((h) => {
         const hb = (h.branch || '').toLowerCase()
-        return hb === branchName.toLowerCase() || hb.includes(token) || token.includes(hb.split(',')[0] || '')
+        return (
+          hb === branchName.toLowerCase() ||
+          hb.includes(token) ||
+          token.includes(hb.split(',')[0] || '')
+        )
       })
     }
     if (!search.trim()) return list
@@ -138,7 +179,15 @@ export function ImajicaFormsPage() {
         h.formType.toLowerCase().includes(q) ||
         h.branch.toLowerCase().includes(q),
     )
-  }, [history, search, franchiseOwner, user?.branchName, user?.branchId, user?.role])
+  }, [
+    history,
+    search,
+    franchiseOwner,
+    activeClinicName,
+    orgWideUser,
+    user?.branchId,
+    user?.role,
+  ])
 
   function setField(key: string, value: unknown) {
     setValues((prev) => ({ ...prev, [key]: value }))
@@ -156,28 +205,59 @@ export function ImajicaFormsPage() {
     }
     setBusyAction('generate')
     try {
-      const record = await createGeneratedForm({
+      const branchLabel =
+        activeClinicName ||
+        user?.branchName ||
+        selectedBranch?.name ||
+        user?.branchId ||
+        'Clinic'
+
+      // 1) Ensure template PDF is reachable, then build + download the packet.
+      //    PDF must succeed for every clinic/franchise/OM even if history save fails.
+      await ensureFormTemplateReady(template.fileName)
+      const record = await prepareGeneratedForm({
         template,
         clientName: patientName,
-        branch: user?.branchName || user?.branchId || 'Clinic',
+        branch: branchLabel,
         fieldValues: values,
         clientSignature: clientSig,
         otherSignature: template.otherSignature ? otherSig || undefined : undefined,
       })
       await downloadGeneratedPacket(record)
+      // Always keep this generate in the on-screen history for this shift.
+      rememberGeneratedFormLocally(record)
       setHistory(getGeneratedForms())
-      toast.success(`Generated ${record.formType} PDF`)
+
+      // 2) Save to Supabase after PDF — never undo a successful download.
+      let savedOk = false
+      try {
+        await saveGeneratedForm(record)
+        savedOk = true
+        setHistory(getGeneratedForms())
+      } catch (saveErr) {
+        const raw =
+          saveErr instanceof Error ? saveErr.message : 'Could not save form history'
+        const msg = mapBookingAuthError(raw)
+        toast.warning(
+          `PDF downloaded, but cloud history was not saved: ${msg}. The PDF file is ready to use.`,
+        )
+      }
+
+      if (savedOk) {
+        toast.success(`Generated ${record.formType} PDF`)
+      }
       setPatientName('')
       setValues({})
       setClientSig('')
       setOtherSig('')
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to generate PDF'
+      const raw = err instanceof Error ? err.message : 'Failed to generate PDF'
+      const msg = mapBookingAuthError(raw)
       toast.error(
         /quota|setItem|storage is full/i.test(msg)
           ? 'Old browser cache was full. Refresh the page once, then generate again.'
-          : /database|supabase|not configured|permission|row-level|jwt/i.test(msg)
-            ? `Could not save form to the database: ${msg}`
+          : /signature|stamp|template|pdf|http|not-pdf|missing/i.test(msg)
+            ? `Could not build form PDF: ${msg}`
             : msg,
       )
     } finally {

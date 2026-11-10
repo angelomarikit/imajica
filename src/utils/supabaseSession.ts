@@ -51,7 +51,10 @@ export async function requireSupabaseSession(): Promise<void> {
   throw new Error(`Session expired. ${RETRY_HINT}`)
 }
 
-/** Quiet keepalive for long-open clinic tablets (booking desk left open for hours). */
+/**
+ * Quiet keepalive for long-open clinic/franchise/OM desks (PC Chrome + tablets).
+ * Returns false only when no access token remains — callers must not hard-logout on false alone.
+ */
 export async function softRefreshSupabaseSession(): Promise<boolean> {
   const client = supabase
   if (!isSupabaseConfigured || !client) return false
@@ -60,19 +63,30 @@ export async function softRefreshSupabaseSession(): Promise<boolean> {
     if (!data.session) {
       reclaimClinicStorageForAuth()
       const { data: refreshed } = await client.auth.refreshSession()
-      return Boolean(refreshed.session?.access_token)
+      if (refreshed.session?.access_token) return true
+      const { data: again } = await client.auth.getSession()
+      return Boolean(again.session?.access_token)
     }
+    const accessBefore = data.session.access_token
     const expiresAt = data.session.expires_at
     if (expiresAt && expiresAt * 1000 - Date.now() < 10 * 60_000) {
       const { data: refreshed } = await client.auth.refreshSession()
       if (refreshed.session?.access_token) return true
       reclaimClinicStorageForAuth()
       const { data: again } = await client.auth.refreshSession()
-      return Boolean(again.session?.access_token)
+      if (again.session?.access_token) return true
+      // Refresh failed (network/quota) but prior token may still work briefly — keep session.
+      const { data: still } = await client.auth.getSession()
+      return Boolean(still.session?.access_token || accessBefore)
     }
     return true
   } catch {
-    return false
+    try {
+      const { data } = await client.auth.getSession()
+      return Boolean(data.session?.access_token)
+    } catch {
+      return false
+    }
   }
 }
 

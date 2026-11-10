@@ -339,8 +339,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       window.setTimeout(() => {
-        if (event === 'SIGNED_OUT' || !session?.user) {
+        // Only clear UI on explicit sign-out. Transient null sessions during
+        // focus/visibility refresh must NOT kick clinic, franchise, or OM desks mid-work.
+        if (event === 'SIGNED_OUT') {
           persist(null)
+          return
+        }
+        if (!session?.user) {
           return
         }
         void resolveSupabaseSessionUser(session.user)
@@ -349,7 +354,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }, 0)
     })
 
-    // Clinic tablets stay open for hours — refresh JWT when the tab becomes visible again
+    // Long-open PC/tablet desks — refresh JWT when the tab becomes visible again
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return
       void softRefreshSupabaseSession()
