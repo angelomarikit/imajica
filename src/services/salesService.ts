@@ -7,6 +7,7 @@ import {
   syncClientsFromImportedSales,
 } from '@/services/clientSalesProfileService'
 import { getClientById, getClients, saveClient } from '@/services/clientService'
+import { safeLocalSetItem } from '@/utils/safeLocalStorage'
 import { mapBookingAuthError, requireSupabaseSession } from '@/utils/supabaseSession'
 import { isUuid } from '@/utils/uuid'
 
@@ -795,13 +796,14 @@ export function subscribeSalesData(listener: () => void): () => void {
 export function appendExtraSale(sale: Sale): void {
   const extra = readExtraSales().filter((s) => s.id !== sale.id)
   extra.unshift(sale)
-  localStorage.setItem(EXTRA_KEY, JSON.stringify(extra.slice(0, 500)))
+  // Cap low — Supabase is source of truth; local mirror must not crowd out the JWT.
+  safeLocalSetItem(EXTRA_KEY, JSON.stringify(extra.slice(0, 80)))
   emitChange()
 }
 
 export function deleteExtraSale(id: string): void {
   const next = readExtraSales().filter((s) => s.id !== id)
-  localStorage.setItem(EXTRA_KEY, JSON.stringify(next))
+  safeLocalSetItem(EXTRA_KEY, JSON.stringify(next.slice(0, 80)))
   remoteLiveSales = remoteLiveSales.filter((s) => s.id !== id)
   emitChange()
 }
@@ -823,7 +825,7 @@ function saleHeaderIdsForBooking(bookingKey: string): string[] {
 
 function clearLocalBooking(bookingKey: string) {
   const next = readExtraSales().filter((s) => bookingMatchKey(s) !== bookingKey)
-  localStorage.setItem(EXTRA_KEY, JSON.stringify(next))
+  safeLocalSetItem(EXTRA_KEY, JSON.stringify(next.slice(0, 80)))
   remoteLiveSales = remoteLiveSales.filter((s) => bookingMatchKey(s) !== bookingKey)
   emitChange()
 }
@@ -1156,7 +1158,7 @@ export async function recordSessionUse(saleLineId: string): Promise<Sale | null>
 
   remoteLiveSales = remoteLiveSales.map(patch)
   const extras = readExtraSales().map(patch)
-  localStorage.setItem(EXTRA_KEY, JSON.stringify(extras.slice(0, 500)))
+  safeLocalSetItem(EXTRA_KEY, JSON.stringify(extras.slice(0, 80)))
   if (existing && !remoteLiveSales.some((s) => s.id === saleLineId)) {
     remoteLiveSales = [patch(existing), ...remoteLiveSales]
   }

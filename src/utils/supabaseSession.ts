@@ -1,68 +1,122 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import {
+  clearSupabaseAuthStorageKeys,
+  reclaimClinicStorageForAuth,
+} from '@/utils/safeLocalStorage'
+
+const RETRY_HINT =
+  'Refresh this page once, sign in again if asked, then retry Add Patient / Place Order.'
 
 /**
  * Ensure a real Supabase Auth JWT is present before RLS / RPC calls.
  * The UI can still show a profile from `imajica_auth_user` while the JWT is
  * missing (expired refresh, or localStorage quota wiped the sb-*-auth-token).
+ * Busy clinics (e.g. Lipa) hit this often when Add Patient / Place Order runs.
  */
 export async function requireSupabaseSession(): Promise<void> {
-  if (!isSupabaseConfigured || !supabase) return
+  const client = supabase
+  if (!isSupabaseConfigured || !client) return
 
-  // 1) Fast path — in-memory / stored session
-  const { data: first } = await supabase.auth.getSession()
-  if (first.session?.access_token) {
-    // Proactively refresh if token is near expiry (< 2 min left)
-    const expiresAt = first.session.expires_at
-    if (expiresAt && expiresAt * 1000 - Date.now() < 120_000) {
-      const { data: soft } = await supabase.auth.refreshSession()
-      if (soft.session?.access_token) return
-    } else {
-      return
+  const tryOnce = async (): Promise<boolean> => {
+    const { data: first } = await client.auth.getSession()
+    if (first.session?.access_token) {
+      const expiresAt = first.session.expires_at
+      if (expiresAt && expiresAt * 1000 - Date.now() < 120_000) {
+        const { data: soft } = await client.auth.refreshSession()
+        if (soft.session?.access_token) return true
+      } else {
+        return true
+      }
     }
+
+    const { data: refreshed } = await client.auth.refreshSession()
+    if (refreshed.session?.access_token) return true
+
+    const { data: userData } = await client.auth.getUser()
+    if (userData.user) {
+      const { data: again } = await client.auth.getSession()
+      if (again.session?.access_token) return true
+      const { data: afterUser } = await client.auth.refreshSession()
+      if (afterUser.session?.access_token) return true
+    }
+    return false
   }
 
-  // 2) Refresh using stored refresh_token
-  const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession()
-  if (refreshed.session?.access_token) return
+  if (await tryOnce()) return
 
-  // 3) Network validation — sometimes getSession is empty but cookie/storage recovers via getUser
-  const { data: userData, error: userError } = await supabase.auth.getUser()
-  if (userData.user) {
-    const { data: again } = await supabase.auth.getSession()
-    if (again.session?.access_token) return
-    const { data: afterUser } = await supabase.auth.refreshSession()
-    if (afterUser.session?.access_token) return
-  }
+  // Tablet storage often wiped the refresh token while the green UI profile stayed.
+  reclaimClinicStorageForAuth()
+  if (await tryOnce()) return
 
-  const detail = refreshError?.message || userError?.message || ''
-  const expired =
-    /session|refresh|expired|invalid.*jwt|not authenticated/i.test(detail) ||
-    !first.session
-
-  throw new Error(
-    expired
-      ? 'Session expired. Sign out and sign in again, then place the order.'
-      : 'Not signed in to the database. Sign out and sign in again with your branch account (Cainta / San Mateo / Lipa / …), then retry Place Order.',
-  )
+  throw new Error(`Session expired. ${RETRY_HINT}`)
 }
 
 /** Quiet keepalive for long-open clinic tablets (booking desk left open for hours). */
 export async function softRefreshSupabaseSession(): Promise<boolean> {
-  if (!isSupabaseConfigured || !supabase) return false
+  const client = supabase
+  if (!isSupabaseConfigured || !client) return false
   try {
-    const { data } = await supabase.auth.getSession()
+    const { data } = await client.auth.getSession()
     if (!data.session) {
-      const { data: refreshed } = await supabase.auth.refreshSession()
+      reclaimClinicStorageForAuth()
+      const { data: refreshed } = await client.auth.refreshSession()
       return Boolean(refreshed.session?.access_token)
     }
     const expiresAt = data.session.expires_at
     if (expiresAt && expiresAt * 1000 - Date.now() < 10 * 60_000) {
-      const { data: refreshed } = await supabase.auth.refreshSession()
-      return Boolean(refreshed.session?.access_token)
+      const { data: refreshed } = await client.auth.refreshSession()
+      if (refreshed.session?.access_token) return true
+      reclaimClinicStorageForAuth()
+      const { data: again } = await client.auth.refreshSession()
+      return Boolean(again.session?.access_token)
     }
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * After password sign-in: free space and confirm the JWT actually persisted.
+ * Prevents “looks signed in” UI without a usable token (common on Lipa tablets).
+ */
+export async function ensureSessionPersistedAfterLogin(tokens?: {
+  access_token: string
+  refresh_token: string
+}): Promise<void> {
+  const client = supabase
+  if (!isSupabaseConfigured || !client) return
+
+  reclaimClinicStorageForAuth()
+
+  const access =
+    tokens?.access_token ||
+    (await client.auth.getSession()).data.session?.access_token
+  const refresh =
+    tokens?.refresh_token ||
+    (await client.auth.getSession()).data.session?.refresh_token
+
+  if (!access || !refresh) {
+    throw new Error(`Could not finish sign-in. ${RETRY_HINT}`)
+  }
+
+  const { error } = await client.auth.setSession({
+    access_token: access,
+    refresh_token: refresh,
+  })
+  if (error) {
+    reclaimClinicStorageForAuth()
+    clearSupabaseAuthStorageKeys()
+    const retry = await client.auth.setSession({
+      access_token: access,
+      refresh_token: refresh,
+    })
+    if (retry.error) throw new Error(`Could not finish sign-in. ${RETRY_HINT}`)
+  }
+
+  const { data: check } = await client.auth.getSession()
+  if (!check.session?.access_token) {
+    throw new Error(`Could not finish sign-in. ${RETRY_HINT}`)
   }
 }
 
@@ -73,11 +127,13 @@ export function mapBookingAuthError(message: string): string {
   if (/failed to fetch|networkerror|network request failed|load failed/i.test(message)) {
     return 'Network error while saving. Check internet, refresh once, then retry Place Order.'
   }
-  if (/session expired/i.test(message)) {
-    return 'Session expired. Sign out and sign in again, then place the order.'
+  if (/session expired|could not finish sign-in/i.test(message)) {
+    return message.includes('Refresh this page')
+      ? message
+      : `Session expired. ${RETRY_HINT}`
   }
   if (/not signed in/i.test(message)) {
-    return 'Not signed in to the database. Sign out and sign in again with your branch account, then retry Place Order.'
+    return `Not signed in. ${RETRY_HINT}`
   }
   return message
 }

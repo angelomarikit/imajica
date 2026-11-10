@@ -2,6 +2,17 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { reclaimClinicStorageForAuth } from '@/utils/safeLocalStorage'
+
+/**
+ * Clinic tablets (Lipa, etc.) accumulate old local caches. Free space on every
+ * boot so the login token can save — staff should never need to Clear site data.
+ */
+try {
+  reclaimClinicStorageForAuth()
+} catch {
+  /* ignore */
+}
 
 /**
  * After a Vercel deploy, tablets left open still reference old hashed chunks.

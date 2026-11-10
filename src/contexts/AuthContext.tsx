@@ -13,8 +13,15 @@ import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { getBranches } from '@/services/branchService'
 import { teamAccountsAsDemoUsers } from '@/constants/teamAccountsSeed'
 import { kioskStaffAsDemoUsers } from '@/constants/kioskStaffSeed'
-import { safeLocalRemoveItem, safeLocalSetItem } from '@/utils/safeLocalStorage'
-import { softRefreshSupabaseSession } from '@/utils/supabaseSession'
+import {
+  reclaimClinicStorageForAuth,
+  safeLocalRemoveItem,
+  safeLocalSetItem,
+} from '@/utils/safeLocalStorage'
+import {
+  ensureSessionPersistedAfterLogin,
+  softRefreshSupabaseSession,
+} from '@/utils/supabaseSession'
 
 interface AuthContextValue {
   user: AuthSessionUser | null
@@ -308,6 +315,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     void (async () => {
       try {
+        // Silent cleanup so clinic tablets never need “Clear site data”.
+        reclaimClinicStorageForAuth()
         let { data } = await supabase.auth.getSession()
         if (!data.session) {
           const refreshed = await supabase.auth.refreshSession()
@@ -382,12 +391,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (isSupabaseConfigured && supabase) {
+        // Free tablet space before Auth writes the JWT (busy clinics fill localStorage).
+        reclaimClinicStorageForAuth()
         const { data, error } = await supabase.auth.signInWithPassword({
           email: normalized,
           password,
         })
 
         if (!error && data.user) {
+          // Re-write JWT after reclaim so Add Patient / Place Order keep a real session.
+          if (data.session?.access_token && data.session.refresh_token) {
+            await ensureSessionPersistedAfterLogin({
+              access_token: data.session.access_token,
+              refresh_token: data.session.refresh_token,
+            })
+          } else {
+            await ensureSessionPersistedAfterLogin()
+          }
           const sessionUser = await resolveSupabaseSessionUser(data.user)
           // SQL may assign BRANCH_ADMIN before branch_type is readable — keep franchise hint for known demo email
           if (

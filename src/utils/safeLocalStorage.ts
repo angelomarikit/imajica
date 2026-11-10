@@ -1,8 +1,8 @@
 /**
  * localStorage helpers that never let non-auth data (forms, caches) wipe the
  * Supabase JWT. Tablets hit QuotaExceededError after saving many signatures;
- * that used to leave the UI “signed in” while Place Order failed with
- * “Session expired”.
+ * that used to leave the UI “signed in” while Place Order / Add Patient failed
+ * with “Session expired” (often reported from busy clinics like Lipa).
  */
 
 const RECLAIM_KEYS = [
@@ -16,6 +16,9 @@ const HEAVY_CACHE_KEYS = [
   'imajica_sales',
   'imajica_remote_live_sales',
   'imajica_appointments',
+  'imajica_analytics_sales',
+  'imajica_expenses',
+  'imajica_cash_drawer_migrated_v1',
 ] as const
 
 function isQuotaError(err: unknown): boolean {
@@ -48,6 +51,65 @@ function reclaimHeavyCaches(keepKey?: string) {
   }
 }
 
+/** Drop cash confirm/deduct mirrors (large on busy clinic PCs) — DB remains source of truth. */
+function reclaimCashMirrorKeys() {
+  try {
+    const toRemove: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key) continue
+      if (
+        key.startsWith('imajica_cash_confirm_') ||
+        key.startsWith('imajica_cash_deduct_')
+      ) {
+        toRemove.push(key)
+      }
+    }
+    for (const key of toRemove) {
+      try {
+        localStorage.removeItem(key)
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Free tablet storage so Supabase can write the JWT again.
+ * Call before login persist and before session refresh retries.
+ */
+export function reclaimClinicStorageForAuth(): void {
+  reclaimNonAuthSpace()
+  reclaimHeavyCaches()
+  reclaimCashMirrorKeys()
+}
+
+/** Remove broken sb-*-auth-token entries so a fresh sign-in can stick. */
+export function clearSupabaseAuthStorageKeys(): void {
+  try {
+    const toRemove: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key) continue
+      if (key.startsWith('sb-') && key.includes('auth-token')) {
+        toRemove.push(key)
+      }
+    }
+    for (const key of toRemove) {
+      try {
+        localStorage.removeItem(key)
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * Write localStorage without letting QuotaExceeded wipe clinic tablets.
  * Returns false if the write still could not be completed after reclaim.
@@ -65,6 +127,7 @@ export function safeLocalSetItem(key: string, value: string): boolean {
     } catch (err2) {
       if (!isQuotaError(err2)) throw err2
       reclaimHeavyCaches(key)
+      reclaimCashMirrorKeys()
       try {
         localStorage.setItem(key, value)
         return true
@@ -101,7 +164,14 @@ export function createSupabaseAuthStorage(): {
 } {
   return {
     getItem: (key) => safeLocalGetItem(key),
-    setItem: (key, value) => safeLocalSetItem(key, value),
+    setItem: (key, value) => {
+      const ok = safeLocalSetItem(key, value)
+      if (!ok) {
+        // Last resort: wipe clinic caches again and try once more for auth only
+        reclaimClinicStorageForAuth()
+        safeLocalSetItem(key, value)
+      }
+    },
     removeItem: (key) => safeLocalRemoveItem(key),
   }
 }

@@ -15,6 +15,11 @@ import {
 import type { Client } from '@/types'
 import { cn } from '@/utils/cn'
 import { isBranchOwner, isHqRole } from '@/utils/franchiseAccess'
+import {
+  mapBookingAuthError,
+  requireSupabaseSession,
+  softRefreshSupabaseSession,
+} from '@/utils/supabaseSession'
 import { isUuid } from '@/utils/uuid'
 
 const field =
@@ -59,7 +64,10 @@ export function SelectPatientModal({
       setApplied('')
       setMatches([])
       setSearching(false)
+      return
     }
+    // Warm JWT when opening Select Patient — Lipa tablets often sit open for hours.
+    void softRefreshSupabaseSession()
   }, [open])
 
   function lookupClinicId(): string | undefined {
@@ -168,6 +176,16 @@ export function SelectPatientModal({
     }
     setSaving(true)
     try {
+      try {
+        await softRefreshSupabaseSession()
+        await requireSupabaseSession()
+      } catch (authErr) {
+        throw new Error(
+          mapBookingAuthError(
+            authErr instanceof Error ? authErr.message : 'Session expired',
+          ),
+        )
+      }
       const client = await registerClientAndSync({
         firstName,
         middleName,
@@ -198,7 +216,9 @@ export function SelectPatientModal({
       setEmergencyName('')
       setEmergencyPhone('')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save patient')
+      toast.error(
+        mapBookingAuthError(err instanceof Error ? err.message : 'Could not save patient'),
+      )
     } finally {
       setSaving(false)
     }
