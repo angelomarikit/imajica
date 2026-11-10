@@ -15,8 +15,11 @@ const PACKAGES_KEY = 'imajica_catalog_packages'
 const PACKAGES_DELETED_KEY = 'imajica_catalog_packages_deleted'
 const CHANGE_EVENT = 'imajica:catalog-changed'
 /** Bump when Bacoor sealed menu is rebuilt so tablets drop stale franchise extras. */
-const BACOOR_MENU_SEED_VERSION = 'bacoor-san-mateo-v1'
+const BACOOR_MENU_SEED_VERSION = 'bacoor-org-2026-v1'
 const BACOOR_MENU_SEED_FLAG = 'imajica_bacoor_menu_seed_version'
+/** Full org replace from IMAJICA PRODUCT & SERVICES LIST 2026 — clears stale extras. */
+const CATALOG_2026_REPLACE_VERSION = 'catalog-2026-replace-v1'
+const CATALOG_2026_REPLACE_FLAG = 'imajica_catalog_2026_replace_version'
 
 const BRANCH_NAME_TO_ID: Record<string, string> = {
   'San Mateo, Rizal': '22222222-2222-2222-2222-222222222201',
@@ -101,6 +104,27 @@ function purgeStaleBacoorCatalogCache() {
 
 purgeStaleBacoorCatalogCache()
 
+function purgeStaleCatalog2026Replace() {
+  try {
+    if (typeof localStorage === 'undefined') return
+    if (localStorage.getItem(CATALOG_2026_REPLACE_FLAG) === CATALOG_2026_REPLACE_VERSION) return
+
+    // Drop custom extras so booking shows only the 2026 seed list (no duplicates).
+    localStorage.removeItem(SERVICES_KEY)
+    localStorage.removeItem(PACKAGES_KEY)
+    localStorage.removeItem(SERVICES_DELETED_KEY)
+    localStorage.removeItem(PACKAGES_DELETED_KEY)
+    localStorage.removeItem('imajica_catalog_price_overrides')
+
+    localStorage.setItem(CATALOG_2026_REPLACE_FLAG, CATALOG_2026_REPLACE_VERSION)
+    localStorage.setItem(BACOOR_MENU_SEED_FLAG, BACOOR_MENU_SEED_VERSION)
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+purgeStaleCatalog2026Replace()
+
 function seedRowToTreatment(
   row: ServiceSeedRow,
   index: number,
@@ -171,17 +195,21 @@ function seedRowToPackage(row: PackageSeedRow, index: number): Package {
   const id = `pkg-seed-${String(index + 1).padStart(4, '0')}`
   const branchId = row.branch ? BRANCH_NAME_TO_ID[row.branch] : undefined
   const noBranch = !row.branch
+  const includedTreatmentIds = (row.includedServiceIndexes ?? []).map(
+    (svcIndex) => `svc-seed-${String(svcIndex + 1).padStart(4, '0')}`,
+  )
   return {
     id,
     name: row.name,
     type: 'package',
-    description: '',
+    description: row.freeItems?.trim() || '',
     regularPrice: row.price,
     sessions: row.sessions,
     validityMonths: 6,
     status: row.status,
     memberCount: 0,
-    includedTreatmentIds: [],
+    includedTreatmentIds,
+    freeItems: row.freeItems?.trim() || undefined,
     branchId,
     branchName: row.branch || (noBranch ? 'All Branches' : '—'),
     availableGlobally: noBranch,
@@ -395,11 +423,12 @@ export function packageAssignedToBranch(pkg: Package, branchId: string): boolean
 export const BACOOR_BRANCH_ID = BRANCH_NAME_TO_ID['Bacoor, Cavite']
 
 /**
- * Branches with their own sealed menu (today: Bacoor only).
- * Other franchises can still opt into the shared Imajica catalog.
+ * Branches with a sealed franchise-only menu.
+ * 2026 replace: all clinics (incl. Bacoor/Dasma) share the org catalog — no sealed menu.
  */
-export function branchUsesOwnServiceMenu(branchId: string | undefined | null): boolean {
-  return Boolean(branchId && branchId === BACOOR_BRANCH_ID)
+export function branchUsesOwnServiceMenu(_branchId: string | undefined | null): boolean {
+  void _branchId
+  return false
 }
 
 /** Services visible in Service List / booking for a branch filter. */

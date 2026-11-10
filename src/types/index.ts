@@ -378,6 +378,8 @@ export interface ConsumableItem {
   price: number
   branchId?: string
   branchName: string
+  /** Spreadsheet group title (Skin Care / Facial / Medical / Clinic Consumables) */
+  categoryName?: string
   createdAt: string
 }
 

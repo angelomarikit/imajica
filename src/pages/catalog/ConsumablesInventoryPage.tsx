@@ -29,10 +29,18 @@ export function ConsumablesInventoryPage() {
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [branchFilter, setBranchFilter] = useState('all')
+  const [categoryFilter, setCategoryFilter] = useState('all')
   const [pageSize] = useState(15)
   const [page, setPage] = useState(1)
 
   useEffect(() => subscribeProducts(() => setItems(getConsumables())), [])
+
+  const categoryOptions = useMemo(() => {
+    const set = new Set(
+      items.map((i) => i.categoryName?.trim()).filter(Boolean) as string[],
+    )
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [items])
 
   const filtered = useMemo(() => {
     return items.filter((i) => {
@@ -43,10 +51,11 @@ export function ConsumablesInventoryPage() {
           return false
         }
       }
+      if (categoryFilter !== 'all' && (i.categoryName || '') !== categoryFilter) return false
       if (search && !i.name.toLowerCase().includes(search.toLowerCase())) return false
       return true
     })
-  }, [items, branchFilter, search])
+  }, [items, branchFilter, categoryFilter, search])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
@@ -80,6 +89,26 @@ export function ConsumablesInventoryPage() {
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name.replace(/ Branch$/, '')}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block min-w-[180px]">
+            <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-ui">
+              Category
+            </span>
+            <select
+              className="h-10 w-full rounded-[10px] border border-border bg-white px-3 text-sm"
+              value={categoryFilter}
+              onChange={(e) => {
+                setCategoryFilter(e.target.value)
+                setPage(1)
+              }}
+            >
+              <option value="all">All Categories</option>
+              {categoryOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
                 </option>
               ))}
             </select>
@@ -121,6 +150,7 @@ export function ConsumablesInventoryPage() {
             <thead className="text-xs uppercase tracking-wide text-slate-ui">
               <tr className="border-b border-border">
                 <th className="px-2 py-3">Consumable Name</th>
+                <th className="px-2 py-3">Category</th>
                 <th className="px-2 py-3 text-center">Stock</th>
                 <th className="px-2 py-3 text-center">Branch</th>
                 <th className="px-2 py-3 text-center">Date Created</th>
@@ -131,6 +161,7 @@ export function ConsumablesInventoryPage() {
               {rows.map((i) => (
                 <tr key={i.id} className="border-t border-border/70 hover:bg-ivory-100">
                   <td className="px-2 py-3 font-semibold text-[#073D2C]">{i.name}</td>
+                  <td className="px-2 py-3 text-slate-ui">{i.categoryName || '—'}</td>
                   <td className="px-2 py-3 text-center">
                     <span
                       className={cn(
@@ -160,7 +191,7 @@ export function ConsumablesInventoryPage() {
               ))}
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-2 py-10 text-center text-slate-ui">
+                  <td colSpan={6} className="px-2 py-10 text-center text-slate-ui">
                     No consumables found.
                   </td>
                 </tr>

@@ -20,6 +20,7 @@ import { Card } from '@/components/ui/Card'
 import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   getPackagesForBranch,
+  getServiceById,
   getServicesForBranch,
   subscribeCatalog,
 } from '@/services/catalogService'
@@ -30,7 +31,7 @@ import type { Client } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 
-type TabId = 'services' | 'products' | 'today' | 'list'
+type TabId = 'services' | 'products' | 'packages' | 'today' | 'list'
 
 type CatalogItem = {
   id: string
@@ -38,6 +39,8 @@ type CatalogItem = {
   price: number
   sessions: number
   kind: 'service' | 'package' | 'product'
+  /** Package inclusions text (spreadsheet FREE ITEMS / matched services) */
+  inclusions?: string
 }
 
 function makeInvoiceId() {
@@ -61,7 +64,6 @@ export function BookingPage() {
   const [qtyItem, setQtyItem] = useState<CatalogItem | null>(null)
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [tab, setTab] = useState<TabId>('services')
-  const [typeFilter, setTypeFilter] = useState('all')
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -90,10 +92,10 @@ export function BookingPage() {
     }
   }, [])
 
-  const offerings = useMemo(() => {
+  const services = useMemo(() => {
     void catalogTick
     const branchId = bookingListBranchId ?? 'all'
-    const services = getServicesForBranch(branchId)
+    return getServicesForBranch(branchId)
       .filter((s) => s.status === 'active')
       .map((s) => ({
         id: s.id,
@@ -102,40 +104,58 @@ export function BookingPage() {
         sessions: s.sessions ?? 1,
         kind: 'service' as const,
       }))
-    const packages = getPackagesForBranch(branchId)
+  }, [catalogTick, bookingListBranchId])
+
+  const packages = useMemo(() => {
+    void catalogTick
+    const branchId = bookingListBranchId ?? 'all'
+    return getPackagesForBranch(branchId)
       .filter((p) => p.status === 'active')
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        price: p.promoPrice ?? p.regularPrice,
-        sessions: p.sessions,
-        kind: 'package' as const,
-      }))
-    return [...services, ...packages]
+      .map((p) => {
+        const includedNames = (p.includedTreatmentIds ?? [])
+          .map((id) => getServiceById(id)?.name)
+          .filter(Boolean) as string[]
+        const inclusions =
+          p.freeItems?.trim() ||
+          includedNames.join(' + ') ||
+          p.description?.trim() ||
+          ''
+        return {
+          id: p.id,
+          name: p.name,
+          price: p.promoPrice ?? p.regularPrice,
+          sessions: p.sessions,
+          kind: 'package' as const,
+          inclusions,
+        }
+      })
   }, [catalogTick, bookingListBranchId])
 
   const products = useMemo(() => {
     void catalogTick
-    return getCatalogProducts().map((p) => ({
-      id: p.id,
-      name: p.name,
-      price: p.retailPrice,
-      sessions: 1,
-      kind: 'product' as const,
-    }))
+    return getCatalogProducts()
+      .filter((p) => p.status === 'active')
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        price: p.retailPrice,
+        sessions: 1,
+        kind: 'product' as const,
+      }))
   }, [catalogTick])
 
-  const catalog = tab === 'products' ? products : offerings
+  const catalog: CatalogItem[] =
+    tab === 'products' ? products : tab === 'packages' ? packages : services
 
   const filtered = useMemo(() => {
     return catalog.filter((item) => {
-      if (typeFilter === 'service' && item.kind !== 'service') return false
-      if (typeFilter === 'package' && item.kind !== 'package') return false
-      if (typeFilter === 'product' && item.kind !== 'product') return false
-      if (search && !item.name.toLowerCase().includes(search.toLowerCase())) return false
-      return true
+      if (!search) return true
+      const q = search.toLowerCase()
+      if (item.name.toLowerCase().includes(q)) return true
+      if (item.inclusions?.toLowerCase().includes(q)) return true
+      return false
     })
-  }, [catalog, typeFilter, search])
+  }, [catalog, search])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
@@ -338,7 +358,7 @@ export function BookingPage() {
       <div
         className={cn(
           'grid gap-4',
-          tab === 'services' || tab === 'products'
+          tab === 'services' || tab === 'products' || tab === 'packages'
             ? 'xl:grid-cols-[1.45fr_0.85fr]'
             : 'grid-cols-1',
         )}
@@ -349,6 +369,7 @@ export function BookingPage() {
               [
                 ['services', 'Services'],
                 ['products', 'Products'],
+                ['packages', 'Packages'],
                 ['today', "Today's Booking"],
                 ['list', 'Booking List'],
               ] as const
@@ -372,43 +393,30 @@ export function BookingPage() {
             ))}
           </div>
 
-          {tab === 'services' || tab === 'products' ? (
+          {tab === 'services' || tab === 'products' || tab === 'packages' ? (
             <Card className="p-4 sm:p-5">
               <h2 className="section-title text-[1.2rem]">
-                {tab === 'products' ? 'Products' : 'Services and packages'}
+                {tab === 'products' ? 'Products' : tab === 'packages' ? 'Packages' : 'Services'}
               </h2>
               <p className="page-subtitle">
-                Pick one or more offerings for this patient.
+                {tab === 'products'
+                  ? 'Select retail products by name and price.'
+                  : tab === 'packages'
+                    ? 'Select packages with included services, sessions, and price.'
+                    : 'Select services by name, sessions, and price.'}
               </p>
 
               <div className="mt-4 flex flex-wrap items-end gap-2">
-                <label className="text-sm">
-                  <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-slate-ui">
-                    Type
-                  </span>
-                  <select
-                    className="h-10 rounded-[10px] border border-border bg-white px-3 text-sm"
-                    value={typeFilter}
-                    onChange={(e) => {
-                      setTypeFilter(e.target.value)
-                      setPage(1)
-                    }}
-                  >
-                    <option value="all">All Offerings</option>
-                    {tab === 'services' ? (
-                      <>
-                        <option value="service">Services</option>
-                        <option value="package">Packages</option>
-                      </>
-                    ) : (
-                      <option value="product">Products</option>
-                    )}
-                  </select>
-                </label>
                 <div className="flex min-w-[220px] flex-1 items-center gap-2">
                   <input
                     className="h-10 flex-1 rounded-[10px] border border-border px-3 text-sm"
-                    placeholder={tab === 'products' ? 'Search products...' : 'Search services...'}
+                    placeholder={
+                      tab === 'products'
+                        ? 'Search products...'
+                        : tab === 'packages'
+                          ? 'Search packages...'
+                          : 'Search services...'
+                    }
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={(e) => {
@@ -440,20 +448,24 @@ export function BookingPage() {
                     <p className="text-[15px] font-semibold leading-snug tracking-tight text-[#073D2C]">
                       {item.name}
                     </p>
-                    <p className="mt-1 text-xs text-slate-ui">
-                      {item.kind === 'package'
-                        ? 'Package offering'
-                        : item.kind === 'product'
-                          ? 'Product'
-                          : 'Service offering'}
-                    </p>
+                    {item.kind === 'package' && item.inclusions ? (
+                      <p className="mt-1 text-xs leading-snug text-slate-ui">
+                        Includes: {item.inclusions}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-xs text-slate-ui">
+                        {item.kind === 'product' ? 'Product · retail price' : 'Service offering'}
+                      </p>
+                    )}
                     <div className="mt-3 flex items-end justify-between gap-2">
                       <p className="font-metric text-xl font-semibold tracking-tight text-[#073D2C]">
                         {formatPeso(item.price)}
                       </p>
-                      <p className="text-xs text-slate-ui">
-                        {item.sessions} session{item.sessions === 1 ? '' : 's'}
-                      </p>
+                      {item.kind !== 'product' ? (
+                        <p className="text-xs text-slate-ui">
+                          {item.sessions} session{item.sessions === 1 ? '' : 's'}
+                        </p>
+                      ) : null}
                     </div>
                   </button>
                 ))}
@@ -524,7 +536,7 @@ export function BookingPage() {
         </div>
 
         {/* Order summary */}
-        {tab === 'services' || tab === 'products' ? (
+        {tab === 'services' || tab === 'products' || tab === 'packages' ? (
           <Card className="flex h-fit flex-col p-4 sm:p-5">
             <h2 className="section-title text-[1.2rem]">Order Summary</h2>
 

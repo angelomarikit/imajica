@@ -13,6 +13,25 @@ const PROD_DELETED_KEY = 'imajica_catalog_products_deleted'
 const CONS_KEY = 'imajica_consumables'
 const CONS_DELETED_KEY = 'imajica_consumables_deleted'
 const CHANGE = 'imajica:products-changed'
+/** Full org replace from IMAJICA PRODUCT & SERVICES LIST 2026. */
+const CATALOG_2026_PRODUCTS_VERSION = 'catalog-2026-products-v1'
+const CATALOG_2026_PRODUCTS_FLAG = 'imajica_catalog_2026_products_version'
+
+function purgeStaleProducts2026Replace() {
+  try {
+    if (typeof localStorage === 'undefined') return
+    if (localStorage.getItem(CATALOG_2026_PRODUCTS_FLAG) === CATALOG_2026_PRODUCTS_VERSION) return
+    localStorage.removeItem(PROD_KEY)
+    localStorage.removeItem(PROD_DELETED_KEY)
+    localStorage.removeItem(CONS_KEY)
+    localStorage.removeItem(CONS_DELETED_KEY)
+    localStorage.setItem(CATALOG_2026_PRODUCTS_FLAG, CATALOG_2026_PRODUCTS_VERSION)
+  } catch {
+    /* ignore */
+  }
+}
+
+purgeStaleProducts2026Replace()
 
 function emit() {
   window.dispatchEvent(new Event(CHANGE))
@@ -53,6 +72,7 @@ function seedRowToConsumable(row: ConsumableSeedRow, index: number): ConsumableI
     reorderLevel: row.reorderLevel ?? 4,
     price: row.price ?? 0,
     branchName: row.branchName ?? 'Global',
+    categoryName: row.categoryName,
     createdAt: row.createdAt ?? '2026-06-29',
   }
 }
@@ -239,6 +259,7 @@ export function createConsumable(input: {
   price: number
   branchName?: string
   reorderLevel?: number
+  categoryName?: string
 }): ConsumableItem {
   const item: ConsumableItem = {
     id: `con-${Date.now()}`,
@@ -247,6 +268,7 @@ export function createConsumable(input: {
     reorderLevel: input.reorderLevel ?? 4,
     price: input.price,
     branchName: input.branchName?.trim() || 'Global',
+    categoryName: input.categoryName?.trim() || undefined,
     createdAt: new Date().toISOString().slice(0, 10),
   }
   write(CONS_KEY, [item, ...read<ConsumableItem>(CONS_KEY)])
