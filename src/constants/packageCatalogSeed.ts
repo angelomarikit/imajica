@@ -8,7 +8,7 @@ export type PackageSeedRow = {
   price: number
 }
 
-export const PACKAGE_CATALOG_SEED: PackageSeedRow[] = [
+const PACKAGE_CATALOG_SEED_BASE: PackageSeedRow[] = [
   // PAGE1
   { name: 'SECY FACE', sessions: 5, branch: 'San Mateo, Rizal', status: 'active', price: 15000 },
   { name: 'SEXY CURVES', sessions: 5, branch: 'San Mateo, Rizal', status: 'active', price: 16000 },
@@ -174,4 +174,17 @@ export const PACKAGE_CATALOG_SEED: PackageSeedRow[] = [
   { name: 'IMAJICA ARMS CONTOUR', sessions: 1, branch: '', status: 'active', price: 10000 },
   { name: 'IMAJICA LOVE HANDLE CONTOUR', sessions: 1, branch: '', status: 'active', price: 10000 },
   { name: 'IMAJICA UNDER BUTT CONTOUR', sessions: 1, branch: '', status: 'active', price: 10000 },
+]
+
+/** San Mateo packages cloned onto Bacoor (same name / sessions / price). */
+const BACOOR_PACKAGE_CLONES: PackageSeedRow[] = PACKAGE_CATALOG_SEED_BASE.filter(
+  (row) => row.branch === 'San Mateo, Rizal',
+).map((row) => ({
+  ...row,
+  branch: 'Bacoor, Cavite' as const,
+}))
+
+export const PACKAGE_CATALOG_SEED: PackageSeedRow[] = [
+  ...PACKAGE_CATALOG_SEED_BASE,
+  ...BACOOR_PACKAGE_CLONES,
 ]

@@ -14,6 +14,9 @@ const SERVICES_DELETED_KEY = 'imajica_catalog_services_deleted'
 const PACKAGES_KEY = 'imajica_catalog_packages'
 const PACKAGES_DELETED_KEY = 'imajica_catalog_packages_deleted'
 const CHANGE_EVENT = 'imajica:catalog-changed'
+/** Bump when Bacoor sealed menu is rebuilt so tablets drop stale franchise extras. */
+const BACOOR_MENU_SEED_VERSION = 'bacoor-san-mateo-v1'
+const BACOOR_MENU_SEED_FLAG = 'imajica_bacoor_menu_seed_version'
 
 const BRANCH_NAME_TO_ID: Record<string, string> = {
   'San Mateo, Rizal': '22222222-2222-2222-2222-222222222201',
@@ -54,6 +57,49 @@ function readDeletedIds(): Set<string> {
 function writeDeletedIds(ids: Set<string>) {
   localStorage.setItem(SERVICES_DELETED_KEY, JSON.stringify([...ids]))
 }
+
+function purgeStaleBacoorCatalogCache() {
+  try {
+    if (typeof localStorage === 'undefined') return
+    if (localStorage.getItem(BACOOR_MENU_SEED_FLAG) === BACOOR_MENU_SEED_VERSION) return
+
+    const services = readJson<Treatment>(SERVICES_KEY).filter(
+      (s) => !String(s.id || '').startsWith('svc-bacoor-'),
+    )
+    localStorage.setItem(SERVICES_KEY, JSON.stringify(services))
+
+    const deleted = [...readDeletedIds()].filter((id) => !id.startsWith('svc-bacoor-'))
+    writeDeletedIds(new Set(deleted))
+
+    try {
+      const raw = localStorage.getItem('imajica_catalog_price_overrides')
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          service?: Record<string, number>
+          package?: Record<string, number>
+          product?: Record<string, number>
+        }
+        if (parsed?.service) {
+          const nextService: Record<string, number> = {}
+          for (const [id, price] of Object.entries(parsed.service)) {
+            if (id.startsWith('svc-bacoor-')) continue
+            nextService[id] = price
+          }
+          parsed.service = nextService
+          localStorage.setItem('imajica_catalog_price_overrides', JSON.stringify(parsed))
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    localStorage.setItem(BACOOR_MENU_SEED_FLAG, BACOOR_MENU_SEED_VERSION)
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+purgeStaleBacoorCatalogCache()
 
 function seedRowToTreatment(
   row: ServiceSeedRow,
