@@ -65,6 +65,18 @@ export function cashBusinessDateKeyForInstant(isoOrDate: string | Date): string 
 }
 
 /**
+ * Inclusive start / exclusive end for a cash business day in Asia/Manila
+ * (day D runs 08:00 → next day 08:00).
+ */
+export function cashBusinessDayBounds(businessDay: string): { fromIso: string; toIso: string } {
+  const next = shiftDateKey(businessDay, 1)
+  return {
+    fromIso: `${businessDay}T${String(CASH_DAY_CUTOVER_HOUR_MANILA).padStart(2, '0')}:00:00+08:00`,
+    toIso: `${next}T${String(CASH_DAY_CUTOVER_HOUR_MANILA).padStart(2, '0')}:00:00+08:00`,
+  }
+}
+
+/**
  * Beginning cash for a business day = confirmed Ending of the prior business day.
  * Missing confirm → ₱0 (e.g. after depositing all cash to the owner).
  */

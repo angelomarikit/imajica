@@ -458,6 +458,12 @@ export interface Sale {
   paymentMethod: PaymentMethod
   /** All processors on the sale (split checkout); UI joins these for display */
   paymentMethods?: PaymentMethod[]
+  /** Per-tender amounts from `payments` (split checkout); used for Cash on Hand */
+  paymentBreakdown?: Array<{
+    method: PaymentMethod
+    amount: number
+    status?: string
+  }>
   status: PaymentStatus
   createdAt: string
   /** Import grouping key (customer + item + branch + episode date) */

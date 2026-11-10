@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { cashBusinessDayBounds } from '@/services/cashDrawerService'
 
 export type BranchDashboardSalesSummary = {
   ok: boolean
@@ -101,4 +102,46 @@ export async function fetchBranchDashboardSalesSummary(input: {
     return null
   }
   return mapped
+}
+
+/**
+ * Physical cash collected in the till for one clinic over a cash business day
+ * (8:00 AM Manila window). Sums payments.payment_amount where method is cash —
+ * includes Medical Procedure at full cash collected (not clinic net).
+ */
+export async function fetchBranchCashCollected(input: {
+  branchId: string
+  /** Cash business date key YYYY-MM-DD (8am Manila day). */
+  cashDay: string
+}): Promise<number | null> {
+  if (!isSupabaseConfigured || !supabase || !input.branchId || !input.cashDay) return null
+
+  if (deniedBranchIds.has(input.branchId)) return null
+  const cool = cooldownUntil.get(input.branchId) ?? 0
+  if (cool > Date.now()) return null
+
+  const { fromIso, toIso } = cashBusinessDayBounds(input.cashDay)
+  const { data, error } = await supabase.rpc('branch_cash_collected', {
+    p_branch_id: input.branchId,
+    p_from: fromIso,
+    p_to: toIso,
+  })
+
+  if (error) {
+    const msg = error.message || ''
+    if (/429|rate limit|too many/i.test(msg) || (error as { status?: number }).status === 429) {
+      cooldownUntil.set(input.branchId, Date.now() + 60_000)
+      console.warn('[dashboard] cash collected rate-limited; using local sales for 60s')
+      return null
+    }
+    // Missing RPC on older projects — fall back to client-side cash sum
+    if (/could not find|does not exist|PGRST202/i.test(msg)) {
+      console.warn('[dashboard] branch_cash_collected missing — apply migration 20261111000105')
+      return null
+    }
+    console.error('[dashboard] cash collected rpc failed', msg)
+    return null
+  }
+  const n = Number(data)
+  return Number.isFinite(n) ? n : 0
 }

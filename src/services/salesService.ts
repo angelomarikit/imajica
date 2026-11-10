@@ -78,8 +78,9 @@ export function resolveDoctorProcedureSplit(input: {
 }
 
 /**
- * Amount recognized as clinic sales for dashboards, cash on hand, commissions, and reports.
+ * Amount recognized as clinic sales for dashboards, commissions, and reports.
  * Doctor's procedure lines use the clinic share of that line (80% outsourced, 95% when the doctor is Hendra).
+ * Do not use for Cash on Hand — use cashCollectedFromSale / cashCollectedFromSales instead.
  */
 export function clinicRecognizedAmount(
   sale: Pick<Sale, 'totalAmount' | 'isDoctorsProcedure' | 'doctorName'>,
@@ -90,6 +91,84 @@ export function clinicRecognizedAmount(
     serviceTotal: gross,
     doctorName: sale.doctorName,
   }).clinicNetAmount
+}
+
+function saleHeaderId(saleId: string): string {
+  const sep = saleId.indexOf(':')
+  return sep > 0 ? saleId.slice(0, sep) : saleId
+}
+
+function isExcludedPaymentStatus(status: string | null | undefined): boolean {
+  const s = String(status || '').toLowerCase()
+  return s === 'failed' || s === 'cancelled' || s === 'refunded'
+}
+
+/**
+ * Physical cash collected for one sale line header.
+ * Uses paymentBreakdown cash amounts (gross till cash, including Medical Procedure).
+ * Never uses clinicRecognizedAmount / clinic net.
+ */
+export function cashCollectedFromSale(
+  sale: Pick<
+    Sale,
+    'paymentBreakdown' | 'paymentMethod' | 'paymentMethods' | 'totalAmount' | 'status'
+  >,
+): number {
+  const breakdown = sale.paymentBreakdown
+  if (breakdown && breakdown.length) {
+    return roundMoney(
+      breakdown.reduce((sum, row) => {
+        if (isExcludedPaymentStatus(row.status)) return sum
+        if (row.method !== 'cash') return sum
+        return sum + (Number(row.amount) || 0)
+      }, 0),
+    )
+  }
+  const methods =
+    sale.paymentMethods && sale.paymentMethods.length
+      ? sale.paymentMethods
+      : sale.paymentMethod
+        ? [sale.paymentMethod]
+        : []
+  if (methods.length === 1 && methods[0] === 'cash') {
+    return roundMoney(Number(sale.totalAmount) || 0)
+  }
+  if (methods.length === 0 && sale.paymentMethod === 'cash') {
+    return roundMoney(Number(sale.totalAmount) || 0)
+  }
+  return 0
+}
+
+/**
+ * Sum cash collected across sale lines without double-counting multi-item headers.
+ * When breakdown is missing, cash-only headers contribute the sum of line totals (gross).
+ */
+export function cashCollectedFromSales(sales: Sale[]): number {
+  const byHeader = new Map<string, Sale[]>()
+  for (const s of sales) {
+    const hid = saleHeaderId(s.id)
+    const list = byHeader.get(hid) ?? []
+    list.push(s)
+    byHeader.set(hid, list)
+  }
+  let total = 0
+  for (const lines of byHeader.values()) {
+    const head = lines[0]!
+    if (head.paymentBreakdown && head.paymentBreakdown.length) {
+      total += cashCollectedFromSale(head)
+      continue
+    }
+    const methods =
+      head.paymentMethods && head.paymentMethods.length
+        ? head.paymentMethods
+        : head.paymentMethod
+          ? [head.paymentMethod]
+          : []
+    if (methods.length === 1 && methods[0] === 'cash') {
+      total += roundMoney(lines.reduce((n, l) => n + (Number(l.totalAmount) || 0), 0))
+    }
+  }
+  return roundMoney(total)
 }
 
 const EXTRA_KEY = 'imajica_analytics_sales'
@@ -206,7 +285,13 @@ type RemoteSaleRow = {
         sessions_completed: number | null
       }>
     | null
-  payments: Array<{ payment_method: string; payment_status: string }> | null
+  payments:
+    | Array<{
+        payment_method: string
+        payment_status: string
+        payment_amount?: number | null
+      }>
+    | null
   clients: { full_name: string } | { full_name: string }[] | null
   branches: { name: string } | { name: string }[] | null
 }
@@ -266,6 +351,31 @@ function paymentMethodsFromPayments(
   return out
 }
 
+function paymentBreakdownFromPayments(
+  payments:
+    | Array<{
+        payment_method: string
+        payment_status?: string
+        payment_amount?: number | null
+      }>
+    | null
+    | undefined,
+): Sale['paymentBreakdown'] {
+  const out: NonNullable<Sale['paymentBreakdown']> = []
+  for (const p of payments ?? []) {
+    const method = normalizePaymentMethod(p.payment_method)
+    if (!method) continue
+    const amount = Number(p.payment_amount)
+    if (!Number.isFinite(amount)) continue
+    out.push({
+      method,
+      amount,
+      status: p.payment_status || undefined,
+    })
+  }
+  return out.length ? out : undefined
+}
+
 function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
   const out: Sale[] = []
   for (const row of rows) {
@@ -274,6 +384,7 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
     const clientName = fromJoin || fromLocal || 'Client'
     const branchName = branchNameFor(row.branch_id, row.branches)
     const paymentMethods = paymentMethodsFromPayments(row.payments)
+    const paymentBreakdown = paymentBreakdownFromPayments(row.payments)
     // Only default to cash when the sale truly has no payment rows (legacy / import gaps)
     const paymentMethod = paymentMethods[0] ?? ('cash' as PaymentMethod)
     const items = row.sale_items?.length
@@ -328,6 +439,7 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
         totalAmount: Number(item.line_total),
         paymentMethod,
         paymentMethods: paymentMethods.length ? paymentMethods : undefined,
+        paymentBreakdown,
         status: (row.status as Sale['status']) || 'pending',
         createdAt: row.created_at,
         episodeKey: 'live-booking',
@@ -367,7 +479,7 @@ const REMOTE_SALES_CLIENT_SELECT: string =
   'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
   'contract_amount, ' +
   'sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ), ' +
-  'payments ( payment_method, payment_status ), ' +
+  'payments ( payment_method, payment_status, payment_amount ), ' +
   'clients!client_id ( full_name ), ' +
   'branches!branch_id ( name )'
 
@@ -411,7 +523,7 @@ async function fetchPaymentsBySaleIds(
     const chunk = saleIds.slice(i, i + chunkSize)
     const { data, error } = await supabase
       .from('payments')
-      .select('sale_id, payment_method, payment_status')
+      .select('sale_id, payment_method, payment_status, payment_amount')
       .in('sale_id', chunk)
     if (error) {
       console.warn('[sales] payments batch failed', error.message)
@@ -419,7 +531,11 @@ async function fetchPaymentsBySaleIds(
     }
     for (const row of (data ?? []) as Array<RemotePayment & { sale_id: string }>) {
       const list = out.get(row.sale_id) ?? []
-      list.push({ payment_method: row.payment_method, payment_status: row.payment_status })
+      list.push({
+        payment_method: row.payment_method,
+        payment_status: row.payment_status,
+        payment_amount: row.payment_amount,
+      })
       out.set(row.sale_id, list)
     }
   }
@@ -1008,16 +1124,27 @@ export async function recordBookingCheckout(
       throw new Error(itemError.message || 'Could not save sale items')
     }
 
-    const splits = (opts?.paymentSplits ?? [])
-      .filter((s) => s.paymentAmount > 0 && s.paymentMethod)
-      .map((s) => ({
-        sale_id: saleId,
-        provider: 'pos' as const,
-        payment_method: s.paymentMethod,
-        payment_status: head.status === 'paid' ? 'paid' : 'pending',
-        payment_amount: s.paymentAmount,
-        payment_date: createdAt,
-      }))
+    // Medical Procedure is always cash — force tender so Cash on Hand stays aligned.
+    const forceCashProcedure = isDoctorsProcedure
+    const rawSplits = (opts?.paymentSplits ?? []).filter(
+      (s) => s.paymentAmount > 0 && s.paymentMethod,
+    )
+    const normalizedSplits = forceCashProcedure
+      ? [
+          {
+            paymentMethod: 'cash' as PaymentMethod,
+            paymentAmount: rawSplits.reduce((n, s) => n + (Number(s.paymentAmount) || 0), 0) || totalAmount,
+          },
+        ]
+      : rawSplits
+    const splits = normalizedSplits.map((s) => ({
+      sale_id: saleId,
+      provider: 'pos' as const,
+      payment_method: forceCashProcedure ? 'cash' : s.paymentMethod,
+      payment_status: head.status === 'paid' ? 'paid' : 'pending',
+      payment_amount: s.paymentAmount,
+      payment_date: createdAt,
+    }))
     const paymentRows =
       splits.length > 0
         ? splits
@@ -1025,7 +1152,7 @@ export async function recordBookingCheckout(
             {
               sale_id: saleId,
               provider: 'pos' as const,
-              payment_method: head.paymentMethod,
+              payment_method: forceCashProcedure ? 'cash' : head.paymentMethod,
               payment_status: head.status === 'paid' ? 'paid' : 'pending',
               payment_amount: totalAmount,
               payment_date: createdAt,
@@ -1041,8 +1168,8 @@ export async function recordBookingCheckout(
 
     const splitMethods = [
       ...new Set(
-        (opts?.paymentSplits ?? [])
-          .map((s) => normalizePaymentMethod(s.paymentMethod) || s.paymentMethod)
+        paymentRows
+          .map((s) => normalizePaymentMethod(s.payment_method) || (s.payment_method as PaymentMethod))
           .filter(Boolean),
       ),
     ] as PaymentMethod[]
@@ -1052,6 +1179,11 @@ export async function recordBookingCheckout(
         : head.paymentMethod
           ? [head.paymentMethod]
           : undefined
+    const breakdownForSale: Sale['paymentBreakdown'] = paymentRows.map((row) => ({
+      method: (normalizePaymentMethod(row.payment_method) || 'cash') as PaymentMethod,
+      amount: Number(row.payment_amount) || 0,
+      status: row.payment_status,
+    }))
 
     persisted = (insertedItems ?? itemRows).map((item, index) => {
       const line = lines[index]!
@@ -1070,6 +1202,7 @@ export async function recordBookingCheckout(
         itemType,
         paymentMethod: methodsForSale?.[0] || line.paymentMethod,
         paymentMethods: methodsForSale,
+        paymentBreakdown: breakdownForSale,
       }
     })
 
@@ -1077,6 +1210,40 @@ export async function recordBookingCheckout(
     // Also mirror to localStorage so Today's Booking stays visible if remote refresh fails
     for (const sale of persisted) appendExtraSale(sale)
   } else {
+    const localSplits = (opts?.paymentSplits ?? []).filter(
+      (s) => s.paymentAmount > 0 && s.paymentMethod,
+    )
+    const forceCash = Boolean(head.isDoctorsProcedure)
+    const localBreakdown: Sale['paymentBreakdown'] =
+      localSplits.length > 0
+        ? forceCash
+          ? [
+              {
+                method: 'cash',
+                amount: localSplits.reduce((n, s) => n + (Number(s.paymentAmount) || 0), 0),
+                status: head.status === 'paid' ? 'paid' : 'pending',
+              },
+            ]
+          : localSplits.map((s) => ({
+              method: (normalizePaymentMethod(s.paymentMethod) || s.paymentMethod) as PaymentMethod,
+              amount: Number(s.paymentAmount) || 0,
+              status: head.status === 'paid' ? 'paid' : 'pending',
+            }))
+        : [
+            {
+              method: forceCash ? 'cash' : head.paymentMethod,
+              amount: totalAmount,
+              status: head.status === 'paid' ? 'paid' : 'pending',
+            },
+          ]
+    persisted = persisted.map((sale) => ({
+      ...sale,
+      paymentMethod: forceCash ? 'cash' : sale.paymentMethod,
+      paymentMethods: forceCash
+        ? (['cash'] as PaymentMethod[])
+        : sale.paymentMethods,
+      paymentBreakdown: localBreakdown,
+    }))
     for (const sale of persisted) appendExtraSale(sale)
   }
 
@@ -1342,11 +1509,6 @@ export function getBookingRows(opts?: {
   }
 
   return rows.sort((a, b) => b.dateIso.localeCompare(a.dateIso))
-}
-
-function saleHeaderId(saleId: string): string {
-  const colon = saleId.indexOf(':')
-  return colon > 0 ? saleId.slice(0, colon) : saleId
 }
 
 /** Sales flagged as doctor's procedure — payouts owed to outsourced doctors. */

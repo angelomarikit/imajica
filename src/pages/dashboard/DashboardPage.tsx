@@ -51,11 +51,13 @@ import {
 } from '@/services/cashDrawerService'
 import { getExpenses, subscribeExpenses } from '@/services/expenseService'
 import {
+  fetchBranchCashCollected,
   fetchBranchDashboardSalesSummary,
   type BranchDashboardSalesSummary,
 } from '@/services/dashboardSalesSummaryService'
 import { manilaDateKey } from '@/services/attendanceService'
 import {
+  cashCollectedFromSales,
   clinicRecognizedAmount,
   getBookingRows,
   getSales,
@@ -291,6 +293,11 @@ function lineAmount(sale: Sale, mode: 'gross' | 'clinic') {
   return mode === 'gross' ? saleGrossAmount(sale) : clinicRecognizedAmount(sale)
 }
 
+function saleHeaderId(saleId: string): string {
+  const sep = saleId.indexOf(':')
+  return sep > 0 ? saleId.slice(0, sep) : saleId
+}
+
 function buildSalesBrief(sales: Sale[], amountMode: 'gross' | 'clinic' = 'clinic') {
   const total = sales.reduce((n, s) => n + lineAmount(s, amountMode), 0)
   const byType = {
@@ -302,13 +309,12 @@ function buildSalesBrief(sales: Sale[], amountMode: 'gross' | 'clinic' = 'clinic
   const byItem = new Map<string, { name: string; amount: number; qty: number }>()
   const clients = new Set<string>()
   const bookings = new Set<string>()
+  const seenPayHeaders = new Set<string>()
 
   for (const s of sales) {
     const amount = lineAmount(s, amountMode)
     const type = s.itemType === 'package' || s.itemType === 'product' ? s.itemType : 'service'
     byType[type] += amount
-    const pay = (s.paymentMethod || 'other').replaceAll('_', ' ')
-    byPay.set(pay, (byPay.get(pay) || 0) + amount)
     const key = (s.treatmentOrPackage || 'Item').trim() || 'Item'
     const prev = byItem.get(key) ?? { name: key, amount: 0, qty: 0 }
     prev.amount += amount
@@ -317,6 +323,40 @@ function buildSalesBrief(sales: Sale[], amountMode: 'gross' | 'clinic' = 'clinic
     if (s.clientId) clients.add(s.clientId)
     else if (s.clientName) clients.add(s.clientName)
     bookings.add(s.bookingRef || s.invoiceNumber || s.id)
+
+    const hid = saleHeaderId(s.id)
+    if (seenPayHeaders.has(hid)) continue
+    seenPayHeaders.add(hid)
+
+    if (s.paymentBreakdown && s.paymentBreakdown.length) {
+      for (const row of s.paymentBreakdown) {
+        const status = String(row.status || '').toLowerCase()
+        if (status === 'failed' || status === 'cancelled' || status === 'refunded') continue
+        const pay = (row.method || 'other').replaceAll('_', ' ')
+        byPay.set(pay, (byPay.get(pay) || 0) + (Number(row.amount) || 0))
+      }
+      continue
+    }
+
+    const headerGross = sales
+      .filter((x) => saleHeaderId(x.id) === hid)
+      .reduce((n, x) => n + lineAmount(x, amountMode), 0)
+    const methods =
+      s.paymentMethods && s.paymentMethods.length
+        ? s.paymentMethods
+        : s.paymentMethod
+          ? [s.paymentMethod]
+          : ['other']
+    if (methods.length <= 1) {
+      const pay = (methods[0] || 'other').replaceAll('_', ' ')
+      byPay.set(pay, (byPay.get(pay) || 0) + headerGross)
+    } else {
+      const share = headerGross / methods.length
+      for (const m of methods) {
+        const pay = (m || 'other').replaceAll('_', ' ')
+        byPay.set(pay, (byPay.get(pay) || 0) + share)
+      }
+    }
   }
 
   const topItems = [...byItem.values()].sort((a, b) => b.amount - a.amount).slice(0, 12)
@@ -686,9 +726,10 @@ function BranchOpsDashboard() {
   })
   /** Server aggregates — source of truth for clinic dashboard cards (fast; includes migration + live). */
   const [rpcSummary, setRpcSummary] = useState<BranchDashboardSalesSummary | null>(null)
-  /** HQ All Branches: today sales for the 4 company clinics (RPC, not cold local cache). */
-  const [companyTodaySalesRpc, setCompanyTodaySalesRpc] = useState<number | null>(null)
-  const [companyTodayByBranch, setCompanyTodayByBranch] = useState<Record<string, number>>({})
+  /** Cash on Hand: cash tenders only (RPC), per clinic and company combined. */
+  const [cashCollectedRpc, setCashCollectedRpc] = useState<number | null>(null)
+  const [companyCashCollectedRpc, setCompanyCashCollectedRpc] = useState<number | null>(null)
+  const [companyCashByBranch, setCompanyCashByBranch] = useState<Record<string, number>>({})
 
   useEffect(() => {
     const refreshSales = () => setSales(getSales())
@@ -792,37 +833,50 @@ function BranchOpsDashboard() {
 
   useEffect(() => {
     if (!showCompanyCashOnHand) {
-      setCompanyTodaySalesRpc(null)
-      setCompanyTodayByBranch({})
+      setCompanyCashCollectedRpc(null)
+      setCompanyCashByBranch({})
       return
     }
     let cancelled = false
-    const today = todayKey
+    const cashDay = cashBusinessDateKey()
     void Promise.all(
       COMPANY_OWNED_BRANCH_IDS.map(async (branchId) => {
-        const summary = await fetchBranchDashboardSalesSummary({
-          branchId,
-          from: today,
-          to: today,
-          today,
-        })
-        return [branchId, summary?.todaySales ?? 0] as const
+        const amount = await fetchBranchCashCollected({ branchId, cashDay })
+        return [branchId, amount] as const
       }),
     ).then((pairs) => {
       if (cancelled) return
       const byBranch: Record<string, number> = {}
       let total = 0
+      let anyRpc = false
       for (const [id, amount] of pairs) {
+        if (amount == null) continue
+        anyRpc = true
         byBranch[id] = amount
         total += amount
       }
-      setCompanyTodayByBranch(byBranch)
-      setCompanyTodaySalesRpc(total)
+      setCompanyCashByBranch(byBranch)
+      setCompanyCashCollectedRpc(anyRpc ? total : null)
     })
     return () => {
       cancelled = true
     }
-  }, [showCompanyCashOnHand, todayKey])
+  }, [showCompanyCashOnHand, todayKey, cashTick])
+
+  useEffect(() => {
+    if (!scopeBranchId || showCompanyCashOnHand) {
+      setCashCollectedRpc(null)
+      return
+    }
+    let cancelled = false
+    const cashDay = cashBusinessDateKey()
+    void fetchBranchCashCollected({ branchId: scopeBranchId, cashDay }).then((amount) => {
+      if (!cancelled) setCashCollectedRpc(amount)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [scopeBranchId, showCompanyCashOnHand, todayKey, cashTick])
 
   const scopedSales = useMemo(
     () => (scopeBranchId ? sales.filter((s) => s.branchId === scopeBranchId) : sales),
@@ -1065,21 +1119,18 @@ function BranchOpsDashboard() {
     if (showCompanyCashOnHand) {
       const beginning = readCompanyCashBeginning(companyCashScopes, priorCashDay)
       const manualDeducted = readCompanyManualCashDeducted(companyCashScopes, cashDay)
-      const memorySales = sales
-        .filter((s) => {
+      const memoryCash = cashCollectedFromSales(
+        sales.filter((s) => {
           const branchId = s.branchId
           return (
             cashBusinessDateKeyForInstant(s.createdAt) === cashDay &&
             branchId != null &&
             companySet.has(branchId)
           )
-        })
-        .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
-      // RPC is calendar-day; prefer memory when still before 8 AM cutover vs calendar today.
-      const todaySalesTotal =
-        cashDay === todayKey && companyTodaySalesRpc != null
-          ? companyTodaySalesRpc
-          : memorySales
+        }),
+      )
+      const cashIn =
+        companyCashCollectedRpc != null ? companyCashCollectedRpc : memoryCash
       const expenseCashOut = expenses
         .filter((e) => {
           if (e.expenseDate !== cashDay || e.status !== 'active' || !e.deductCash) return false
@@ -1088,7 +1139,7 @@ function BranchOpsDashboard() {
         })
         .reduce((n, e) => n + (e.amount || 0), 0)
       const deducted = expenseCashOut + manualDeducted
-      const ending = beginning + todaySalesTotal - deducted
+      const ending = beginning + cashIn - deducted
       const confirmedToday = readCompanyConfirmedToday(
         companyCashScopes,
         cashDay,
@@ -1112,18 +1163,16 @@ function BranchOpsDashboard() {
     const daySalesLines = scopedSales.filter(
       (s) => cashBusinessDateKeyForInstant(s.createdAt) === cashDay,
     )
-    // Prefer live sales for the cash business day (not the reporting date range).
-    const todaySalesTotal =
-      cashDay === todayKey && scopeBranchId && rpcSummary
-        ? rpcSummary.todaySales
-        : daySalesLines.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
+    const memoryCash = cashCollectedFromSales(daySalesLines)
+    const cashIn =
+      scopeBranchId && cashCollectedRpc != null ? cashCollectedRpc : memoryCash
     const expenseCashOut = scopedExpenses
       .filter(
         (e) => e.expenseDate === cashDay && e.status === 'active' && e.deductCash,
       )
       .reduce((n, e) => n + (e.amount || 0), 0)
     const deducted = expenseCashOut + manualDeducted
-    const ending = beginning + todaySalesTotal - deducted
+    const ending = beginning + cashIn - deducted
     const confirmedToday = readConfirmedCash(cashScope, cashDay)
     return {
       beginning,
@@ -1143,12 +1192,12 @@ function BranchOpsDashboard() {
     scopedExpenses,
     cashTick,
     scopeBranchId,
-    rpcSummary,
+    cashCollectedRpc,
     showCompanyCashOnHand,
     companyCashScopes,
     sales,
     expenses,
-    companyTodaySalesRpc,
+    companyCashCollectedRpc,
   ])
 
   const customerBirthdays = useMemo(() => {
@@ -1220,23 +1269,15 @@ function BranchOpsDashboard() {
             companyCashScopes.map(async (branchId) => {
               const beginning = readCashBeginning(branchId, cashDay)
               const manualDeducted = readManualCashDeducted(branchId, cashDay)
-              const todaySales =
-                cashDay === todayKey
-                  ? (companyTodayByBranch[branchId] ??
-                    sales
-                      .filter(
-                        (s) =>
-                          cashBusinessDateKeyForInstant(s.createdAt) === cashDay &&
-                          s.branchId === branchId,
-                      )
-                      .reduce((n, s) => n + clinicRecognizedAmount(s), 0))
-                  : sales
-                      .filter(
-                        (s) =>
-                          cashBusinessDateKeyForInstant(s.createdAt) === cashDay &&
-                          s.branchId === branchId,
-                      )
-                      .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
+              const branchCash =
+                companyCashByBranch[branchId] ??
+                cashCollectedFromSales(
+                  sales.filter(
+                    (s) =>
+                      cashBusinessDateKeyForInstant(s.createdAt) === cashDay &&
+                      s.branchId === branchId,
+                  ),
+                )
               const expenseCashOut = expenses
                 .filter(
                   (e) =>
@@ -1246,7 +1287,7 @@ function BranchOpsDashboard() {
                     e.branchId === branchId,
                 )
                 .reduce((n, e) => n + (e.amount || 0), 0)
-              const ending = beginning + todaySales - expenseCashOut - manualDeducted
+              const ending = beginning + branchCash - expenseCashOut - manualDeducted
               await writeConfirmedCash(branchId, cashDay, ending)
             }),
           )

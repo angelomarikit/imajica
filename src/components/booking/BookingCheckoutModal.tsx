@@ -251,10 +251,20 @@ export function BookingCheckoutModal({
   }, [open, total, patient.id])
 
   function handlePaymentTypeChange(next: BookingPaymentType) {
+    if (isDoctorsProcedure && next !== 'Full Payment') {
+      toast.error('Medical Procedure must be paid in Cash (Full Payment)')
+      setPaymentType('Full Payment')
+      setPaymentMethod('cash')
+      setPaymentMethod2('')
+      setPaymentAmount2('')
+      setPaymentAmount(String(total.toFixed(2)))
+      return
+    }
     setPaymentType(next)
     if (next === 'Split Payment') {
-      const half = Math.round((total / 2) * 100) / 100
-      const rest = Math.round((total - half) * 100) / 100
+      const due = Math.round(total * 100) / 100
+      const half = Math.round((due / 2) * 100) / 100
+      const rest = Math.round((due - half) * 100) / 100
       setPaymentAmount(String(half.toFixed(2)))
       setPaymentAmount2(String(rest.toFixed(2)))
       if (!paymentMethod2) setPaymentMethod2('')
@@ -339,38 +349,52 @@ export function BookingCheckoutModal({
       return
     }
 
+    // Medical Procedure is always cash at full till amount.
+    const effectivePaymentMethod: BookingPaymentMethodChoice = isDoctorsProcedure
+      ? 'cash'
+      : paymentMethod
+    const effectiveSplit = isDoctorsProcedure ? false : isSplitPayment
+    const pointsDiscount = usePoints
+      ? Math.min(patient.rewardPoints ?? 0, Math.round(total * 100) / 100)
+      : 0
+    const dueAfterPoints = Math.max(0, Math.round((total - pointsDiscount) * 100) / 100)
+
     const amount1 = Math.max(0, Number(paymentAmount) || 0)
-    const amount2 = isSplitPayment ? Math.max(0, Number(paymentAmount2) || 0) : 0
-    if (isSplitPayment) {
+    const amount2 = effectiveSplit ? Math.max(0, Number(paymentAmount2) || 0) : 0
+    if (effectiveSplit) {
       if (amount1 <= 0 || amount2 <= 0) {
         toast.error('Enter amounts for both payment processors')
         return
       }
       const splitSum = Math.round((amount1 + amount2) * 100) / 100
-      const due = Math.round(total * 100) / 100
-      if (Math.abs(splitSum - due) > 0.05) {
+      if (Math.abs(splitSum - dueAfterPoints) > 0.05) {
         toast.error(
-          `Split amounts must add up to ${formatPesoExact(due)} (currently ${formatPesoExact(splitSum)})`,
+          `Split amounts must add up to ${formatPesoExact(dueAfterPoints)} after points (currently ${formatPesoExact(splitSum)})`,
         )
         return
       }
     }
 
-    const amount = isSplitPayment ? amount1 + amount2 : Math.max(0, amount1 || total)
-    const pointsDiscount = usePoints ? Math.min(patient.rewardPoints ?? 0, amount) : 0
-    const paidAmount = Math.max(0, amount - pointsDiscount)
+    const paidAmount = effectiveSplit
+      ? Math.round((amount1 + amount2) * 100) / 100
+      : dueAfterPoints
     const createdAt = start.toISOString()
     const bookingRef = invoiceId
     const durationMinutes = 60
     const paymentLabel = (m: BookingPaymentMethodChoice) =>
       PAYMENT_METHODS.find((x) => x.value === m)?.label ?? m
     const paymentSplits =
-      isSplitPayment && paymentMethod2
+      effectiveSplit && paymentMethod2
         ? [
             { paymentMethod: mapPaymentMethod(paymentMethod), paymentAmount: amount1 },
             { paymentMethod: mapPaymentMethod(paymentMethod2), paymentAmount: amount2 },
           ]
-        : [{ paymentMethod: mapPaymentMethod(paymentMethod), paymentAmount: paidAmount }]
+        : [
+            {
+              paymentMethod: mapPaymentMethod(effectivePaymentMethod),
+              paymentAmount: paidAmount,
+            },
+          ]
 
     const branches = getBranches()
     const resolvedId =
@@ -446,15 +470,17 @@ export function BookingCheckoutModal({
             : line.kind === 'package'
               ? 'package'
               : 'service') as 'service' | 'package' | 'product',
-          paymentType,
+          paymentType: isDoctorsProcedure ? 'Full Payment' : paymentType,
           bookingRef,
           quantity: line.quantity,
           unitRetailPrice: line.unitPrice,
           leadSource,
           isFirstClientSale: wasFirstVisit,
           totalAmount: lineTotal || line.unitPrice * line.quantity,
-          paymentMethod: mapPaymentMethod(paymentMethod),
-          status: (paymentType === 'Full Payment' || paymentType === 'Split Payment'
+          paymentMethod: mapPaymentMethod(effectivePaymentMethod),
+          status: (isDoctorsProcedure ||
+          paymentType === 'Full Payment' ||
+          paymentType === 'Split Payment'
             ? 'paid'
             : 'pending') as 'paid' | 'pending',
           createdAt,
@@ -485,12 +511,12 @@ export function BookingCheckoutModal({
           downPayment: paidAmount,
           notes: [
             isDoctorsProcedure
-              ? `Doctor's Procedure · ${doctorNameTrimmed} · Fee ${formatPesoExact(doctorFeeAmount)} · Clinic net ${formatPesoExact(clinicNetAmount)}`
+              ? `Doctor's Procedure · ${doctorNameTrimmed} · Fee ${formatPesoExact(doctorFeeAmount)} · Clinic net ${formatPesoExact(clinicNetAmount)} · Cash ${formatPesoExact(paidAmount)}`
               : null,
             selectedReferrer ? `Referred by: ${selectedReferrer.fullName}` : null,
-            isSplitPayment && paymentMethod2
+            effectiveSplit && paymentMethod2
               ? `Payment: Split · ${paymentLabel(paymentMethod)} ${formatPesoExact(amount1)} + ${paymentLabel(paymentMethod2)} ${formatPesoExact(amount2)}`
-              : `Payment: ${paymentType} / ${paymentLabel(paymentMethod)}`,
+              : `Payment: ${isDoctorsProcedure ? 'Full Payment' : paymentType} / ${paymentLabel(effectivePaymentMethod)}`,
             discount > 0 ? `Discount: ${formatPesoExact(discount)}` : null,
           ]
             .filter(Boolean)
@@ -656,6 +682,7 @@ export function BookingCheckoutModal({
                   className={fieldControl}
                   value={paymentType}
                   onChange={(e) => handlePaymentTypeChange(e.target.value as BookingPaymentType)}
+                  disabled={isDoctorsProcedure}
                 >
                   {PAYMENT_TYPES.map((t) => (
                     <option key={t} value={t}>
@@ -663,6 +690,11 @@ export function BookingCheckoutModal({
                     </option>
                   ))}
                 </select>
+                {isDoctorsProcedure ? (
+                  <p className="mt-1 text-[11px] text-slate-ui">
+                    Medical Procedure is always Cash (full amount to Cash on Hand).
+                  </p>
+                ) : null}
               </label>
               <label className="block">
                 <span className={fieldLabel}>
@@ -675,6 +707,7 @@ export function BookingCheckoutModal({
                     setPaymentMethod(e.target.value as BookingPaymentMethodChoice | '')
                   }
                   required
+                  disabled={isDoctorsProcedure}
                 >
                   <option value="">Select Payment Method</option>
                   {PAYMENT_METHODS.map((m) => (
@@ -872,8 +905,18 @@ export function BookingCheckoutModal({
                     className="mt-0.5 h-4 w-4 rounded border-border text-[#073D2C] focus:ring-[#073D2C]"
                     checked={isDoctorsProcedure}
                     onChange={(e) => {
-                      setIsDoctorsProcedure(e.target.checked)
-                      if (!e.target.checked) setDoctorName('')
+                      const on = e.target.checked
+                      setIsDoctorsProcedure(on)
+                      if (!on) {
+                        setDoctorName('')
+                        return
+                      }
+                      // Medical Procedure is always cash — align Cash on Hand.
+                      setPaymentType('Full Payment')
+                      setPaymentMethod('cash')
+                      setPaymentMethod2('')
+                      setPaymentAmount2('')
+                      setPaymentAmount(String(total.toFixed(2)))
                     }}
                   />
                   <span>
@@ -882,8 +925,8 @@ export function BookingCheckoutModal({
                     </span>
                     <span className="mt-0.5 block text-[11px] text-slate-ui">
                       {hendraDoctor
-                        ? 'Hendra earns 5% doctor’s commission. Customer still pays full amount; clinic net sale becomes 95%.'
-                        : 'Outsourced doctor earns 20%. Customer still pays full amount; clinic net sale becomes 80%.'}
+                        ? 'Hendra earns 5% doctor’s commission. Customer still pays full amount in cash; clinic net sale becomes 95%.'
+                        : 'Outsourced doctor earns 20%. Customer still pays full amount in cash; clinic net sale becomes 80%.'}
                     </span>
                   </span>
                 </label>
