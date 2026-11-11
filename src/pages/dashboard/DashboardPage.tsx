@@ -279,6 +279,8 @@ type SalesBreakdownView = {
   branchLabel: string
   /** Gross = customer-paid total; clinic = dashboard-recognized (net of doctor fee). */
   amountMode?: 'gross' | 'clinic'
+  /** When set (e.g. Monthly RPC), header total matches the card instead of summing local lines. */
+  displayTotal?: number
 }
 
 type DoctorFeeBreakdownView = {
@@ -387,6 +389,10 @@ function SalesBreakdownModal({
   if (!open || !view) return null
   const amountMode = view.amountMode ?? 'clinic'
   const brief = buildSalesBrief(view.sales, amountMode)
+  const headerTotal =
+    typeof view.displayTotal === 'number' && Number.isFinite(view.displayTotal)
+      ? view.displayTotal
+      : brief.total
   const maxType = Math.max(brief.byType.service, brief.byType.package, brief.byType.product, 1)
   const typeRows = [
     { key: 'service', label: 'Services', amount: brief.byType.service, tone: 'from-[#0A2E26] to-[#1a5c4a]' },
@@ -419,9 +425,13 @@ function SalesBreakdownModal({
               <p className="mt-1.5 text-xs font-medium text-[#C5A059]">{view.branchLabel}</p>
               {amountMode === 'gross' ? (
                 <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-[#F3E6C8]/80">
-                  Gross sales · no commission deducted
+                  Gross paid · no doctor fee deducted
                 </p>
-              ) : null}
+              ) : (
+                <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-[#F3E6C8]/80">
+                  Clinic-recognized · doctor&apos;s procedure net
+                </p>
+              )}
             </div>
             <button
               type="button"
@@ -433,7 +443,7 @@ function SalesBreakdownModal({
             </button>
           </div>
           <p className="relative mt-6 font-metric text-[2.15rem] font-semibold leading-none tracking-tight sm:text-[2.35rem]">
-            {formatPesoExact(brief.total)}
+            {formatPesoExact(headerTotal)}
           </p>
           <div className="relative mt-4 flex flex-wrap gap-2.5 text-[11px] font-semibold text-white/75">
             <span className="rounded-full bg-white/10 px-3 py-1.5">{brief.bookings} bookings</span>
@@ -809,9 +819,10 @@ function BranchOpsDashboard() {
     subtitle: string,
     lines: Sale[],
     amountMode: 'gross' | 'clinic' = 'clinic',
+    displayTotal?: number,
   ) {
     setDoctorBreakdown(null)
-    setBreakdown({ title, subtitle, sales: lines, branchLabel, amountMode })
+    setBreakdown({ title, subtitle, sales: lines, branchLabel, amountMode, displayTotal })
   }
 
   function openDoctorFeeBreakdown(
@@ -906,9 +917,13 @@ function BranchOpsDashboard() {
       ? rpcSummary!.todaySales
       : todaySales.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
 
-    // Full calendar month of the selected range end (not just the filtered days).
+    // Month-to-date through selected range end (matches dashboard_branch_sales_summary RPC).
     let monthKey = rangeTo.slice(0, 7)
-    let monthSalesLines = scopedSales.filter((s) => saleDateKey(s).startsWith(monthKey))
+    let monthStart = `${monthKey}-01`
+    let monthSalesLines = scopedSales.filter((s) => {
+      const d = saleDateKey(s)
+      return d >= monthStart && d <= rangeTo
+    })
     let monthlySales = useRpc
       ? rpcSummary!.monthSales
       : monthSalesLines.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
@@ -930,7 +945,12 @@ function BranchOpsDashboard() {
       }, '')
       if (latestMonth && latestMonth !== monthKey) {
         monthKey = latestMonth
-        monthSalesLines = scopedSales.filter((s) => saleDateKey(s).startsWith(latestMonth))
+        monthStart = `${latestMonth}-01`
+        const monthEndCap = rangeTo.startsWith(latestMonth) ? rangeTo : `${latestMonth}-31`
+        monthSalesLines = scopedSales.filter((s) => {
+          const d = saleDateKey(s)
+          return d >= monthStart && d <= monthEndCap
+        })
         monthlySales = monthSalesLines.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
         monthlyLabel = new Date(`${latestMonth}-01T12:00:00`).toLocaleDateString('en-US', {
           month: 'long',
@@ -1390,9 +1410,12 @@ function BranchOpsDashboard() {
   }
 
   const rangeLabel = formatRangeLabel(rangeFrom, rangeTo)
+  const clinicNetHint =
+    'Clinic-recognized (doctor’s procedure = clinic net). Differs from Actual Sales (gross).'
   const actualSalesHint = metrics.isSingleDay
-    ? `Gross sales for ${rangeLabel} (no commissions deducted).`
-    : `Gross sales across ${metrics.daySpan} days (${rangeLabel}) — no commissions deducted.`
+    ? `Gross paid for ${rangeLabel} — full customer total, no doctor fee deducted.`
+    : `Gross paid across ${metrics.daySpan} days (${rangeLabel}) — full customer total, no doctor fee deducted.`
+  const monthlySalesHint = `Clinic net month-to-date through ${rangeTo} · ${metrics.monthlyLabel}. Same total as server summary when online.`
   const medicalProcedureHint = metrics.isSingleDay
     ? `Doctor commissions for medical procedures on ${rangeLabel}.`
     : `Doctor commissions for medical procedures in ${rangeLabel}.`
@@ -1656,12 +1679,18 @@ function BranchOpsDashboard() {
         <StatCard
           title="Payment Summary"
           value={formatPesoExact(metrics.paymentSummary)}
-          hint={`Payments in ${rangeLabel}.`}
-          tag="View All"
+          hint={`Clinic net in ${rangeLabel}. ${clinicNetHint}`}
+          tag="Clinic net"
           tagTone="amber"
           icon={<Wallet className="h-4 w-4" />}
           onClick={() =>
-            openSalesBreakdown('Payment Summary', `Payments in ${rangeLabel}`, metrics.rangeSalesLines)
+            openSalesBreakdown(
+              'Payment Summary',
+              `Clinic-recognized payments in ${rangeLabel}`,
+              metrics.rangeSalesLines,
+              'clinic',
+              metrics.paymentSummary,
+            )
           }
           action={
             <Link
@@ -1696,30 +1725,34 @@ function BranchOpsDashboard() {
         <StatCard
           title="Today's Sales"
           value={formatPesoExact(metrics.todaySales)}
-          hint={`Today's total service sales (${formatRangeLabel(todayKey, todayKey)}).`}
-          tag="Today"
+          hint={`Clinic net for today (${formatRangeLabel(todayKey, todayKey)}). ${clinicNetHint}`}
+          tag="Clinic net"
           tagTone="amber"
           icon={<TrendingUp className="h-4 w-4" />}
           onClick={() =>
             openSalesBreakdown(
               "Today's Sales",
-              `Sales for ${formatRangeLabel(todayKey, todayKey)}`,
+              `Clinic-recognized sales for ${formatRangeLabel(todayKey, todayKey)}`,
               metrics.todaySalesLines,
+              'clinic',
+              metrics.todaySales,
             )
           }
         />
         <StatCard
           title="Monthly Sales"
           value={formatPesoExact(metrics.monthlySales)}
-          hint={`Total revenue for ${metrics.monthlyLabel}.`}
-          tag="Month"
+          hint={monthlySalesHint}
+          tag="Clinic net"
           tagTone="amber"
           icon={<Receipt className="h-4 w-4" />}
           onClick={() =>
             openSalesBreakdown(
               'Monthly Sales',
-              `Full month · ${metrics.monthlyLabel}`,
+              monthlySalesHint,
               metrics.monthSalesLines,
+              'clinic',
+              metrics.monthlySales,
             )
           }
         />
@@ -1727,7 +1760,7 @@ function BranchOpsDashboard() {
           title="Actual Sales"
           value={formatPesoExact(metrics.actualSales)}
           hint={actualSalesHint}
-          tag="Gross"
+          tag="Gross paid"
           tagTone="emerald"
           icon={<Receipt className="h-4 w-4" />}
           onClick={() =>
@@ -1736,6 +1769,7 @@ function BranchOpsDashboard() {
               actualSalesHint,
               metrics.rangeSalesLines,
               'gross',
+              metrics.actualSales,
             )
           }
         />

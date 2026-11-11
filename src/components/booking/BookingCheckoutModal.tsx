@@ -302,6 +302,7 @@ export function BookingCheckoutModal({
 
   async function handlePlaceOrder(e: FormEvent) {
     e.preventDefault()
+    if (saving) return
     if (!paymentMethod) {
       toast.error('Select a payment method')
       return

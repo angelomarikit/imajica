@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
+import { preloadCatalogFromSupabase } from '@/services/catalogService'
 import { preloadCatalogPriceOverrides } from '@/services/catalogPriceOverrideService'
 import { preloadCatalogProductsFromSupabase } from '@/services/productCatalogService'
 import { refreshRemoteSalesAfterAuth } from '@/services/salesService'
@@ -16,6 +17,7 @@ export function SalesDataBootstrap() {
     bootedOverrides.current = true
     void preloadCatalogPriceOverrides()
     void preloadCatalogProductsFromSupabase()
+    void preloadCatalogFromSupabase()
   }, [])
 
   // Ops-only warm cache (last ~90 days). Never JSON dump / Migration history.

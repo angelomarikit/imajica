@@ -443,13 +443,39 @@ async function ensureRemoteClient(input: {
   }
 
   if (phone) {
-    const { data } = await supabase
-      .from('clients')
-      .select('id, full_name, email, phone')
-      .eq('phone', phone)
-      .maybeSingle()
-    if (data?.id) {
-      return mirror(data.id, data.full_name, data.email ?? undefined, data.phone ?? undefined)
+    const digits = phone.replace(/\D/g, '')
+    const last10 = digits.length >= 10 ? digits.slice(-10) : digits
+    const phoneVariants = [
+      ...new Set(
+        [
+          phone,
+          last10 ? `0${last10}` : '',
+          last10 ? `+63${last10}` : '',
+          last10 ? `63${last10}` : '',
+        ].filter(Boolean),
+      ),
+    ]
+    for (const variant of phoneVariants) {
+      const { data } = await supabase
+        .from('clients')
+        .select('id, full_name, email, phone')
+        .eq('phone', variant)
+        .maybeSingle()
+      if (data?.id) {
+        return mirror(data.id, data.full_name, data.email ?? undefined, data.phone ?? undefined)
+      }
+    }
+    // Digits-contained match (handles spaces / formatting drift)
+    if (last10.length >= 10) {
+      const { data } = await supabase
+        .from('clients')
+        .select('id, full_name, email, phone')
+        .ilike('phone', `%${last10}%`)
+        .limit(1)
+        .maybeSingle()
+      if (data?.id) {
+        return mirror(data.id, data.full_name, data.email ?? undefined, data.phone ?? undefined)
+      }
     }
   }
 

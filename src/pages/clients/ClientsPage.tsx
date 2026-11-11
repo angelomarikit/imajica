@@ -22,6 +22,7 @@ import { normalizeClientName } from '@/constants/clientProfileSeed'
 import {
   compareClientsByRecentAvail,
   applyKnownClientProfiles,
+  dedupeClientsForDisplay,
   deleteClient,
   getClients,
   preloadClientsFromSupabase,
@@ -147,7 +148,7 @@ export function ClientsPage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    let list = clients
+    let list = dedupeClientsForDisplay(clients)
     // Clinic managers: locked to their branch. HQ: honor header branch (incl. franchise).
     const filterBranchId =
       forcedBranchId ||

@@ -195,10 +195,34 @@ function readExtraSales(): Sale[] {
   }
 }
 
+function isRemoteLineId(id: string): boolean {
+  return /^[0-9a-f-]{36}:/i.test(id)
+}
+
+/** Drop stale local `sale-live-*` mirrors when Supabase already has that booking. */
+function pruneExtraSalesAgainstRemote(extra: Sale[]): Sale[] {
+  const remoteBookingKeys = new Set(
+    remoteLiveSales.map((s) => bookingMatchKey(s)).filter(Boolean),
+  )
+  return extra.filter((s) => {
+    if (!s.id.startsWith('sale-live-')) return true
+    return !remoteBookingKeys.has(bookingMatchKey(s))
+  })
+}
+
 function mergeSales(): Sale[] {
   const importIds = new Set(importedSales.map((s) => s.id))
   const remoteIds = new Set(remoteLiveSales.map((s) => s.id))
-  const extra = readExtraSales().filter((s) => !importIds.has(s.id) && !remoteIds.has(s.id))
+  const rawExtra = readExtraSales().filter((s) => !importIds.has(s.id) && !remoteIds.has(s.id))
+  const extra = pruneExtraSalesAgainstRemote(rawExtra)
+  // Persist prune so Today's Booking stays clean across reloads
+  if (extra.length !== rawExtra.length) {
+    try {
+      safeLocalSetItem(EXTRA_KEY, JSON.stringify(extra.slice(0, 80)))
+    } catch {
+      /* ignore */
+    }
+  }
   return [...extra, ...remoteLiveSales, ...importedSales].sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),
   )
@@ -910,7 +934,14 @@ export function subscribeSalesData(listener: () => void): () => void {
 
 /** Future: booking checkout appends here and recomputes client profile */
 export function appendExtraSale(sale: Sale): void {
-  const extra = readExtraSales().filter((s) => s.id !== sale.id)
+  const key = bookingMatchKey(sale)
+  let extra = readExtraSales().filter((s) => s.id !== sale.id)
+  // When writing a real Supabase line, drop stale sale-live mirrors for the same booking.
+  if (isRemoteLineId(sale.id) || isUuid(sale.id.split(':')[0] || '')) {
+    extra = extra.filter(
+      (s) => !(s.id.startsWith('sale-live-') && bookingMatchKey(s) === key),
+    )
+  }
   extra.unshift(sale)
   // Cap low — Supabase is source of truth; local mirror must not crowd out the JWT.
   safeLocalSetItem(EXTRA_KEY, JSON.stringify(extra.slice(0, 80)))
@@ -1006,6 +1037,24 @@ export type BookingPaymentSplit = {
  * and keep local/UI Sale rows for Today's Booking.
  * Optional paymentSplits writes one payments row per processor (Split Payment).
  */
+async function loadExistingCheckoutByInvoice(invoiceNumber: string): Promise<Sale[] | null> {
+  if (!supabase || !invoiceNumber) return null
+  const { data, error } = await supabase
+    .from('sales')
+    .select(REMOTE_SALES_HEADER_SELECT)
+    .eq('invoice_number', invoiceNumber)
+    .maybeSingle()
+  if (error || !data) return null
+  const mapped = await hydrateSaleHeaders([data as unknown as SaleHeaderRow])
+  if (!mapped.length) return null
+  for (const sale of mapped) {
+    appendExtraSale(sale)
+  }
+  mergeRemoteSaleLines(mapped)
+  emitChange()
+  return mapped
+}
+
 export async function recordBookingCheckout(
   lines: Array<Omit<Sale, 'id'>>,
   opts?: { paymentSplits?: BookingPaymentSplit[] },
@@ -1015,6 +1064,7 @@ export async function recordBookingCheckout(
   const head = lines[0]!
   const createdAt = head.createdAt || new Date().toISOString()
   const totalAmount = lines.reduce((sum, l) => sum + (l.totalAmount || 0), 0)
+  const invoiceNumber = (head.invoiceNumber || head.bookingRef || '').trim()
 
   let persisted: Sale[] = lines.map((line, index) => ({
     ...line,
@@ -1038,6 +1088,12 @@ export async function recordBookingCheckout(
     }
     if (!isUuid(head.clientId)) {
       throw new Error('Customer is not linked to the database. Re-select the patient and try again.')
+    }
+
+    // Idempotent retry: same invoice already saved → return existing rows (no double sale).
+    if (invoiceNumber) {
+      const existing = await loadExistingCheckoutByInvoice(invoiceNumber)
+      if (existing?.length) return existing
     }
 
     const saleId = crypto.randomUUID()
@@ -1089,6 +1145,11 @@ export async function recordBookingCheckout(
     })
 
     if (saleError) {
+      const msg = saleError.message || ''
+      if (invoiceNumber && /duplicate|unique|invoice/i.test(msg)) {
+        const existing = await loadExistingCheckoutByInvoice(invoiceNumber)
+        if (existing?.length) return existing
+      }
       throw new Error(saleError.message || 'Could not save sale')
     }
 
@@ -1463,7 +1524,10 @@ export function getBookingRows(opts?: {
 
   const rows: TodayBookingRow[] = []
   for (const [bookingKey, lines] of groups) {
-    const sorted = [...lines].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    // Prefer Supabase UUID lines over local sale-live duplicates for the same booking.
+    const remoteOnly = lines.filter((l) => isRemoteLineId(l.id))
+    const deduped = remoteOnly.length > 0 ? remoteOnly : lines
+    const sorted = [...deduped].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     const head = sorted[0]!
     const services = sorted
       .filter((l) => l.itemType !== 'product')

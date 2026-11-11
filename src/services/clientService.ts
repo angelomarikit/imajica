@@ -236,6 +236,33 @@ export function compareClientsByRecentAvail(a: Client, b: Client): number {
   return (b.id || '').localeCompare(a.id || '')
 }
 
+/** Last 10 digits — treats +639… and 09… as the same PH mobile. */
+export function normalizePhoneDigits(phone: string | null | undefined): string {
+  const d = String(phone || '').replace(/\D/g, '')
+  if (d.length >= 10) return d.slice(-10)
+  return d
+}
+
+/** Prefer UUID rows over local cl-* / client-import-* when showing one person once. */
+export function dedupeClientsForDisplay(clients: Client[]): Client[] {
+  const score = (c: Client) => {
+    if (isUuid(c.id)) return 3
+    if (c.id.startsWith('cl-')) return 2
+    if (c.id.startsWith('client-import-')) return 1
+    return 0
+  }
+  const byKey = new Map<string, Client>()
+  for (const c of clients) {
+    const phone = normalizePhoneDigits(c.phone)
+    const key =
+      phone.length >= 10 ? `p:${phone}` : `n:${normalizeClientName(c.fullName || '')}`
+    if (!key || key === 'n:' || key === 'p:') continue
+    const prev = byKey.get(key)
+    if (!prev || score(c) > score(prev)) byKey.set(key, c)
+  }
+  return [...byKey.values()]
+}
+
 /** Locally registered customers only (no demo merge) */
 export function getClients(): Client[] {
   return [...readExtra()].map(mergeProfileOntoClient).sort(compareClientsByRecentAvail)

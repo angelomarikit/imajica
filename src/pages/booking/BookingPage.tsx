@@ -22,6 +22,7 @@ import {
   getPackagesForBranch,
   getServiceById,
   getServicesForBranch,
+  preloadCatalogFromSupabase,
   subscribeCatalog,
 } from '@/services/catalogService'
 import { getCoupons } from '@/services/couponService'
@@ -90,7 +91,10 @@ export function BookingPage() {
     const refresh = () => setCatalogTick((n) => n + 1)
     const unsubServices = subscribeCatalog(refresh)
     const unsubProducts = subscribeProducts(refresh)
-    void preloadCatalogProductsFromSupabase().then(refresh)
+    void Promise.all([
+      preloadCatalogProductsFromSupabase(),
+      preloadCatalogFromSupabase(),
+    ]).then(refresh)
     return () => {
       unsubServices()
       unsubProducts()
@@ -197,13 +201,29 @@ export function BookingPage() {
     if (!qtyItem) return
     const item = qtyItem
     setQtyItem(null)
-    // Products: always re-read live Supabase selling_price at add time (never stale cart price).
-    const liveProduct =
-      item.kind === 'product' ? getCatalogProducts().find((p) => p.id === item.id) : undefined
-    const unitPrice =
-      Math.round(
-        (Number(liveProduct?.retailPrice ?? item.price) || 0) * 100,
-      ) / 100
+    // Re-read live Supabase catalog price at add time (products / services / packages).
+    let liveName = item.name
+    let livePrice = item.price
+    if (item.kind === 'product') {
+      const live = getCatalogProducts().find((p) => p.id === item.id)
+      if (live) {
+        liveName = live.name
+        livePrice = live.retailPrice
+      }
+    } else if (item.kind === 'service') {
+      const live = getServicesForBranch(bookingListBranchId ?? 'all').find((s) => s.id === item.id)
+      if (live) {
+        liveName = live.name
+        livePrice = live.price
+      }
+    } else if (item.kind === 'package') {
+      const live = getPackagesForBranch(bookingListBranchId ?? 'all').find((p) => p.id === item.id)
+      if (live) {
+        liveName = live.name
+        livePrice = live.promoPrice ?? live.regularPrice
+      }
+    }
+    const unitPrice = Math.round((Number(livePrice) || 0) * 100) / 100
     setCart((prev) => {
       const existing = prev.find((p) => p.id === item.id)
       if (existing) {
@@ -217,7 +237,7 @@ export function BookingPage() {
         ...prev,
         {
           id: item.id,
-          name: liveProduct?.name ?? item.name,
+          name: liveName,
           unitPrice,
           quantity,
           kind: item.kind,

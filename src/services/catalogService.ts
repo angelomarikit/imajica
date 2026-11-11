@@ -8,6 +8,7 @@ import {
 import { SERVICE_CATALOG_SEED, type ServiceSeedRow } from '@/constants/serviceCatalogSeed'
 import { BACOOR_SERVICE_CATALOG_SEED } from '@/constants/bacoorServiceCatalogSeed'
 import { PACKAGE_CATALOG_SEED, type PackageSeedRow } from '@/constants/packageCatalogSeed'
+import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 
 const SERVICES_KEY = 'imajica_catalog_services'
 const SERVICES_DELETED_KEY = 'imajica_catalog_services_deleted'
@@ -161,14 +162,139 @@ function builtInServices(): Treatment[] {
   return [...hq, ...bacoor].filter((s) => !deleted.has(s.id))
 }
 
+/** Live services from Supabase treatments.price (source of truth when loaded). */
+let remoteServices: Treatment[] | null = null
+let remotePackages: Package[] | null = null
+let remoteCatalogLoadPromise: Promise<void> | null = null
+
+function roundMoney(n: unknown) {
+  return Math.round((Number(n) || 0) * 100) / 100
+}
+
+/**
+ * Load active treatments + packages from Supabase for booking/catalog.
+ * When loaded, getServices / getPackagesCatalog use DB prices (not localStorage overrides).
+ */
+export async function preloadCatalogFromSupabase(): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) return
+  if (remoteCatalogLoadPromise) return remoteCatalogLoadPromise
+
+  remoteCatalogLoadPromise = (async () => {
+    try {
+      const pageSize = 500
+      const treatmentRows: Array<Record<string, unknown>> = []
+      for (let from = 0; from < 20_000; from += pageSize) {
+        const { data, error } = await supabase
+          .from('treatments')
+          .select(
+            'id, name, description, duration_minutes, price, status, sessions, category_id, available_globally, default_branch_id, image_url',
+          )
+          .eq('status', 'active')
+          .order('name', { ascending: true })
+          .range(from, from + pageSize - 1)
+        if (error) {
+          console.error('[catalog] treatments preload failed', error.message)
+          break
+        }
+        const rows = data ?? []
+        if (!rows.length) break
+        treatmentRows.push(...(rows as Array<Record<string, unknown>>))
+        if (rows.length < pageSize) break
+      }
+
+      if (treatmentRows.length) {
+        remoteServices = treatmentRows.map((row) => {
+          const branchId = row.default_branch_id ? String(row.default_branch_id) : undefined
+          const global = row.available_globally !== false && !branchId
+          return {
+            id: String(row.id),
+            name: String(row.name || ''),
+            category: (String(row.category_id || 'facial') as TreatmentCategorySlug) || 'facial',
+            description: String(row.description || ''),
+            durationMinutes: Number(row.duration_minutes) || 30,
+            price: roundMoney(row.price),
+            status: (row.status === 'inactive' ? 'inactive' : 'active') as EntityStatus,
+            imageUrl: row.image_url ? String(row.image_url) : undefined,
+            benefits: [],
+            sessions: Number(row.sessions) || 1,
+            branchId,
+            availableGlobally: global,
+            availableBranchIds: branchId ? [branchId] : [],
+            popularity: 0,
+          } satisfies Treatment
+        })
+      }
+
+      const packageRows: Array<Record<string, unknown>> = []
+      for (let from = 0; from < 20_000; from += pageSize) {
+        const { data, error } = await supabase
+          .from('packages')
+          .select(
+            'id, name, type, description, regular_price, promo_price, sessions, validity_months, status, free_items, default_branch_id, image_url',
+          )
+          .eq('status', 'active')
+          .order('name', { ascending: true })
+          .range(from, from + pageSize - 1)
+        if (error) {
+          console.error('[catalog] packages preload failed', error.message)
+          break
+        }
+        const rows = data ?? []
+        if (!rows.length) break
+        packageRows.push(...(rows as Array<Record<string, unknown>>))
+        if (rows.length < pageSize) break
+      }
+
+      if (packageRows.length) {
+        remotePackages = packageRows.map((row) => {
+          const branchId = row.default_branch_id ? String(row.default_branch_id) : undefined
+          const regular = roundMoney(row.regular_price)
+          const promo =
+            row.promo_price != null && Number.isFinite(Number(row.promo_price))
+              ? roundMoney(row.promo_price)
+              : undefined
+          return {
+            id: String(row.id),
+            name: String(row.name || ''),
+            type: (String(row.type || 'package') as Package['type']) || 'package',
+            description: String(row.description || row.free_items || ''),
+            regularPrice: regular,
+            promoPrice: promo,
+            sessions: Number(row.sessions) || 1,
+            validityMonths: Number(row.validity_months) || 6,
+            status: (row.status === 'inactive' ? 'inactive' : 'active') as EntityStatus,
+            imageUrl: row.image_url ? String(row.image_url) : undefined,
+            memberCount: 0,
+            includedTreatmentIds: [],
+            freeItems: row.free_items ? String(row.free_items) : undefined,
+            branchId,
+            branchName: branchId ? undefined : 'All Branches',
+            availableGlobally: !branchId,
+            availableBranchIds: branchId ? [branchId] : [],
+          } satisfies Package
+        })
+      }
+
+      if (remoteServices || remotePackages) emit()
+    } finally {
+      remoteCatalogLoadPromise = null
+    }
+  })()
+
+  return remoteCatalogLoadPromise
+}
+
 export function getServices(): Treatment[] {
+  if (isSupabaseConfigured && remoteServices) {
+    return remoteServices.map((s) => ({ ...s }))
+  }
   const byId = new Map<string, Treatment>()
   for (const s of builtInServices()) byId.set(s.id, s)
   for (const s of readJson<Treatment>(SERVICES_KEY)) {
     if (readDeletedIds().has(s.id)) continue
     byId.set(s.id, s)
   }
-  // Price overrides always win so edits never snap back to seed defaults.
+  // Offline fallback only — when remote loaded, DB price is authority.
   return [...byId.values()].map((s) => applyPriceOverride('service', s))
 }
 
@@ -225,6 +351,9 @@ function builtInPackages(): Package[] {
 }
 
 export function getPackagesCatalog(): Package[] {
+  if (isSupabaseConfigured && remotePackages) {
+    return remotePackages.map((p) => ({ ...p }))
+  }
   const byId = new Map<string, Package>()
   for (const p of builtInPackages()) byId.set(p.id, p)
   for (const p of readJson<Package>(PACKAGES_KEY)) {

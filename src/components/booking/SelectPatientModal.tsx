@@ -8,6 +8,7 @@ import { useBranch } from '@/contexts/BranchContext'
 import { useEffectiveBranchId, useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import {
+  dedupeClientsForDisplay,
   getClients,
   registerClientAndSync,
   searchClientsFromSupabase,
@@ -136,17 +137,26 @@ export function SelectPatientModal({
           c.email.toLowerCase().includes(lower) ||
           c.phone.replace(/\s/g, '').includes(phoneQ),
       )
+      const nameToken = (user?.branchName || '').toLowerCase().split(',')[0]?.trim() || ''
       const byId = new Map<string, Client>()
       for (const c of [...remote, ...localHits]) {
         if (clinicId) {
           const clientClinic =
-            resolveClinicBranchId(c.preferredBranchId) || c.preferredBranchId
-          // Keep clinic matches and unassigned; drop other clinics when scoped
-          if (clientClinic && clientClinic !== clinicId) continue
+            resolveClinicBranchId(c.preferredBranchId) ||
+            resolveClinicBranchId(c.preferredBranchName) ||
+            c.preferredBranchId
+          const branchNameHit =
+            Boolean(nameToken) &&
+            (c.preferredBranchName || '').toLowerCase().includes(nameToken)
+          // Same parity as Customers page: clinic id, unassigned, or branch name token
+          if (clientClinic === clinicId || !clientClinic || branchNameHit) {
+            byId.set(c.id, c)
+          }
+          continue
         }
         byId.set(c.id, c)
       }
-      setMatches([...byId.values()])
+      setMatches(dedupeClientsForDisplay([...byId.values()]))
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Patient search failed')
       setMatches([])

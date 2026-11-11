@@ -91,8 +91,11 @@ export function salesSummary(
     branchId: opts?.branchId,
     sales: inRange,
   })
+  const distinctBookings = new Set(
+    inRange.map((s) => s.bookingRef || s.invoiceNumber || s.id),
+  ).size
   return {
-    bookings: inRange.length,
+    bookings: distinctBookings,
     grossSales,
     productSales,
     serviceSales,
