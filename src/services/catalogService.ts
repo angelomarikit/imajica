@@ -21,6 +21,9 @@ const BACOOR_MENU_SEED_FLAG = 'imajica_bacoor_menu_seed_version'
 /** Full org replace from IMAJICA PRODUCT & SERVICES LIST 2026 — clears stale extras. */
 const CATALOG_2026_REPLACE_VERSION = 'catalog-2026-replace-v1'
 const CATALOG_2026_REPLACE_FLAG = 'imajica_catalog_2026_replace_version'
+/** Nearest-₱10 round for services/packages — drop stale local overrides. */
+const CATALOG_PRICE_ROUND_VERSION = 'catalog-price-round-v1'
+const CATALOG_PRICE_ROUND_FLAG = 'imajica_catalog_price_round_version'
 
 const BRANCH_NAME_TO_ID: Record<string, string> = {
   'San Mateo, Rizal': '22222222-2222-2222-2222-222222222201',
@@ -125,6 +128,32 @@ function purgeStaleCatalog2026Replace() {
 }
 
 purgeStaleCatalog2026Replace()
+
+function purgeStaleUnroundedCatalogPriceOverrides() {
+  try {
+    if (typeof localStorage === 'undefined') return
+    if (localStorage.getItem(CATALOG_PRICE_ROUND_FLAG) === CATALOG_PRICE_ROUND_VERSION) return
+
+    const raw = localStorage.getItem('imajica_catalog_price_overrides')
+    if (raw) {
+      const parsed = JSON.parse(raw) as {
+        service?: Record<string, number>
+        package?: Record<string, number>
+        product?: Record<string, number>
+      }
+      // Keep product overrides; service/package prices now come from rounded seeds/DB.
+      delete parsed.service
+      delete parsed.package
+      localStorage.setItem('imajica_catalog_price_overrides', JSON.stringify(parsed))
+    }
+
+    localStorage.setItem(CATALOG_PRICE_ROUND_FLAG, CATALOG_PRICE_ROUND_VERSION)
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+purgeStaleUnroundedCatalogPriceOverrides()
 
 function seedRowToTreatment(
   row: ServiceSeedRow,
