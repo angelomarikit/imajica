@@ -268,6 +268,11 @@ export function BookingCheckoutModal({
       setPaymentAmount(String(half.toFixed(2)))
       setPaymentAmount2(String(rest.toFixed(2)))
       if (!paymentMethod2) setPaymentMethod2('')
+    } else if (next === 'Installment') {
+      setPaymentMethod2('')
+      setPaymentAmount2('')
+      // Force staff to enter what the customer pays now (not the full package).
+      setPaymentAmount('')
     } else {
       setPaymentMethod2('')
       setPaymentAmount2('')
@@ -362,6 +367,7 @@ export function BookingCheckoutModal({
 
     const amount1 = Math.max(0, Number(paymentAmount) || 0)
     const amount2 = effectiveSplit ? Math.max(0, Number(paymentAmount2) || 0) : 0
+    const isInstallment = !isDoctorsProcedure && paymentType === 'Installment'
     if (effectiveSplit) {
       if (amount1 <= 0 || amount2 <= 0) {
         toast.error('Enter amounts for both payment processors')
@@ -374,11 +380,26 @@ export function BookingCheckoutModal({
         )
         return
       }
+    } else if (isInstallment) {
+      const tendered = Math.round(amount1 * 100) / 100
+      if (tendered <= 0) {
+        toast.error('Enter the installment amount the customer is paying now')
+        return
+      }
+      if (tendered > dueAfterPoints + 0.05) {
+        toast.error(
+          `Installment cannot exceed ${formatPesoExact(dueAfterPoints)} after points`,
+        )
+        return
+      }
     }
 
+    // Installment: record only what was paid now; Full/Split still cover full due.
     const paidAmount = effectiveSplit
       ? Math.round((amount1 + amount2) * 100) / 100
-      : dueAfterPoints
+      : isInstallment
+        ? Math.round(amount1 * 100) / 100
+        : dueAfterPoints
     const createdAt = start.toISOString()
     const bookingRef = invoiceId
     const durationMinutes = 60
@@ -478,12 +499,11 @@ export function BookingCheckoutModal({
           leadSource,
           isFirstClientSale: wasFirstVisit,
           totalAmount: lineTotal || line.unitPrice * line.quantity,
+          /** Full cart due — Installment Balances remaining = contract − collected */
+          contractAmount: isInstallment ? dueAfterPoints : undefined,
           paymentMethod: mapPaymentMethod(effectivePaymentMethod),
-          status: (isDoctorsProcedure ||
-          paymentType === 'Full Payment' ||
-          paymentType === 'Split Payment'
-            ? 'paid'
-            : 'pending') as 'paid' | 'pending',
+          // Installment tenders are money received; unpaid remainder stays on contract_amount.
+          status: 'paid' as const,
           createdAt,
           referredByClientId: referredById || undefined,
           referredByName: selectedReferrer?.fullName,
@@ -517,7 +537,9 @@ export function BookingCheckoutModal({
             selectedReferrer ? `Referred by: ${selectedReferrer.fullName}` : null,
             effectiveSplit && paymentMethod2
               ? `Payment: Split · ${paymentLabel(paymentMethod)} ${formatPesoExact(amount1)} + ${paymentLabel(paymentMethod2)} ${formatPesoExact(amount2)}`
-              : `Payment: ${isDoctorsProcedure ? 'Full Payment' : paymentType} / ${paymentLabel(effectivePaymentMethod)}`,
+              : isInstallment
+                ? `Payment: Installment · collected ${formatPesoExact(paidAmount)} of ${formatPesoExact(dueAfterPoints)} · ${paymentLabel(effectivePaymentMethod)}`
+                : `Payment: ${isDoctorsProcedure ? 'Full Payment' : paymentType} / ${paymentLabel(effectivePaymentMethod)}`,
             discount > 0 ? `Discount: ${formatPesoExact(discount)}` : null,
           ]
             .filter(Boolean)
@@ -720,7 +742,11 @@ export function BookingCheckoutModal({
               </label>
               <label className="block">
                 <span className={fieldLabel}>
-                  {isSplitPayment ? 'Payment Amount 1' : 'Payment Amount'}
+                  {isSplitPayment
+                    ? 'Payment Amount 1'
+                    : paymentType === 'Installment'
+                      ? 'Installment Payment (now)'
+                      : 'Payment Amount'}
                 </span>
                 <input
                   className={fieldControl}
@@ -736,6 +762,11 @@ export function BookingCheckoutModal({
                   }}
                   inputMode="decimal"
                 />
+                {paymentType === 'Installment' && !isDoctorsProcedure ? (
+                  <p className="mt-1 text-[11px] text-slate-ui">
+                    Only this amount is recorded as sales. Package total stays as remaining balance.
+                  </p>
+                ) : null}
               </label>
               {isSplitPayment ? (
                 <>
