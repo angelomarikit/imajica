@@ -25,6 +25,7 @@ import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   deleteCatalogProduct,
   getCatalogProducts,
+  preloadCatalogProductsFromSupabase,
   subscribeProducts,
 } from '@/services/productCatalogService'
 import {
@@ -52,6 +53,10 @@ export function ProductInventoryPage() {
   const [stocks, setStocks] = useState<ProductBranchStock[]>([])
   const [historyProduct, setHistoryProduct] = useState<CatalogProduct | null>(null)
   const [history, setHistory] = useState<ProductStockHistoryEntry[]>([])
+
+  useEffect(() => {
+    void preloadCatalogProductsFromSupabase().then(() => setProducts(getCatalogProducts()))
+  }, [])
 
   useEffect(
     () =>
@@ -255,10 +260,17 @@ export function ProductInventoryPage() {
                         className="bg-red-50 text-red-600"
                         label="Delete"
                         onClick={() => {
-                          if (confirm(`Delete ${p.name}?`)) {
-                            deleteCatalogProduct(p.id)
-                            toast.message('Product removed')
-                          }
+                          if (!confirm(`Delete ${p.name}?`)) return
+                          void deleteCatalogProduct(p.id)
+                            .then(() => {
+                              setProducts(getCatalogProducts())
+                              toast.message('Product removed')
+                            })
+                            .catch((err) =>
+                              toast.error(
+                                err instanceof Error ? err.message : 'Could not delete product',
+                              ),
+                            )
                         }}
                       >
                         <Trash2 className="h-3.5 w-3.5" />

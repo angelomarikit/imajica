@@ -196,13 +196,18 @@ const hqNavSectionsBase: NavSection[] = [
     ],
   },
   {
+    category: 'Expenses',
+    items: [
+      { to: '/admin/operations/expenses', label: 'Expenses', icon: Receipt, end: true },
+    ],
+  },
+  {
     category: 'Administration',
     items: [
       {
         label: 'Operations',
         icon: Settings,
         children: [
-          { to: '/admin/operations/expenses', label: 'Expenses', icon: Receipt, end: true },
           {
             to: '/admin/operations/branch-orders',
             label: 'Branch Orders',
@@ -595,13 +600,18 @@ function buildFranchiseOwnerNavSections(
     ],
   },
   {
+    category: 'Expenses',
+    items: [
+      { to: '/admin/operations/expenses', label: 'Expenses', icon: Receipt, end: true },
+    ],
+  },
+  {
     category: 'Administration',
     items: [
       {
         label: 'Operations',
         icon: Settings,
         children: [
-          { to: '/admin/operations/expenses', label: 'Expenses', icon: Receipt, end: true },
           {
             to: '/admin/operations/branch-orders',
             label: 'Branch Orders',
@@ -754,13 +764,18 @@ function buildOperationsManagerNavSections(
       ],
     },
     {
+      category: 'Expenses',
+      items: [
+        { to: '/admin/operations/expenses', label: 'Expenses', icon: Receipt, end: true },
+      ],
+    },
+    {
       category: 'Administration',
       items: [
         {
           label: 'Operations',
           icon: Settings,
           children: [
-            { to: '/admin/operations/expenses', label: 'Expenses', icon: Receipt, end: true },
             {
               to: '/admin/operations/branch-orders',
               label: 'Branch Orders',

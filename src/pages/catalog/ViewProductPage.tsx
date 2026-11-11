@@ -6,7 +6,11 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { StockHistoryModal } from '@/components/catalog/StockHistoryModal'
-import { getCatalogProductById, subscribeProducts } from '@/services/productCatalogService'
+import {
+  getCatalogProductById,
+  preloadCatalogProductsFromSupabase,
+  subscribeProducts,
+} from '@/services/productCatalogService'
 import {
   getProductBranchStocks,
   getProductStockHistory,
@@ -27,7 +31,9 @@ export function ViewProductPage() {
 
   useEffect(() => {
     if (!id) return
+    let cancelled = false
     const load = () => {
+      if (cancelled) return
       const p = getCatalogProductById(id)
       if (!p) {
         toast.error('Product not found')
@@ -37,10 +43,11 @@ export function ViewProductPage() {
       setProduct(p)
       setStocks(getProductBranchStocks(id))
     }
-    load()
+    void preloadCatalogProductsFromSupabase().then(load)
     const unsubP = subscribeProducts(load)
     const unsubS = subscribeProductStock(load)
     return () => {
+      cancelled = true
       unsubP()
       unsubS()
     }

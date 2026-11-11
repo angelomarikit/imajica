@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { preloadCatalogPriceOverrides } from '@/services/catalogPriceOverrideService'
+import { preloadCatalogProductsFromSupabase } from '@/services/productCatalogService'
 import { refreshRemoteSalesAfterAuth } from '@/services/salesService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { isBranchScopedStaff } from '@/utils/franchiseAccess'
 
-/** Loads catalog overrides + a light ops sales warm-cache after staff login. */
+/** Loads catalog overrides + product prices from Supabase + ops sales warm-cache after login. */
 export function SalesDataBootstrap() {
   const { user } = useAuth()
   const bootedOverrides = useRef(false)
@@ -14,6 +15,7 @@ export function SalesDataBootstrap() {
     if (bootedOverrides.current) return
     bootedOverrides.current = true
     void preloadCatalogPriceOverrides()
+    void preloadCatalogProductsFromSupabase()
   }, [])
 
   // Ops-only warm cache (last ~90 days). Never JSON dump / Migration history.

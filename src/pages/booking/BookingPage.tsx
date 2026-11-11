@@ -25,7 +25,11 @@ import {
   subscribeCatalog,
 } from '@/services/catalogService'
 import { getCoupons } from '@/services/couponService'
-import { getCatalogProducts, subscribeProducts } from '@/services/productCatalogService'
+import {
+  getCatalogProducts,
+  preloadCatalogProductsFromSupabase,
+  subscribeProducts,
+} from '@/services/productCatalogService'
 import { preloadSalesData } from '@/services/salesService'
 import type { Client } from '@/types'
 import { formatPeso } from '@/utils/currency'
@@ -86,6 +90,7 @@ export function BookingPage() {
     const refresh = () => setCatalogTick((n) => n + 1)
     const unsubServices = subscribeCatalog(refresh)
     const unsubProducts = subscribeProducts(refresh)
+    void preloadCatalogProductsFromSupabase().then(refresh)
     return () => {
       unsubServices()
       unsubProducts()
@@ -138,7 +143,7 @@ export function BookingPage() {
       .map((p) => ({
         id: p.id,
         name: p.name,
-        price: p.retailPrice,
+        price: Math.round((Number(p.retailPrice) || 0) * 100) / 100,
         sessions: 1,
         kind: 'product' as const,
       }))
@@ -192,19 +197,28 @@ export function BookingPage() {
     if (!qtyItem) return
     const item = qtyItem
     setQtyItem(null)
+    // Products: always re-read live Supabase selling_price at add time (never stale cart price).
+    const liveProduct =
+      item.kind === 'product' ? getCatalogProducts().find((p) => p.id === item.id) : undefined
+    const unitPrice =
+      Math.round(
+        (Number(liveProduct?.retailPrice ?? item.price) || 0) * 100,
+      ) / 100
     setCart((prev) => {
       const existing = prev.find((p) => p.id === item.id)
       if (existing) {
         return prev.map((p) =>
-          p.id === item.id ? { ...p, quantity: p.quantity + quantity } : p,
+          p.id === item.id
+            ? { ...p, quantity: p.quantity + quantity, unitPrice }
+            : p,
         )
       }
       return [
         ...prev,
         {
           id: item.id,
-          name: item.name,
-          unitPrice: item.price,
+          name: liveProduct?.name ?? item.name,
+          unitPrice,
           quantity,
           kind: item.kind,
         },

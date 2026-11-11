@@ -1,11 +1,8 @@
 import type { CatalogProduct, ConsumableItem, ProductCategory } from '@/types'
 import { PRODUCT_CATALOG_SEED, type ProductSeedRow } from '@/constants/productCatalogSeed'
 import { CONSUMABLE_CATALOG_SEED, type ConsumableSeedRow } from '@/constants/consumableCatalogSeed'
-import {
-  applyPriceOverride,
-  setPriceOverride,
-  subscribeCatalogPriceOverrides,
-} from '@/services/catalogPriceOverrideService'
+import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { subscribeCatalogPriceOverrides } from '@/services/catalogPriceOverrideService'
 
 const CAT_KEY = 'imajica_product_categories'
 const PROD_KEY = 'imajica_catalog_products'
@@ -37,6 +34,10 @@ function emit() {
   window.dispatchEvent(new Event(CHANGE))
 }
 
+function roundMoney(n: number) {
+  return Math.round((Number(n) || 0) * 100) / 100
+}
+
 function read<T>(key: string): T[] {
   try {
     const raw = localStorage.getItem(key)
@@ -54,6 +55,38 @@ function write<T>(key: string, items: T[]) {
 }
 
 const DEFAULT_CATEGORIES: ProductCategory[] = []
+
+/** Live retail catalog from Supabase inventory_items (source of truth for prices). */
+let remoteProducts: CatalogProduct[] | null = null
+let remoteLoadPromise: Promise<void> | null = null
+let remoteLoaded = false
+
+type InventoryItemRow = {
+  id: string
+  name: string
+  sku: string
+  category: string | null
+  unit_cost: number | null
+  selling_price: number | null
+  status: string | null
+  brand: string | null
+  created_at: string | null
+}
+
+function mapInventoryRow(row: InventoryItemRow): CatalogProduct {
+  return {
+    id: row.id,
+    name: row.name,
+    sku: row.sku,
+    categoryName: row.category || 'N/A',
+    supplier: row.brand || undefined,
+    branchName: 'Global',
+    retailPrice: roundMoney(row.selling_price ?? 0),
+    baseCost: roundMoney(row.unit_cost ?? 0),
+    status: (row.status === 'inactive' ? 'inactive' : 'active') as CatalogProduct['status'],
+    createdAt: row.created_at ? row.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+  }
+}
 
 function readDeletedConsumableIds(): Set<string> {
   return new Set(read<string>(CONS_DELETED_KEY))
@@ -100,8 +133,8 @@ function seedRowToProduct(row: ProductSeedRow, index: number): CatalogProduct {
     sku: row.sku,
     categoryName: row.categoryName ?? 'N/A',
     branchName: row.branchName ?? 'Global',
-    retailPrice: row.retailPrice,
-    baseCost: row.baseCost,
+    retailPrice: roundMoney(row.retailPrice),
+    baseCost: roundMoney(row.baseCost),
     status: row.status ?? 'active',
     createdAt: '2026-01-01',
   }
@@ -112,6 +145,82 @@ function builtInProducts(): CatalogProduct[] {
   return PRODUCT_CATALOG_SEED.map((row, i) => seedRowToProduct(row, i)).filter(
     (p) => !deleted.has(p.id),
   )
+}
+
+/** Offline / first-paint only — never used as price authority when Supabase products are loaded. */
+function localFallbackProducts(): CatalogProduct[] {
+  const deleted = readDeletedProductIds()
+  const byId = new Map<string, CatalogProduct>()
+  for (const p of builtInProducts()) byId.set(p.id, p)
+  for (const p of read<CatalogProduct>(PROD_KEY)) {
+    if (deleted.has(p.id)) continue
+    byId.set(p.id, {
+      ...p,
+      retailPrice: roundMoney(p.retailPrice),
+      baseCost: roundMoney(p.baseCost),
+    })
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * Load retail products from inventory_items.selling_price (source of truth).
+ * Replaces any localStorage / override-based product prices for booking + catalog UI.
+ */
+export async function preloadCatalogProductsFromSupabase(): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    remoteLoaded = true
+    return
+  }
+  if (remoteLoadPromise) return remoteLoadPromise
+
+  remoteLoadPromise = (async () => {
+    try {
+      const pageSize = 500
+      const all: InventoryItemRow[] = []
+      for (let from = 0; from < 20_000; from += pageSize) {
+        const { data, error } = await supabase
+          .from('inventory_items')
+          .select('id, name, sku, category, unit_cost, selling_price, status, brand, created_at')
+          .eq('is_retail_product', true)
+          .order('name', { ascending: true })
+          .range(from, from + pageSize - 1)
+
+        if (error) {
+          console.error('[products] inventory_items preload failed', error.message)
+          break
+        }
+        const rows = (data ?? []) as InventoryItemRow[]
+        if (!rows.length) break
+        all.push(...rows)
+        if (rows.length < pageSize) break
+      }
+
+      if (all.length) {
+        remoteProducts = all.map(mapInventoryRow).sort((a, b) => a.name.localeCompare(b.name))
+        // Drop stale browser product prices so they cannot win later.
+        try {
+          localStorage.removeItem(PROD_KEY)
+          localStorage.removeItem(PROD_DELETED_KEY)
+        } catch {
+          /* ignore */
+        }
+        emit()
+      } else if (!remoteProducts) {
+        // Empty remote — keep seed fallback until catalog migration is applied.
+        console.warn('[products] no retail inventory_items rows; using seed fallback')
+      }
+    } finally {
+      remoteLoaded = true
+      remoteLoadPromise = null
+    }
+  })()
+
+  return remoteLoadPromise
+}
+
+export function catalogProductsRemoteReady(): boolean {
+  return remoteLoaded && remoteProducts != null
 }
 
 export function getProductCategories(): ProductCategory[] {
@@ -126,7 +235,6 @@ export function saveProductCategory(cat: ProductCategory) {
   const extra = read<ProductCategory>(CAT_KEY)
   const idx = extra.findIndex((c) => c.id === cat.id)
   const next = idx >= 0 ? extra.map((c, i) => (i === idx ? cat : c)) : [cat, ...extra]
-  // also persist overrides of defaults
   if (!extra.some((c) => c.id === cat.id) && DEFAULT_CATEGORIES.some((c) => c.id === cat.id)) {
     write(CAT_KEY, [cat, ...extra])
   } else {
@@ -158,20 +266,59 @@ export function getVisibleCategories(): ProductCategory[] {
   return getProductCategories().filter((c) => !deleted.has(c.id) && !c.name.startsWith('__deleted__'))
 }
 
+/**
+ * Product list for booking + Products admin.
+ * When Supabase remote is loaded: inventory_items only (selling_price).
+ * Otherwise: seed/local fallback (offline).
+ * Never applies catalog_price_overrides for products.
+ */
 export function getCatalogProducts(): CatalogProduct[] {
-  const deleted = readDeletedProductIds()
-  const byId = new Map<string, CatalogProduct>()
-  for (const p of builtInProducts()) byId.set(p.id, p)
-  for (const p of read<CatalogProduct>(PROD_KEY)) {
-    if (deleted.has(p.id)) continue
-    byId.set(p.id, p)
+  if (isSupabaseConfigured && remoteProducts) {
+    return remoteProducts.map((p) => ({ ...p }))
   }
-  return [...byId.values()]
-    .map((p) => applyPriceOverride('product', p))
-    .sort((a, b) => a.name.localeCompare(b.name))
+  return localFallbackProducts()
 }
 
-export function createCatalogProduct(input: {
+async function upsertInventoryItem(product: CatalogProduct): Promise<CatalogProduct> {
+  if (!isSupabaseConfigured || !supabase) return product
+
+  const payload = {
+    id: product.id,
+    name: product.name,
+    sku: product.sku,
+    category: product.categoryName || 'N/A',
+    brand: product.supplier ?? null,
+    unit_cost: roundMoney(product.baseCost),
+    selling_price: roundMoney(product.retailPrice),
+    status: product.status === 'inactive' ? 'inactive' : 'active',
+    is_retail_product: true,
+  }
+
+  const { data, error } = await supabase
+    .from('inventory_items')
+    .upsert(payload, { onConflict: 'id' })
+    .select('id, name, sku, category, unit_cost, selling_price, status, brand, created_at')
+    .single()
+
+  if (error) {
+    throw new Error(error.message || 'Could not save product to database')
+  }
+
+  const mapped = mapInventoryRow(data as InventoryItemRow)
+  if (remoteProducts) {
+    const idx = remoteProducts.findIndex((p) => p.id === mapped.id)
+    remoteProducts =
+      idx >= 0
+        ? remoteProducts.map((p, i) => (i === idx ? mapped : p))
+        : [mapped, ...remoteProducts].sort((a, b) => a.name.localeCompare(b.name))
+  } else {
+    remoteProducts = [mapped]
+  }
+  emit()
+  return mapped
+}
+
+export async function createCatalogProduct(input: {
   name: string
   sku?: string
   categoryId?: string
@@ -183,52 +330,86 @@ export function createCatalogProduct(input: {
   manufacturingDate?: string
   expirationDate?: string
   removalDate?: string
-}): CatalogProduct {
+}): Promise<CatalogProduct> {
   const cats = getVisibleCategories()
   const cat = cats.find((c) => c.id === input.categoryId)
   const sku =
     input.sku?.trim() ||
     `SKU-${Date.now().toString().slice(-8)}`
+  const id =
+    isSupabaseConfigured && typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `prod-${Date.now()}`
+
   const product: CatalogProduct = {
-    id: `prod-${Date.now()}`,
+    id,
     name: input.name.trim().toUpperCase(),
     sku,
     categoryId: cat?.id,
     categoryName: cat?.name ?? 'N/A',
     supplier: input.supplier?.trim() || undefined,
     branchName: input.branchName?.trim() || 'Global',
-    retailPrice: input.retailPrice,
-    baseCost: input.baseCost,
+    retailPrice: roundMoney(input.retailPrice),
+    baseCost: roundMoney(input.baseCost),
     status: input.status ?? 'active',
     manufacturingDate: input.manufacturingDate || undefined,
     expirationDate: input.expirationDate || undefined,
     removalDate: input.removalDate || undefined,
     createdAt: new Date().toISOString().slice(0, 10),
   }
+
+  if (isSupabaseConfigured && supabase) {
+    return upsertInventoryItem(product)
+  }
+
   write(PROD_KEY, [product, ...read<CatalogProduct>(PROD_KEY)])
-  void setPriceOverride('product', product.id, product.retailPrice)
-  return applyPriceOverride('product', product)
+  return product
 }
 
 export function getCatalogProductById(id: string): CatalogProduct | undefined {
   return getCatalogProducts().find((p) => p.id === id)
 }
 
-export function updateCatalogProduct(product: CatalogProduct) {
+export async function updateCatalogProduct(product: CatalogProduct): Promise<CatalogProduct> {
+  const next: CatalogProduct = {
+    ...product,
+    retailPrice: roundMoney(product.retailPrice),
+    baseCost: roundMoney(product.baseCost),
+    name: product.name.trim().toUpperCase(),
+  }
+
+  if (isSupabaseConfigured && supabase) {
+    return upsertInventoryItem(next)
+  }
+
   const extra = read<CatalogProduct>(PROD_KEY)
-  const idx = extra.findIndex((p) => p.id === product.id)
-  const next = idx >= 0 ? extra.map((p, i) => (i === idx ? product : p)) : [product, ...extra]
-  write(PROD_KEY, next)
+  const idx = extra.findIndex((p) => p.id === next.id)
+  const localNext = idx >= 0 ? extra.map((p, i) => (i === idx ? next : p)) : [next, ...extra]
+  write(PROD_KEY, localNext)
   const deleted = readDeletedProductIds()
-  if (deleted.has(product.id)) {
-    deleted.delete(product.id)
+  if (deleted.has(next.id)) {
+    deleted.delete(next.id)
     writeDeletedProductIds(deleted)
   }
-  void setPriceOverride('product', product.id, product.retailPrice)
-  return applyPriceOverride('product', product)
+  return next
 }
 
-export function deleteCatalogProduct(id: string) {
+export async function deleteCatalogProduct(id: string): Promise<void> {
+  if (isSupabaseConfigured && supabase) {
+    const { error } = await supabase
+      .from('inventory_items')
+      .update({ status: 'inactive', is_retail_product: true })
+      .eq('id', id)
+    if (error) throw new Error(error.message || 'Could not deactivate product')
+    if (remoteProducts) {
+      remoteProducts = remoteProducts.map((p) =>
+        p.id === id ? { ...p, status: 'inactive' as const } : p,
+      )
+    }
+    emit()
+    return
+  }
+
   write(
     PROD_KEY,
     read<CatalogProduct>(PROD_KEY).filter((p) => p.id !== id),

@@ -64,6 +64,9 @@ export async function setPriceOverride(
   id: string,
   price: number,
 ): Promise<void> {
+  // Products use inventory_items.selling_price only — never price overrides.
+  if (kind === 'product') return
+
   const safe = Math.max(0, Number(price) || 0)
   const stored = readStored()
   const nextKind = { ...(stored[kind] ?? {}), [id]: safe }
@@ -88,9 +91,10 @@ export function applyPriceOverride<T extends { id: string; price?: number; retai
   kind: CatalogPriceKind,
   item: T,
 ): T {
+  // Products: inventory_items.selling_price is the only authority.
+  if (kind === 'product') return item
   const override = getPriceOverride(kind, item.id)
   if (override == null) return item
-  if (kind === 'product') return { ...item, retailPrice: override }
   if (kind === 'package') return { ...item, regularPrice: override, promoPrice: undefined }
   return { ...item, price: override }
 }
@@ -123,23 +127,7 @@ function backfillFromCatalogStorage() {
     /* ignore */
   }
 
-  try {
-    const products = JSON.parse(localStorage.getItem('imajica_catalog_products') || '[]') as Array<{
-      id?: string
-      retailPrice?: number
-    }>
-    if (Array.isArray(products)) {
-      for (const p of products) {
-        if (!p?.id || typeof p.retailPrice !== 'number') continue
-        if (next.product?.[p.id] == null) {
-          next.product = { ...(next.product ?? {}), [p.id]: p.retailPrice }
-          changed = true
-        }
-      }
-    }
-  } catch {
-    /* ignore */
-  }
+  // Do not backfill product prices from localStorage — products use inventory_items.
 
   try {
     const packages = JSON.parse(localStorage.getItem('imajica_catalog_packages') || '[]') as Array<{
@@ -192,13 +180,14 @@ export async function preloadCatalogPriceOverrides(): Promise<void> {
       const stored = readStored()
       const next: Stored = {
         service: { ...(stored.service ?? {}) },
-        product: { ...(stored.product ?? {}) },
+        product: {},
         package: { ...(stored.package ?? {}) },
       }
 
       for (const row of data ?? []) {
         const kind = row.item_kind as CatalogPriceKind
-        if (kind !== 'service' && kind !== 'product' && kind !== 'package') continue
+        // Skip product overrides — selling_price lives on inventory_items.
+        if (kind !== 'service' && kind !== 'package') continue
         const price = Number(row.price)
         if (!Number.isFinite(price)) continue
         next[kind] = { ...(next[kind] ?? {}), [String(row.item_key)]: price }

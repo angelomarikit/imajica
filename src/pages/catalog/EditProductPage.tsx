@@ -8,6 +8,7 @@ import {
   createCatalogProduct,
   getCatalogProductById,
   getVisibleCategories,
+  preloadCatalogProductsFromSupabase,
   updateCatalogProduct,
 } from '@/services/productCatalogService'
 import {
@@ -80,28 +81,36 @@ export function EditProductPage() {
   >([])
 
   useEffect(() => {
-    if (!editId) {
+    let cancelled = false
+    void (async () => {
+      await preloadCatalogProductsFromSupabase()
+      if (cancelled) return
+      if (!editId) {
+        setLoaded(true)
+        return
+      }
+      const existing = getCatalogProductById(editId)
+      if (!existing) {
+        toast.error('Product not found')
+        navigate('/admin/catalog/products', { replace: true })
+        return
+      }
+      setSku(existing.sku)
+      setName(existing.name)
+      setCategoryId(existing.categoryId ?? '')
+      setSupplier(existing.supplier ?? '')
+      setRetailPrice(String(existing.retailPrice))
+      setBaseCost(String(existing.baseCost))
+      setActive(existing.status === 'active')
+      setManufacturingDate(existing.manufacturingDate ?? '')
+      setExpirationDate(existing.expirationDate ?? '')
+      setRemovalDate(existing.removalDate ?? '')
+      setStockRows(getProductBranchStocks(existing.id))
       setLoaded(true)
-      return
+    })()
+    return () => {
+      cancelled = true
     }
-    const existing = getCatalogProductById(editId)
-    if (!existing) {
-      toast.error('Product not found')
-      navigate('/admin/catalog/products', { replace: true })
-      return
-    }
-    setSku(existing.sku)
-    setName(existing.name)
-    setCategoryId(existing.categoryId ?? '')
-    setSupplier(existing.supplier ?? '')
-    setRetailPrice(String(existing.retailPrice))
-    setBaseCost(String(existing.baseCost))
-    setActive(existing.status === 'active')
-    setManufacturingDate(existing.manufacturingDate ?? '')
-    setExpirationDate(existing.expirationDate ?? '')
-    setRemovalDate(existing.removalDate ?? '')
-    setStockRows(getProductBranchStocks(existing.id))
-    setLoaded(true)
   }, [editId, navigate])
 
   useEffect(() => {
@@ -116,7 +125,7 @@ export function EditProductPage() {
     )
   }, [isEdit])
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!name.trim()) {
       toast.error('Item name is required')
@@ -145,7 +154,7 @@ export function EditProductPage() {
           toast.error('Product not found')
           return
         }
-        updateCatalogProduct({
+        await updateCatalogProduct({
           ...existing,
           ...payload,
           sku: payload.sku || existing.sku,
@@ -160,7 +169,7 @@ export function EditProductPage() {
         )
         toast.success('Product updated')
       } else {
-        const created = createCatalogProduct({
+        const created = await createCatalogProduct({
           name: payload.name,
           sku: payload.sku || undefined,
           categoryId: payload.categoryId,
@@ -183,6 +192,8 @@ export function EditProductPage() {
         toast.success('Product added')
       }
       navigate('/admin/catalog/products')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save product')
     } finally {
       setSaving(false)
     }
