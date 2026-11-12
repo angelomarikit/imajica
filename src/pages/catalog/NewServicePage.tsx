@@ -163,21 +163,25 @@ export function NewServicePage() {
       return
     }
     setSaving(true)
-    try {
-      saveServiceFromForm(editId ?? undefined, {
-        name,
-        description,
-        price: priceNum,
-        sessions: sessionsNum,
-        status: active ? 'active' : 'inactive',
-        availableGlobally: bacoorOwnMenu ? false : availableGlobally,
-        availableBranchIds: branchIds,
-      })
-      toast.success(isEdit ? 'Service updated' : 'Service saved')
-      navigate('/admin/catalog/services')
-    } finally {
-      setSaving(false)
-    }
+    void (async () => {
+      try {
+        await saveServiceFromForm(editId ?? undefined, {
+          name,
+          description,
+          price: priceNum,
+          sessions: sessionsNum,
+          status: active ? 'active' : 'inactive',
+          availableGlobally: bacoorOwnMenu ? false : availableGlobally,
+          availableBranchIds: branchIds,
+        })
+        toast.success(isEdit ? 'Service updated' : 'Service saved')
+        navigate('/admin/catalog/services')
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Could not save service')
+      } finally {
+        setSaving(false)
+      }
+    })()
   }
 
   if (!loaded) {

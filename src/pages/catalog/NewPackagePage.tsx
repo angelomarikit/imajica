@@ -48,23 +48,27 @@ export function NewPackagePage() {
       return
     }
     setSaving(true)
-    try {
-      createPackage({
-        name,
-        description,
-        branchId: branch.id,
-        branchName: branch.name.replace(/ Branch$/, ''),
-        price: priceNum,
-        sessions: sessionsNum,
-        status: active ? 'active' : 'inactive',
-        includedTreatmentIds: included,
-        freeItems,
-      })
-      toast.success('Package saved')
-      navigate('/admin/catalog/packages')
-    } finally {
-      setSaving(false)
-    }
+    void (async () => {
+      try {
+        await createPackage({
+          name,
+          description,
+          branchId: branch.id,
+          branchName: branch.name.replace(/ Branch$/, ''),
+          price: priceNum,
+          sessions: sessionsNum,
+          status: active ? 'active' : 'inactive',
+          includedTreatmentIds: included,
+          freeItems,
+        })
+        toast.success('Package saved')
+        navigate('/admin/catalog/packages')
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Could not save package')
+      } finally {
+        setSaving(false)
+      }
+    })()
   }
 
   return (

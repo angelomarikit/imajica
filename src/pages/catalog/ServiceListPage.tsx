@@ -101,8 +101,14 @@ export function ServiceListPage() {
 
   function handleDelete(id: string, name: string) {
     if (!confirm(`Remove service “${name}”?`)) return
-    deleteService(id)
-    toast.message('Service removed')
+    void (async () => {
+      try {
+        await deleteService(id)
+        toast.message('Service removed')
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Could not remove service')
+      }
+    })()
   }
 
   function exportCsv() {
@@ -289,12 +295,20 @@ export function ServiceListPage() {
                             aria-checked={live}
                             title={live ? 'Live at your branch' : 'Off at your branch'}
                             onClick={() => {
-                              toggleServiceLiveForBranch(s.id, forcedBranchId, !live)
-                              toast.success(
-                                !live
-                                  ? `${s.name} is now live at your branch`
-                                  : `${s.name} turned off for your branch`,
-                              )
+                              void (async () => {
+                                try {
+                                  await toggleServiceLiveForBranch(s.id, forcedBranchId, !live)
+                                  toast.success(
+                                    !live
+                                      ? `${s.name} is now live at your branch`
+                                      : `${s.name} turned off for your branch`,
+                                  )
+                                } catch (err) {
+                                  toast.error(
+                                    err instanceof Error ? err.message : 'Could not update service',
+                                  )
+                                }
+                              })()
                             }}
                             className={cn(
                               'relative h-7 w-12 rounded-full transition',

@@ -2,13 +2,14 @@ import type { EntityStatus, Package, Treatment, TreatmentCategorySlug } from '@/
 import { getBranches } from '@/services/branchService'
 import {
   applyPriceOverride,
-  setPriceOverride,
   subscribeCatalogPriceOverrides,
 } from '@/services/catalogPriceOverrideService'
 import { SERVICE_CATALOG_SEED, type ServiceSeedRow } from '@/constants/serviceCatalogSeed'
 import { BACOOR_SERVICE_CATALOG_SEED } from '@/constants/bacoorServiceCatalogSeed'
 import { PACKAGE_CATALOG_SEED, type PackageSeedRow } from '@/constants/packageCatalogSeed'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { requireSupabaseSession, softRefreshSupabaseSession } from '@/utils/supabaseSession'
+import { isUuid } from '@/utils/uuid'
 
 const SERVICES_KEY = 'imajica_catalog_services'
 const SERVICES_DELETED_KEY = 'imajica_catalog_services_deleted'
@@ -396,36 +397,247 @@ export function getPackageById(id: string): Package | undefined {
   return getPackagesCatalog().find((p) => p.id === id)
 }
 
-function upsertService(service: Treatment) {
-  const extra = readJson<Treatment>(SERVICES_KEY)
-  const idx = extra.findIndex((s) => s.id === service.id)
-  const next = idx >= 0 ? extra.map((s, i) => (i === idx ? service : s)) : [service, ...extra]
-  localStorage.setItem(SERVICES_KEY, JSON.stringify(next))
-  // If it was soft-deleted, restore
-  const deleted = readDeletedIds()
-  if (deleted.has(service.id)) {
-    deleted.delete(service.id)
-    writeDeletedIds(deleted)
+function patchRemoteServiceCache(service: Treatment) {
+  if (!remoteServices) {
+    remoteServices = service.status === 'active' ? [service] : []
+    emit()
+    return
   }
-  void setPriceOverride('service', service.id, service.price)
+  const idx = remoteServices.findIndex((s) => s.id === service.id)
+  if (service.status !== 'active') {
+    remoteServices = remoteServices.filter((s) => s.id !== service.id)
+  } else if (idx >= 0) {
+    remoteServices = remoteServices.map((s, i) => (i === idx ? service : s))
+  } else {
+    remoteServices = [service, ...remoteServices].sort((a, b) => a.name.localeCompare(b.name))
+  }
   emit()
-  return applyPriceOverride('service', service)
 }
 
-function upsertPackage(pkg: Package) {
-  const extra = readJson<Package>(PACKAGES_KEY)
-  const idx = extra.findIndex((s) => s.id === pkg.id)
-  const next = idx >= 0 ? extra.map((s, i) => (i === idx ? pkg : s)) : [pkg, ...extra]
-  localStorage.setItem(PACKAGES_KEY, JSON.stringify(next))
-  const deleted = readDeletedPackageIds()
-  if (deleted.has(pkg.id)) {
-    deleted.delete(pkg.id)
-    writeDeletedPackageIds(deleted)
+function patchRemotePackageCache(pkg: Package) {
+  if (!remotePackages) {
+    remotePackages = pkg.status === 'active' ? [pkg] : []
+    emit()
+    return
   }
-  void setPriceOverride('package', pkg.id, pkg.promoPrice ?? pkg.regularPrice)
+  const idx = remotePackages.findIndex((p) => p.id === pkg.id)
+  if (pkg.status !== 'active') {
+    remotePackages = remotePackages.filter((p) => p.id !== pkg.id)
+  } else if (idx >= 0) {
+    remotePackages = remotePackages.map((p, i) => (i === idx ? pkg : p))
+  } else {
+    remotePackages = [pkg, ...remotePackages].sort((a, b) => a.name.localeCompare(b.name))
+  }
   emit()
-  return applyPriceOverride('package', pkg)
 }
+
+async function syncBranchTreatments(treatmentId: string, service: Treatment) {
+  if (!supabase || !isUuid(treatmentId)) return
+  await supabase.from('branch_treatments').delete().eq('treatment_id', treatmentId)
+  const branchIds = service.availableGlobally
+    ? getBranches()
+        .filter((b) => b.code !== 'HQ' && isUuid(b.id))
+        .map((b) => b.id)
+    : (service.availableBranchIds ?? []).filter((id) => isUuid(id))
+  if (!branchIds.length) return
+  const { error } = await supabase.from('branch_treatments').insert(
+    branchIds.map((branch_id) => ({ branch_id, treatment_id: treatmentId })),
+  )
+  if (error) {
+    console.error('[catalog] branch_treatments sync failed', error.message)
+  }
+}
+
+async function persistTreatmentToSupabase(service: Treatment): Promise<Treatment> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured. Services must be saved to the live catalog database.')
+  }
+
+  await softRefreshSupabaseSession()
+  await requireSupabaseSession()
+
+  const id =
+    isUuid(service.id)
+      ? service.id
+      : typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : service.id
+
+  if (!isUuid(id)) {
+    throw new Error('Could not create a database id for this service. Refresh and try again.')
+  }
+
+  const price = roundMoney(service.price)
+  const sessions = Math.max(1, Number(service.sessions) || 1)
+  const defaultBranchId =
+    service.availableGlobally || !service.branchId || !isUuid(service.branchId)
+      ? null
+      : service.branchId
+  const category =
+    service.category &&
+    ['facial', 'skin', 'body', 'injectables', 'wellness', 'laser', 'others'].includes(
+      service.category,
+    )
+      ? service.category
+      : 'others'
+
+  const payload = {
+    id,
+    name: service.name.trim(),
+    description: service.description?.trim() || null,
+    duration_minutes: Math.max(30, Number(service.durationMinutes) || sessions * 30),
+    price,
+    status: service.status === 'inactive' ? 'inactive' : 'active',
+    sessions,
+    category_id: category,
+    available_globally: Boolean(service.availableGlobally),
+    default_branch_id: defaultBranchId,
+    updated_at: new Date().toISOString(),
+  }
+
+  const { data, error } = await supabase
+    .from('treatments')
+    .upsert(payload, { onConflict: 'id' })
+    .select(
+      'id, name, description, duration_minutes, price, status, sessions, category_id, available_globally, default_branch_id, image_url',
+    )
+    .single()
+
+  if (error) {
+    throw new Error(error.message || 'Could not save service to the database')
+  }
+
+  const row = data as Record<string, unknown>
+  const branchId = row.default_branch_id ? String(row.default_branch_id) : undefined
+  const saved: Treatment = {
+    ...service,
+    id: String(row.id),
+    name: String(row.name || service.name),
+    description: String(row.description || ''),
+    category: (String(row.category_id || category) as TreatmentCategorySlug) || 'others',
+    durationMinutes: Number(row.duration_minutes) || 30,
+    price: roundMoney(row.price),
+    status: (row.status === 'inactive' ? 'inactive' : 'active') as EntityStatus,
+    sessions: Number(row.sessions) || 1,
+    branchId,
+    branchName: service.availableGlobally
+      ? 'All Branches'
+      : service.branchName,
+    availableGlobally: Boolean(row.available_globally) && !branchId,
+    availableBranchIds: service.availableGlobally
+      ? []
+      : service.availableBranchIds?.length
+        ? [...service.availableBranchIds]
+        : branchId
+          ? [branchId]
+          : [],
+  }
+
+  // Prefer form branch list over single default_branch_id
+  if (!service.availableGlobally && service.availableBranchIds?.length) {
+    saved.availableGlobally = false
+    saved.availableBranchIds = [...service.availableBranchIds]
+    saved.branchId = service.availableBranchIds[0]
+  }
+
+  await syncBranchTreatments(saved.id, saved)
+  patchRemoteServiceCache(saved)
+  return saved
+}
+
+async function persistPackageToSupabase(pkg: Package): Promise<Package> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured. Packages must be saved to the live catalog database.')
+  }
+
+  await softRefreshSupabaseSession()
+  await requireSupabaseSession()
+
+  const id =
+    isUuid(pkg.id)
+      ? pkg.id
+      : typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : pkg.id
+
+  if (!isUuid(id)) {
+    throw new Error('Could not create a database id for this package. Refresh and try again.')
+  }
+
+  const regular = roundMoney(pkg.regularPrice)
+  const defaultBranchId =
+    pkg.availableGlobally || !pkg.branchId || !isUuid(pkg.branchId) ? null : pkg.branchId
+
+  const payload = {
+    id,
+    name: pkg.name.trim(),
+    type: pkg.type || 'package',
+    description: pkg.description?.trim() || pkg.freeItems?.trim() || null,
+    regular_price: regular,
+    promo_price: pkg.promoPrice != null ? roundMoney(pkg.promoPrice) : null,
+    sessions: Math.max(1, Number(pkg.sessions) || 1),
+    validity_months: Math.max(1, Number(pkg.validityMonths) || 6),
+    status: pkg.status === 'inactive' ? 'inactive' : 'active',
+    free_items: pkg.freeItems?.trim() || null,
+    default_branch_id: defaultBranchId,
+    updated_at: new Date().toISOString(),
+  }
+
+  const { data, error } = await supabase
+    .from('packages')
+    .upsert(payload, { onConflict: 'id' })
+    .select(
+      'id, name, type, description, regular_price, promo_price, sessions, validity_months, status, free_items, default_branch_id, image_url',
+    )
+    .single()
+
+  if (error) {
+    throw new Error(error.message || 'Could not save package to the database')
+  }
+
+  const uuidIncludes = (pkg.includedTreatmentIds ?? []).filter((tid) => isUuid(tid))
+  if (uuidIncludes.length) {
+    await supabase.from('package_items').delete().eq('package_id', id)
+    const { error: itemsErr } = await supabase.from('package_items').insert(
+      uuidIncludes.map((treatment_id) => ({
+        package_id: id,
+        treatment_id,
+        quantity: 1,
+      })),
+    )
+    if (itemsErr) {
+      console.error('[catalog] package_items sync failed', itemsErr.message)
+    }
+  }
+
+  const row = data as Record<string, unknown>
+  const branchId = row.default_branch_id ? String(row.default_branch_id) : undefined
+  const saved: Package = {
+    ...pkg,
+    id: String(row.id),
+    name: String(row.name || pkg.name),
+    type: (String(row.type || 'package') as Package['type']) || 'package',
+    description: String(row.description || pkg.description || ''),
+    regularPrice: roundMoney(row.regular_price),
+    promoPrice:
+      row.promo_price != null && Number.isFinite(Number(row.promo_price))
+        ? roundMoney(row.promo_price)
+        : undefined,
+    sessions: Number(row.sessions) || 1,
+    validityMonths: Number(row.validity_months) || 6,
+    status: (row.status === 'inactive' ? 'inactive' : 'active') as EntityStatus,
+    freeItems: row.free_items ? String(row.free_items) : pkg.freeItems,
+    branchId,
+    branchName: pkg.availableGlobally ? 'All Branches' : pkg.branchName,
+    availableGlobally: !branchId,
+    availableBranchIds: branchId ? [branchId] : [],
+    includedTreatmentIds: [...(pkg.includedTreatmentIds ?? [])],
+  }
+
+  patchRemotePackageCache(saved)
+  return saved
+}
+
 
 export type ServiceInput = {
   name: string
@@ -476,15 +688,22 @@ function primaryBranchFields(input: ServiceInput): { branchId?: string; branchNa
   }
 }
 
-export function createService(input: ServiceInput): Treatment {
+function newLocalOrUuidId(prefix: string) {
+  if (isSupabaseConfigured && typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+  return `${prefix}-${Date.now()}`
+}
+
+export async function createService(input: ServiceInput): Promise<Treatment> {
   const primary = primaryBranchFields(input)
-  return upsertService({
-    id: `svc-${Date.now()}`,
+  const draft: Treatment = {
+    id: newLocalOrUuidId('svc'),
     name: input.name.trim(),
     description: input.description.trim(),
     category: input.category ?? 'others',
     durationMinutes: Math.max(30, input.sessions * 30),
-    price: input.price,
+    price: roundMoney(input.price),
     status: input.status,
     benefits: [],
     popularity: 0,
@@ -493,23 +712,27 @@ export function createService(input: ServiceInput): Treatment {
     branchName: primary.branchName,
     availableGlobally: input.availableGlobally,
     availableBranchIds: input.availableGlobally ? [] : [...input.availableBranchIds],
-  })
+  }
+  return persistTreatmentToSupabase(draft)
 }
 
-export function saveServiceFromForm(id: string | undefined, input: ServiceInput): Treatment {
+export async function saveServiceFromForm(
+  id: string | undefined,
+  input: ServiceInput,
+): Promise<Treatment> {
   const primary = primaryBranchFields(input)
   if (!id) return createService(input)
 
   const existing = getServiceById(id)
   if (!existing) return createService(input)
 
-  return upsertService({
+  return persistTreatmentToSupabase({
     ...existing,
     name: input.name.trim(),
     description: input.description.trim(),
     category: input.category ?? existing.category,
     durationMinutes: Math.max(30, input.sessions * 30),
-    price: input.price,
+    price: roundMoney(input.price),
     status: input.status,
     sessions: input.sessions,
     branchId: primary.branchId,
@@ -519,39 +742,41 @@ export function saveServiceFromForm(id: string | undefined, input: ServiceInput)
   })
 }
 
-export function updateService(service: Treatment): Treatment {
-  return upsertService(service)
+export async function updateService(service: Treatment): Promise<Treatment> {
+  return persistTreatmentToSupabase(service)
 }
 
-/** Franchise owner: turn service live / off for one branch only */
-export function toggleServiceLiveForBranch(serviceId: string, branchId: string, live: boolean): Treatment | null {
+/** Franchise owner: turn service live / off for one branch only — persists to Supabase. */
+export async function toggleServiceLiveForBranch(
+  serviceId: string,
+  branchId: string,
+  live: boolean,
+): Promise<Treatment | null> {
   const existing = getServiceById(serviceId)
   if (!existing) return null
   if (existing.availableGlobally && !live) {
-    // Leaving global: become branch-list without this branch (all other branches stay implied via explicit list of remaining)
-    // Simpler: keep global true only when live; when turning off a global item for one branch,
-    // convert to all branches except this one.
     const others = getBranches()
       .filter((b) => b.code !== 'HQ' && b.id !== branchId)
       .map((b) => b.id)
-    return upsertService({
+    return persistTreatmentToSupabase({
       ...existing,
       availableGlobally: false,
       availableBranchIds: others,
+      branchId: others[0],
     })
   }
-  const ids = new Set(existing.availableBranchIds ?? [])
   if (existing.availableGlobally) {
-    // already live everywhere
     return existing
   }
+  const ids = new Set(existing.availableBranchIds ?? [])
   if (live) ids.add(branchId)
   else ids.delete(branchId)
   const nextIds = [...ids]
-  return upsertService({
+  return persistTreatmentToSupabase({
     ...existing,
     availableGlobally: false,
     availableBranchIds: nextIds,
+    branchId: nextIds[0],
   })
 }
 
@@ -608,27 +833,34 @@ export function getPackagesForBranch(branchId: string | 'all' | undefined): Pack
   return all.filter((p) => isPackageLiveAtBranch(p, branchId))
 }
 
-export function togglePackageLiveForBranch(packageId: string, branchId: string, live: boolean): Package | null {
+export async function togglePackageLiveForBranch(
+  packageId: string,
+  branchId: string,
+  live: boolean,
+): Promise<Package | null> {
   const existing = getPackageById(packageId)
   if (!existing) return null
   if (existing.availableGlobally && !live) {
     const others = getBranches()
       .filter((b) => b.code !== 'HQ' && b.id !== branchId)
       .map((b) => b.id)
-    return upsertPackage({
+    return persistPackageToSupabase({
       ...existing,
       availableGlobally: false,
       availableBranchIds: others,
+      branchId: others[0],
     })
   }
   if (existing.availableGlobally) return existing
   const ids = new Set(existing.availableBranchIds ?? [])
   if (live) ids.add(branchId)
   else ids.delete(branchId)
-  return upsertPackage({
+  const nextIds = [...ids]
+  return persistPackageToSupabase({
     ...existing,
     availableGlobally: false,
-    availableBranchIds: [...ids],
+    availableBranchIds: nextIds,
+    branchId: nextIds[0],
   })
 }
 
@@ -638,12 +870,24 @@ export function isPackageLiveAtBranch(pkg: Package, branchId: string): boolean {
   return pkg.branchId === branchId
 }
 
-export function deleteService(id: string) {
-  const extra = readJson<Treatment>(SERVICES_KEY).filter((s) => s.id !== id)
-  localStorage.setItem(SERVICES_KEY, JSON.stringify(extra))
-  const deleted = readDeletedIds()
-  deleted.add(id)
-  writeDeletedIds(deleted)
+export async function deleteService(id: string): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured. Services must be removed from the live catalog database.')
+  }
+  if (!isUuid(id)) {
+    throw new Error('This service is not in the database catalog.')
+  }
+
+  await softRefreshSupabaseSession()
+  await requireSupabaseSession()
+  const { error } = await supabase
+    .from('treatments')
+    .update({ status: 'inactive', updated_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw new Error(error.message || 'Could not remove service')
+  if (remoteServices) {
+    remoteServices = remoteServices.filter((s) => s.id !== id)
+  }
   emit()
 }
 
@@ -659,14 +903,14 @@ export type PackageInput = {
   freeItems?: string
 }
 
-export function createPackage(input: PackageInput): Package {
+export async function createPackage(input: PackageInput): Promise<Package> {
   const globally = !input.branchId || input.branchName === 'All Branches'
-  return upsertPackage({
-    id: `pkg-${Date.now()}`,
+  const draft: Package = {
+    id: newLocalOrUuidId('pkg'),
     name: input.name.trim(),
     type: 'package',
     description: input.description.trim(),
-    regularPrice: input.price,
+    regularPrice: roundMoney(input.price),
     sessions: input.sessions,
     validityMonths: 6,
     status: input.status,
@@ -677,11 +921,12 @@ export function createPackage(input: PackageInput): Package {
     freeItems: input.freeItems?.trim() || undefined,
     availableGlobally: globally,
     availableBranchIds: globally || !input.branchId ? [] : [input.branchId],
-  })
+  }
+  return persistPackageToSupabase(draft)
 }
 
-export function updatePackage(pkg: Package): Package {
-  return upsertPackage(pkg)
+export async function updatePackage(pkg: Package): Promise<Package> {
+  return persistPackageToSupabase(pkg)
 }
 
 export function deletePackage(id: string) {

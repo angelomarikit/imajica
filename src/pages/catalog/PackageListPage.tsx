@@ -290,12 +290,20 @@ export function PackageListPage() {
                         role="switch"
                         aria-checked={live}
                         onClick={() => {
-                          togglePackageLiveForBranch(p.id, forcedBranchId, !live)
-                          toast.success(
-                            !live
-                              ? `${p.name} is now live at your branch`
-                              : `${p.name} turned off for your branch`,
-                          )
+                          void (async () => {
+                            try {
+                              await togglePackageLiveForBranch(p.id, forcedBranchId, !live)
+                              toast.success(
+                                !live
+                                  ? `${p.name} is now live at your branch`
+                                  : `${p.name} turned off for your branch`,
+                              )
+                            } catch (err) {
+                              toast.error(
+                                err instanceof Error ? err.message : 'Could not update package',
+                              )
+                            }
+                          })()
                         }}
                         className={cn(
                           'relative h-7 w-12 rounded-full transition',
