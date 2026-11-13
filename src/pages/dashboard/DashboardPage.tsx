@@ -26,7 +26,6 @@ import { useForcedBranchId } from '@/hooks/useEffectiveBranchId'
 import {
   listAppointments,
   subscribeAppointments,
-  toDateKey,
 } from '@/services/appointmentService'
 import { getClients, preloadClientsFromSupabase, subscribeClients } from '@/services/clientService'
 import { BRANCH_IDS, COMPANY_OWNED_BRANCH_IDS } from '@/constants/teamAccountsSeed'
@@ -34,7 +33,6 @@ import {
   CASH_DAY_CUTOVER_HOUR_MANILA,
   HQ_CASH_SCOPE,
   cashBusinessDateKey,
-  cashBusinessDateKeyForInstant,
   cashPriorBusinessDateKey,
   migrateLocalCashDrawerToSupabase,
   preloadCashDrawer,
@@ -53,13 +51,13 @@ import { getExpenses, subscribeExpenses } from '@/services/expenseService'
 import {
   fetchBranchCashCollected,
   fetchBranchDashboardSalesSummary,
+  fetchOrgDashboardSalesByBranch,
   type BranchDashboardSalesSummary,
+  type OrgDashboardSalesByBranch,
 } from '@/services/dashboardSalesSummaryService'
 import { manilaDateKey } from '@/services/attendanceService'
 import {
-  cashCollectedFromSales,
   clinicRecognizedAmount,
-  getBookingRows,
   getSales,
   preloadSalesData,
   saleGrossAmount,
@@ -734,8 +732,11 @@ function BranchOpsDashboard() {
     [BRANCH_IDS.cainta]: '',
     [BRANCH_IDS.lipa]: '',
   })
-  /** Server aggregates — source of truth for clinic dashboard cards (fast; includes migration + live). */
+  /** Server aggregates — sole source of truth for money cards (no localStorage math). */
   const [rpcSummary, setRpcSummary] = useState<BranchDashboardSalesSummary | null>(null)
+  const [orgSales, setOrgSales] = useState<OrgDashboardSalesByBranch | null>(null)
+  const [salesRpcError, setSalesRpcError] = useState<string | null>(null)
+  const [salesRpcTick, setSalesRpcTick] = useState(0)
   /** Cash on Hand: cash tenders only (RPC), per clinic and company combined. */
   const [cashCollectedRpc, setCashCollectedRpc] = useState<number | null>(null)
   const [companyCashCollectedRpc, setCompanyCashCollectedRpc] = useState<number | null>(null)
@@ -788,23 +789,61 @@ function BranchOpsDashboard() {
   }, [])
 
   useEffect(() => {
-    if (!scopeBranchId) {
-      setRpcSummary(null)
-      return
-    }
     let cancelled = false
-    void fetchBranchDashboardSalesSummary({
-      branchId: scopeBranchId,
-      from: rangeFrom,
-      to: rangeTo,
-      today: manilaDateKey(),
-    }).then((summary) => {
-      if (!cancelled) setRpcSummary(summary)
-    })
+    const today = manilaDateKey()
+    setSalesRpcError(null)
+
+    if (scopeBranchId) {
+      setOrgSales(null)
+      void fetchBranchDashboardSalesSummary({
+        branchId: scopeBranchId,
+        from: rangeFrom,
+        to: rangeTo,
+        today,
+      }).then((result) => {
+        if (cancelled) return
+        if (result.status === 'ok') {
+          setRpcSummary(result.data)
+          setSalesRpcError(null)
+        } else if (result.status === 'error') {
+          setRpcSummary(null)
+          setSalesRpcError(result.message || 'Could not load sales from server')
+        }
+      })
+    } else {
+      setRpcSummary(null)
+      void fetchOrgDashboardSalesByBranch({
+        from: rangeFrom,
+        to: rangeTo,
+        today,
+      }).then((result) => {
+        if (cancelled) return
+        if (result.status === 'ok') {
+          setOrgSales(result.data)
+          setSalesRpcError(null)
+        } else if (result.status === 'error') {
+          setOrgSales(null)
+          setSalesRpcError(result.message || 'Could not load branch sales from server')
+        }
+      })
+    }
+
     return () => {
       cancelled = true
     }
-  }, [scopeBranchId, rangeFrom, rangeTo])
+  }, [scopeBranchId, rangeFrom, rangeTo, salesRpcTick])
+
+  // Re-fetch server totals when tab gains focus or a sale is recorded on this PC.
+  useEffect(() => {
+    const bump = () => setSalesRpcTick((n) => n + 1)
+    const onFocus = () => bump()
+    window.addEventListener('focus', onFocus)
+    const unsub = subscribeSalesData(bump)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      unsub()
+    }
+  }, [])
 
   const branchLabel = useMemo(() => {
     if (forcedBranchId || branchOwner) return user?.branchName ?? 'My Branch'
@@ -906,57 +945,53 @@ function BranchOpsDashboard() {
     return expenses.filter((e) => !e.branchId || e.branchId === scopeBranchId)
   }, [expenses, scopeBranchId])
 
+  const moneyReady = Boolean(
+    scopeBranchId ? rpcSummary : orgSales,
+  )
+
   const metrics = useMemo(() => {
     const rangeSales = scopedSales.filter((s) => inDateRange(saleDateKey(s), rangeFrom, rangeTo))
     const todaySales = scopedSales.filter((s) => saleDateKey(s) === todayKey)
-    const useRpc = Boolean(scopeBranchId && rpcSummary)
-    const periodSalesTotal = useRpc
-      ? rpcSummary!.rangeSales
-      : rangeSales.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
-    const dailySales = useRpc
-      ? rpcSummary!.todaySales
-      : todaySales.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
-
-    // Month-to-date through selected range end (matches dashboard_branch_sales_summary RPC).
-    let monthKey = rangeTo.slice(0, 7)
-    let monthStart = `${monthKey}-01`
-    let monthSalesLines = scopedSales.filter((s) => {
+    const monthKey = rangeTo.slice(0, 7)
+    const monthStart = `${monthKey}-01`
+    const monthSalesLines = scopedSales.filter((s) => {
       const d = saleDateKey(s)
       return d >= monthStart && d <= rangeTo
     })
-    let monthlySales = useRpc
-      ? rpcSummary!.monthSales
-      : monthSalesLines.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
-    let monthlyLabel = useRpc
-      ? rpcSummary!.monthLabel ||
-        new Date(`${monthKey}-01T12:00:00`).toLocaleDateString('en-US', {
+    const monthlyLabel = rpcSummary?.monthLabel
+      || new Date(`${monthKey}-01T12:00:00`).toLocaleDateString('en-US', {
           month: 'long',
           year: 'numeric',
         })
-      : new Date(`${monthKey}-01T12:00:00`).toLocaleDateString('en-US', {
-          month: 'long',
-          year: 'numeric',
-        })
-    // If that month is empty but branch has older data, fall back to latest month with sales.
-    if (!useRpc && monthlySales === 0 && scopedSales.length) {
-      const latestMonth = scopedSales.reduce((latest, s) => {
-        const m = saleDateKey(s).slice(0, 7)
-        return m > latest ? m : latest
-      }, '')
-      if (latestMonth && latestMonth !== monthKey) {
-        monthKey = latestMonth
-        monthStart = `${latestMonth}-01`
-        const monthEndCap = rangeTo.startsWith(latestMonth) ? rangeTo : `${latestMonth}-31`
-        monthSalesLines = scopedSales.filter((s) => {
-          const d = saleDateKey(s)
-          return d >= monthStart && d <= monthEndCap
-        })
-        monthlySales = monthSalesLines.reduce((n, s) => n + clinicRecognizedAmount(s), 0)
-        monthlyLabel = new Date(`${latestMonth}-01T12:00:00`).toLocaleDateString('en-US', {
-          month: 'long',
-          year: 'numeric',
-        })
-      }
+
+    // Money + count cards from Supabase only when RPC is ready (never invent from local cache).
+    let periodSalesTotal = 0
+    let dailySales = 0
+    let monthlySales = 0
+    let actualSales = 0
+    let completedBookings = 0
+    let patientsInRange = 0
+    let paymentsCount = 0
+    let doctorFees = 0
+
+    if (scopeBranchId && rpcSummary) {
+      periodSalesTotal = rpcSummary.rangeSales
+      dailySales = rpcSummary.todaySales
+      monthlySales = rpcSummary.monthSales
+      actualSales = rpcSummary.rangeGross
+      completedBookings = rpcSummary.bookings
+      patientsInRange = rpcSummary.patients
+      paymentsCount = rpcSummary.rangeCount
+      doctorFees = rpcSummary.doctorFees
+    } else if (!scopeBranchId && orgSales) {
+      periodSalesTotal = orgSales.branches.reduce((n, b) => n + b.clinicNet, 0)
+      dailySales = orgSales.branches.reduce((n, b) => n + b.todayClinicNet, 0)
+      monthlySales = orgSales.branches.reduce((n, b) => n + b.monthClinicNet, 0)
+      actualSales = orgSales.branches.reduce((n, b) => n + b.gross, 0)
+      paymentsCount = orgSales.branches.reduce((n, b) => n + b.saleCount, 0)
+      completedBookings = orgSales.branches.reduce((n, b) => n + b.bookingCount, 0)
+      patientsInRange = orgSales.branches.reduce((n, b) => n + b.patientCount, 0)
+      doctorFees = orgSales.branches.reduce((n, b) => n + b.doctorFees, 0)
     }
 
     const rangeExpenseTotal = scopedExpenses
@@ -966,50 +1001,22 @@ function BranchOpsDashboard() {
       .filter((e) => e.expenseDate === todayKey && e.status === 'active')
       .reduce((n, e) => n + (e.amount || 0), 0)
 
-    const bookingRows = getBookingRows({ branchId: scopeBranchId })
-    const periodBookingRows = bookingRows.filter((r) =>
-      inDateRange(manilaDateKey(new Date(r.dateIso)), rangeFrom, rangeTo),
-    )
-    const completedBookings = useRpc
-      ? rpcSummary!.bookings
-      : periodBookingRows.filter(
-          (r) => r.status === 'Paid' || r.status === 'paid' || r.status === 'completed',
-        ).length
-    const rangeAppts = scopedAppts.filter((a) =>
-      inDateRange(toDateKey(new Date(a.startAt)), rangeFrom, rangeTo),
-    )
-    const patientIds = new Set<string>()
-    for (const a of rangeAppts) {
-      if (a.clientId) patientIds.add(a.clientId)
-    }
-    for (const s of rangeSales) {
-      if (s.clientId) patientIds.add(s.clientId)
-    }
-    const patientsInRange = useRpc
-      ? rpcSummary!.patients
-      : patientIds.size || rangeAppts.length
     const isSingleDay = rangeFrom === rangeTo
     const includesToday = inDateRange(todayKey, rangeFrom, rangeTo)
-    const paymentsCount = useRpc
-      ? rpcSummary!.rangeCount
-      : rangeSales.length || rangeAppts.length
-
-    /** Gross customer-paid sales in range — no doctor fee deducted. */
-    const actualSales = rangeSales.reduce((n, s) => n + saleGrossAmount(s), 0)
+    // Breakdown rows still use cached lines for detail lists; card total uses doctorFees from server.
     const doctorSummary = summarizeDoctorCommissionsByDoctor(rangeSales)
 
     return {
-      completedBookings: completedBookings || periodBookingRows.length,
+      completedBookings,
       todayPatients: patientsInRange,
-      totalAppointments: Math.max(rangeAppts.length, periodBookingRows.length, useRpc ? rpcSummary!.bookings : 0),
+      totalAppointments: completedBookings,
       todayPaymentsCount: paymentsCount,
       paymentSummary: periodSalesTotal,
-      /** Always calendar-today sales for this branch/scope */
       todaySales: dailySales,
       dailySales: includesToday ? dailySales : periodSalesTotal,
       periodSales: periodSalesTotal,
       actualSales,
-      medicalProcedureCommission: doctorSummary.totalFee,
+      medicalProcedureCommission: doctorFees,
       doctorCommissionRows: doctorSummary.byDoctor,
       monthlySales,
       monthlyLabel,
@@ -1022,6 +1029,7 @@ function BranchOpsDashboard() {
       isSingleDay,
       includesToday,
       daySpan: daysInclusive(rangeFrom, rangeTo),
+      moneyReady: Boolean(scopeBranchId ? rpcSummary : orgSales),
     }
   }, [
     scopedSales,
@@ -1032,46 +1040,28 @@ function BranchOpsDashboard() {
     rangeFrom,
     rangeTo,
     rpcSummary,
+    orgSales,
   ])
 
-  /** Per-clinic breakdown for HQ All Branches view — respects selected date range. */
+  /** Per-clinic breakdown for HQ All Branches — Supabase org RPC only. */
   const salesByBranch = useMemo(() => {
-    const clinicBranches = branches.filter(
-      (b) => b.branchType !== 'warehouse' && b.status === 'active',
-    )
-    const rows = clinicBranches.map((b) => {
-      const branchSales = sales.filter((s) => s.branchId === b.id)
-      const periodSales = branchSales
-        .filter((s) => inDateRange(saleDateKey(s), rangeFrom, rangeTo))
-        .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
-      const daySales = branchSales
-        .filter((s) => saleDateKey(s) === todayKey)
-        .reduce((n, s) => n + clinicRecognizedAmount(s), 0)
-      const bookingCount = getBookingRows({ branchId: b.id }).filter((r) =>
-        inDateRange(manilaDateKey(new Date(r.dateIso)), rangeFrom, rangeTo),
-      ).length
-      const apptCount = appointments.filter(
-        (a) =>
-          a.branchId === b.id && inDateRange(toDateKey(new Date(a.startAt)), rangeFrom, rangeTo),
-      ).length
-      const clientCount = clients.filter((c) => c.preferredBranchId === b.id).length
-      return {
-        id: b.id,
-        name: b.name,
-        periodSales,
-        dailySales: daySales,
-        bookings: Math.max(apptCount, bookingCount),
-        clients: clientCount,
-      }
-    })
+    const rows = (orgSales?.branches ?? []).map((b) => ({
+      id: b.branchId,
+      name: b.branchName,
+      periodSales: b.clinicNet,
+      dailySales: b.todayClinicNet,
+      bookings: b.bookingCount,
+      clients: b.patientCount,
+    }))
     const maxPeriod = Math.max(1, ...rows.map((r) => r.periodSales))
     return {
       periodLabel: formatRangeLabel(rangeFrom, rangeTo),
       rows: rows
         .map((r) => ({ ...r, barPct: Math.round((r.periodSales / maxPeriod) * 100) }))
         .sort((a, b) => b.periodSales - a.periodSales || a.name.localeCompare(b.name)),
+      ready: Boolean(orgSales),
     }
-  }, [branches, sales, appointments, clients, rangeFrom, rangeTo, todayKey])
+  }, [orgSales, rangeFrom, rangeTo])
 
   function applyDateRange(nextFrom = fromDraft, nextTo = toDraft) {
     let from = nextFrom || rangeFrom
@@ -1139,18 +1129,8 @@ function BranchOpsDashboard() {
     if (showCompanyCashOnHand) {
       const beginning = readCompanyCashBeginning(companyCashScopes, priorCashDay)
       const manualDeducted = readCompanyManualCashDeducted(companyCashScopes, cashDay)
-      const memoryCash = cashCollectedFromSales(
-        sales.filter((s) => {
-          const branchId = s.branchId
-          return (
-            cashBusinessDateKeyForInstant(s.createdAt) === cashDay &&
-            branchId != null &&
-            companySet.has(branchId)
-          )
-        }),
-      )
-      const cashIn =
-        companyCashCollectedRpc != null ? companyCashCollectedRpc : memoryCash
+      const cashReady = companyCashCollectedRpc != null
+      const cashIn = cashReady ? companyCashCollectedRpc : 0
       const expenseCashOut = expenses
         .filter((e) => {
           if (e.expenseDate !== cashDay || e.status !== 'active' || !e.deductCash) return false
@@ -1175,17 +1155,15 @@ function BranchOpsDashboard() {
         cashDay,
         priorCashDay,
         companyCombined: true as const,
+        cashReady,
+        cashIn,
       }
     }
 
     const beginning = readCashBeginning(cashScope, cashDay)
     const manualDeducted = readManualCashDeducted(cashScope, cashDay)
-    const daySalesLines = scopedSales.filter(
-      (s) => cashBusinessDateKeyForInstant(s.createdAt) === cashDay,
-    )
-    const memoryCash = cashCollectedFromSales(daySalesLines)
-    const cashIn =
-      scopeBranchId && cashCollectedRpc != null ? cashCollectedRpc : memoryCash
+    const cashReady = cashCollectedRpc != null
+    const cashIn = cashReady ? cashCollectedRpc : 0
     const expenseCashOut = scopedExpenses
       .filter(
         (e) => e.expenseDate === cashDay && e.status === 'active' && e.deductCash,
@@ -1204,18 +1182,17 @@ function BranchOpsDashboard() {
       cashDay,
       priorCashDay,
       companyCombined: false as const,
+      cashReady,
+      cashIn,
     }
   }, [
     cashScope,
     todayKey,
-    scopedSales,
     scopedExpenses,
     cashTick,
-    scopeBranchId,
     cashCollectedRpc,
     showCompanyCashOnHand,
     companyCashScopes,
-    sales,
     expenses,
     companyCashCollectedRpc,
   ])
@@ -1289,15 +1266,7 @@ function BranchOpsDashboard() {
             companyCashScopes.map(async (branchId) => {
               const beginning = readCashBeginning(branchId, cashDay)
               const manualDeducted = readManualCashDeducted(branchId, cashDay)
-              const branchCash =
-                companyCashByBranch[branchId] ??
-                cashCollectedFromSales(
-                  sales.filter(
-                    (s) =>
-                      cashBusinessDateKeyForInstant(s.createdAt) === cashDay &&
-                      s.branchId === branchId,
-                  ),
-                )
+              const branchCash = companyCashByBranch[branchId] ?? 0
               const expenseCashOut = expenses
                 .filter(
                   (e) =>
@@ -1411,17 +1380,16 @@ function BranchOpsDashboard() {
 
   const rangeLabel = formatRangeLabel(rangeFrom, rangeTo)
   const clinicNetHint =
-    'Clinic-recognized (doctor’s procedure = clinic net). Differs from Actual Sales (gross).'
+    'Clinic net from Supabase (doctor’s procedure = clinic net). Not the same as Actual Sales (gross) or Cash on Hand.'
   const actualSalesHint = metrics.isSingleDay
-    ? `Gross paid for ${rangeLabel} — full customer total, no doctor fee deducted.`
-    : `Gross paid across ${metrics.daySpan} days (${rangeLabel}) — full customer total, no doctor fee deducted.`
-  const monthlySalesHint = `Clinic net month-to-date through ${rangeTo} · ${metrics.monthlyLabel}. Same total as server summary when online.`
+    ? `Gross paid for ${rangeLabel} from Supabase — full customer total, no doctor fee deducted.`
+    : `Gross paid across ${metrics.daySpan} days (${rangeLabel}) from Supabase — full customer total, no doctor fee deducted.`
+  const monthlySalesHint = `Clinic net month-to-date through ${rangeTo} · ${metrics.monthlyLabel} (server).`
   const medicalProcedureHint = metrics.isSingleDay
-    ? `Doctor commissions for medical procedures on ${rangeLabel}.`
-    : `Doctor commissions for medical procedures in ${rangeLabel}.`
-  const patientsHint = metrics.isSingleDay
-    ? "Clients scheduled for today's services."
-    : 'Unique clients with bookings or sales in the selected range.'
+    ? `Doctor fees for medical procedures on ${rangeLabel}.`
+    : `Doctor fees for medical procedures in ${rangeLabel}.`
+  const moneyDisplay = (n: number) =>
+    moneyReady ? formatPesoExact(n) : '—'
 
   return (
     <div className="-mx-1 space-y-6 sm:mx-0">
@@ -1435,6 +1403,25 @@ function BranchOpsDashboard() {
         view={doctorBreakdown}
         onClose={() => setDoctorBreakdown(null)}
       />
+
+      {salesRpcError ? (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          <p className="font-semibold">Could not load sales from server</p>
+          <p className="mt-1 text-rose-800/90">{salesRpcError}</p>
+          <button
+            type="button"
+            className="mt-2 text-xs font-bold uppercase tracking-wide text-rose-950 underline"
+            onClick={() => setSalesRpcTick((n) => n + 1)}
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {!salesRpcError && !moneyReady ? (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          Loading sales totals from Supabase…
+        </div>
+      ) : null}
 
       <Dialog
         open={deductOpen}
@@ -1659,38 +1646,47 @@ function BranchOpsDashboard() {
       {/* Metrics row 1 */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          title={branchOwner ? 'Completed Bookings' : 'Total Appointments'}
-          value={Number(
-            branchOwner ? metrics.completedBookings : metrics.totalAppointments,
-          ).toLocaleString()}
-          hint={`In selected range · ${rangeLabel}`}
+          title={branchOwner ? 'Completed Bookings' : 'Total Bookings'}
+          value={moneyReady ? Number(metrics.completedBookings).toLocaleString() : '—'}
+          hint={`Distinct sale bookings in ${rangeLabel} (from live system).`}
           tag="Bookings"
           tagTone="amber"
           icon={<CalendarCheck2 className="h-4 w-4" />}
         />
         <StatCard
           title={branchOwner ? (metrics.isSingleDay ? "Today's Patients" : 'Patients') : 'Payments'}
-          value={String(branchOwner ? metrics.todayPatients : metrics.todayPaymentsCount)}
-          hint={branchOwner ? patientsHint : `Payment rows in ${rangeLabel}.`}
+          value={
+            moneyReady
+              ? String(branchOwner ? metrics.todayPatients : metrics.todayPaymentsCount)
+              : '—'
+          }
+          hint={
+            branchOwner
+              ? `Clients with a sale in ${rangeLabel} (from live system).`
+              : `Sale tickets in ${rangeLabel} (from live system).`
+          }
           tag={metrics.isSingleDay ? 'Today' : 'Range'}
           tagTone="sky"
           icon={branchOwner ? <Users className="h-4 w-4" /> : <CreditCard className="h-4 w-4" />}
         />
         <StatCard
           title="Payment Summary"
-          value={formatPesoExact(metrics.paymentSummary)}
+          value={moneyDisplay(metrics.paymentSummary)}
           hint={`Clinic net in ${rangeLabel}. ${clinicNetHint}`}
           tag="Clinic net"
           tagTone="amber"
           icon={<Wallet className="h-4 w-4" />}
-          onClick={() =>
-            openSalesBreakdown(
-              'Payment Summary',
-              `Clinic-recognized payments in ${rangeLabel}`,
-              metrics.rangeSalesLines,
-              'clinic',
-              metrics.paymentSummary,
-            )
+          onClick={
+            moneyReady
+              ? () =>
+                  openSalesBreakdown(
+                    'Payment Summary',
+                    `Clinic-recognized payments in ${rangeLabel}`,
+                    metrics.rangeSalesLines,
+                    'clinic',
+                    metrics.paymentSummary,
+                  )
+              : undefined
           }
           action={
             <Link
@@ -1704,18 +1700,21 @@ function BranchOpsDashboard() {
         />
         <StatCard
           title="Medical Procedure"
-          value={formatPesoExact(metrics.medicalProcedureCommission)}
-          hint={medicalProcedureHint}
+          value={moneyDisplay(metrics.medicalProcedureCommission)}
+          hint={`${medicalProcedureHint} From live system.`}
           tag="Doctors"
           tagTone="amber"
           icon={<Stethoscope className="h-4 w-4" />}
-          onClick={() =>
-            openDoctorFeeBreakdown(
-              'Medical Procedure',
-              medicalProcedureHint,
-              metrics.doctorCommissionRows,
-              metrics.medicalProcedureCommission,
-            )
+          onClick={
+            moneyReady
+              ? () =>
+                  openDoctorFeeBreakdown(
+                    'Medical Procedure',
+                    medicalProcedureHint,
+                    metrics.doctorCommissionRows,
+                    metrics.medicalProcedureCommission,
+                  )
+              : undefined
           }
         />
       </div>
@@ -1724,53 +1723,62 @@ function BranchOpsDashboard() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Today's Sales"
-          value={formatPesoExact(metrics.todaySales)}
+          value={moneyDisplay(metrics.todaySales)}
           hint={`Clinic net for today (${formatRangeLabel(todayKey, todayKey)}). ${clinicNetHint}`}
           tag="Clinic net"
           tagTone="amber"
           icon={<TrendingUp className="h-4 w-4" />}
-          onClick={() =>
-            openSalesBreakdown(
-              "Today's Sales",
-              `Clinic-recognized sales for ${formatRangeLabel(todayKey, todayKey)}`,
-              metrics.todaySalesLines,
-              'clinic',
-              metrics.todaySales,
-            )
+          onClick={
+            moneyReady
+              ? () =>
+                  openSalesBreakdown(
+                    "Today's Sales",
+                    `Clinic-recognized sales for ${formatRangeLabel(todayKey, todayKey)}`,
+                    metrics.todaySalesLines,
+                    'clinic',
+                    metrics.todaySales,
+                  )
+              : undefined
           }
         />
         <StatCard
           title="Monthly Sales"
-          value={formatPesoExact(metrics.monthlySales)}
+          value={moneyDisplay(metrics.monthlySales)}
           hint={monthlySalesHint}
           tag="Clinic net"
           tagTone="amber"
           icon={<Receipt className="h-4 w-4" />}
-          onClick={() =>
-            openSalesBreakdown(
-              'Monthly Sales',
-              monthlySalesHint,
-              metrics.monthSalesLines,
-              'clinic',
-              metrics.monthlySales,
-            )
+          onClick={
+            moneyReady
+              ? () =>
+                  openSalesBreakdown(
+                    'Monthly Sales',
+                    monthlySalesHint,
+                    metrics.monthSalesLines,
+                    'clinic',
+                    metrics.monthlySales,
+                  )
+              : undefined
           }
         />
         <StatCard
           title="Actual Sales"
-          value={formatPesoExact(metrics.actualSales)}
+          value={moneyDisplay(metrics.actualSales)}
           hint={actualSalesHint}
           tag="Gross paid"
           tagTone="emerald"
           icon={<Receipt className="h-4 w-4" />}
-          onClick={() =>
-            openSalesBreakdown(
-              'Actual Sales',
-              actualSalesHint,
-              metrics.rangeSalesLines,
-              'gross',
-              metrics.actualSales,
-            )
+          onClick={
+            moneyReady
+              ? () =>
+                  openSalesBreakdown(
+                    'Actual Sales',
+                    actualSalesHint,
+                    metrics.rangeSalesLines,
+                    'gross',
+                    metrics.actualSales,
+                  )
+              : undefined
           }
         />
         <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
@@ -1796,7 +1804,7 @@ function BranchOpsDashboard() {
                 Ending
               </p>
               <p className="mt-1.5 font-metric text-lg font-semibold text-emerald-950">
-                {formatPesoExact(cash.ending)}
+                {cash.cashReady ? formatPesoExact(cash.ending) : '—'}
               </p>
             </div>
           </div>
@@ -1806,9 +1814,10 @@ function BranchOpsDashboard() {
             </p>
           ) : null}
           <p className="mt-2 text-[11px] text-slate-500">
-            Beginning = prior day&apos;s confirmed Ending (rolls over at{' '}
-            {CASH_DAY_CUTOVER_HOUR_MANILA}:00 AM Manila). Ending = beginning + today&apos;s sales −
-            cash out.
+            Cash tenders only · 8am–8am Manila. Beginning = prior day&apos;s confirmed Ending (rolls
+            over at {CASH_DAY_CUTOVER_HOUR_MANILA}:00 AM). Ending = beginning + cash in
+            {cash.cashReady ? ` (${formatPesoExact(cash.cashIn)})` : ' (loading…)'} − cash out.
+            Not the same as Actual Sales.
             {cash.expenseCashOut > 0
               ? ` Expenses (${formatPesoExact(cash.expenseCashOut)})`
               : ''}
@@ -1857,17 +1866,23 @@ function BranchOpsDashboard() {
             <div>
               <h3 className="text-lg font-semibold tracking-tight text-slate-900">Sales by Branch</h3>
               <p className="mt-0.5 text-sm text-slate-500">
-                All clinics wired in — San Mateo, Cainta, Pasig, Lipa, and franchises.
+                Clinic net from Supabase — San Mateo, Cainta, Pasig, Lipa, and franchises.
               </p>
             </div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#C5A059]">
-              {salesByBranch.periodLabel} · All Branches
+              {salesByBranch.periodLabel} · Clinic net
             </p>
           </div>
           <div className="mt-5 space-y-3.5">
-            {salesByBranch.rows.length === 0 ? (
+            {!salesByBranch.ready ? (
               <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-8 text-center text-sm text-slate-500">
-                No branch sales loaded yet.
+                {salesRpcError
+                  ? 'Could not load branch sales from server.'
+                  : 'Loading branch sales from Supabase…'}
+              </p>
+            ) : salesByBranch.rows.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-8 text-center text-sm text-slate-500">
+                No branch sales in this range.
               </p>
             ) : (
               salesByBranch.rows.map((row) => (
@@ -1875,7 +1890,8 @@ function BranchOpsDashboard() {
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-slate-900">{row.name}</p>
                     <p className="text-[11px] text-slate-500">
-                      {row.bookings.toLocaleString()} bookings · {row.clients.toLocaleString()} clients
+                      {row.bookings.toLocaleString()} bookings ·{' '}
+                      {row.clients.toLocaleString()} clients
                     </p>
                   </div>
                   <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
