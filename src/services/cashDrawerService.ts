@@ -77,8 +77,8 @@ export function cashBusinessDayBounds(businessDay: string): { fromIso: string; t
 }
 
 /**
- * Beginning cash for a business day = confirmed Ending of the prior business day.
- * Missing confirm → ₱0 (e.g. after depositing all cash to the owner).
+ * Beginning cash from the last **Confirm Cash** on the prior business day (local cache).
+ * Dashboard till math uses Supabase `branch_cash_on_hand_state` (auto-carry unclosed days).
  */
 export function readCashBeginning(scope: string, businessDay: string): number {
   return readConfirmedCash(scope, cashPriorBusinessDateKey(businessDay)) ?? 0

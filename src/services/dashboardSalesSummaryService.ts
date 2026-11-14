@@ -291,3 +291,148 @@ export async function fetchBranchDoctorFeesCashDay(input: {
   const n = Number(data)
   return Number.isFinite(n) ? n : 0
 }
+
+export type BranchCashOnHandState = {
+  ok: boolean
+  error?: string
+  branchId: string
+  cashDay: string
+  priorCashDay: string
+  beginning: number
+  beginningSource: 'confirmed_anchor' | 'computed_carry' | string
+  lastConfirmedDate: string | null
+  unclosedDays: number
+  carriedBalance: number
+  cashIn: number
+  expenseCashOut: number
+  doctorFeesCashDay: number
+  manualDeducted: number
+  ending: number
+  priorDayComputedCash: number
+}
+
+export type OrgCashOnHandState = {
+  ok: boolean
+  error?: string
+  cashDay: string
+  beginning: number
+  ending: number
+  carriedBalance: number
+  cashIn: number
+  expenseCashOut: number
+  doctorFeesCashDay: number
+  manualDeducted: number
+  unclosedDays: number
+  branches: BranchCashOnHandState[]
+}
+
+function mapBranchCashOnHandState(raw: Record<string, unknown>): BranchCashOnHandState {
+  return {
+    ok: raw.ok !== false,
+    error: typeof raw.error === 'string' ? raw.error : undefined,
+    branchId: String(raw.branch_id ?? ''),
+    cashDay: String(raw.cash_day ?? '').slice(0, 10),
+    priorCashDay: String(raw.prior_cash_day ?? '').slice(0, 10),
+    beginning: num(raw.beginning),
+    beginningSource: String(raw.beginning_source ?? 'computed_carry'),
+    lastConfirmedDate: raw.last_confirmed_date
+      ? String(raw.last_confirmed_date).slice(0, 10)
+      : null,
+    unclosedDays: num(raw.unclosed_days),
+    carriedBalance: num(raw.carried_balance ?? raw.beginning),
+    cashIn: num(raw.cash_in),
+    expenseCashOut: num(raw.expense_cash_out),
+    doctorFeesCashDay: num(raw.doctor_fees_cash_day),
+    manualDeducted: num(raw.manual_deducted),
+    ending: num(raw.ending),
+    priorDayComputedCash: num(raw.prior_day_computed_cash),
+  }
+}
+
+export async function fetchBranchCashOnHandState(input: {
+  branchId: string
+  cashDay: string
+}): Promise<BranchCashOnHandState | null> {
+  if (!isSupabaseConfigured || !supabase || !input.branchId || !input.cashDay) return null
+
+  const coolKey = `cash-state:${input.branchId}`
+  const cool = cooldownUntil.get(coolKey) ?? 0
+  if (cool > Date.now()) return null
+
+  const { data, error } = await supabase.rpc('branch_cash_on_hand_state', {
+    p_branch_id: input.branchId,
+    p_cash_day: input.cashDay,
+  })
+
+  if (error) {
+    const msg = error.message || ''
+    if (/429|rate limit|too many/i.test(msg) || (error as { status?: number }).status === 429) {
+      cooldownUntil.set(coolKey, Date.now() + 60_000)
+      console.warn('[dashboard] cash on hand state rate-limited')
+      return null
+    }
+    if (/could not find|does not exist|PGRST202/i.test(msg)) {
+      console.warn(
+        '[dashboard] branch_cash_on_hand_state missing — apply migration 20261115000114',
+      )
+      return null
+    }
+    console.error('[dashboard] cash on hand state rpc failed', msg)
+    return null
+  }
+  if (!data || typeof data !== 'object') return null
+  const mapped = mapBranchCashOnHandState(data as Record<string, unknown>)
+  if (!mapped.ok) {
+    console.warn('[dashboard] cash on hand state denied', mapped.error)
+    return null
+  }
+  return mapped
+}
+
+export async function fetchOrgCashOnHandState(input: {
+  cashDay: string
+}): Promise<OrgCashOnHandState | null> {
+  if (!isSupabaseConfigured || !supabase || !input.cashDay) return null
+
+  const coolKey = 'cash-state:org'
+  const cool = cooldownUntil.get(coolKey) ?? 0
+  if (cool > Date.now()) return null
+
+  const { data, error } = await supabase.rpc('org_cash_on_hand_state', {
+    p_cash_day: input.cashDay,
+  })
+
+  if (error) {
+    const msg = error.message || ''
+    if (/429|rate limit|too many/i.test(msg) || (error as { status?: number }).status === 429) {
+      cooldownUntil.set(coolKey, Date.now() + 60_000)
+      return null
+    }
+    if (/could not find|does not exist|PGRST202/i.test(msg)) {
+      console.warn('[dashboard] org_cash_on_hand_state missing — apply migration 20261115000114')
+      return null
+    }
+    console.error('[dashboard] org cash on hand state failed', msg)
+    return null
+  }
+  if (!data || typeof data !== 'object') return null
+  const raw = data as Record<string, unknown>
+  if (raw.ok === false) return null
+  const branchesRaw = Array.isArray(raw.branches) ? raw.branches : []
+  const branches = branchesRaw.map((row) =>
+    mapBranchCashOnHandState((row && typeof row === 'object' ? row : {}) as Record<string, unknown>),
+  )
+  return {
+    ok: true,
+    cashDay: String(raw.cash_day ?? input.cashDay).slice(0, 10),
+    beginning: num(raw.beginning),
+    ending: num(raw.ending),
+    carriedBalance: num(raw.carried_balance ?? raw.beginning),
+    cashIn: num(raw.cash_in),
+    expenseCashOut: num(raw.expense_cash_out),
+    doctorFeesCashDay: num(raw.doctor_fees_cash_day),
+    manualDeducted: num(raw.manual_deducted),
+    unclosedDays: num(raw.unclosed_days),
+    branches,
+  }
+}

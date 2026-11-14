@@ -37,9 +37,7 @@ import {
   migrateLocalCashDrawerToSupabase,
   preloadCashDrawer,
   readCashBeginning,
-  readCompanyCashBeginning,
   readCompanyConfirmedToday,
-  readCompanyManualCashDeducted,
   readConfirmedCash,
   readManualCashDeducted,
   recoverCompanyCashOnHand,
@@ -50,10 +48,14 @@ import {
 import { getExpenses, subscribeExpenses } from '@/services/expenseService'
 import {
   fetchBranchCashCollected,
+  fetchBranchCashOnHandState,
   fetchBranchDoctorFeesCashDay,
   fetchBranchDashboardSalesSummary,
+  fetchOrgCashOnHandState,
   fetchOrgDashboardSalesByBranch,
+  type BranchCashOnHandState,
   type BranchDashboardSalesSummary,
+  type OrgCashOnHandState,
   type OrgDashboardSalesByBranch,
 } from '@/services/dashboardSalesSummaryService'
 import { manilaDateKey } from '@/services/attendanceService'
@@ -738,15 +740,9 @@ function BranchOpsDashboard() {
   const [orgSales, setOrgSales] = useState<OrgDashboardSalesByBranch | null>(null)
   const [salesRpcError, setSalesRpcError] = useState<string | null>(null)
   const [salesRpcTick, setSalesRpcTick] = useState(0)
-  /** Cash on Hand: cash tenders only (RPC), per clinic and company combined. */
-  const [cashCollectedRpc, setCashCollectedRpc] = useState<number | null>(null)
-  const [doctorFeesCashRpc, setDoctorFeesCashRpc] = useState<number | null>(null)
-  const [companyCashCollectedRpc, setCompanyCashCollectedRpc] = useState<number | null>(null)
-  const [companyDoctorFeesCashRpc, setCompanyDoctorFeesCashRpc] = useState<number | null>(null)
-  const [companyCashByBranch, setCompanyCashByBranch] = useState<Record<string, number>>({})
-  const [companyDoctorFeesByBranch, setCompanyDoctorFeesByBranch] = useState<
-    Record<string, number>
-  >({})
+  /** Cash on Hand till state (carryforward + today) from Supabase RPC. */
+  const [branchCashState, setBranchCashState] = useState<BranchCashOnHandState | null>(null)
+  const [orgCashState, setOrgCashState] = useState<OrgCashOnHandState | null>(null)
 
   useEffect(() => {
     const refreshSales = () => setSales(getSales())
@@ -841,7 +837,10 @@ function BranchOpsDashboard() {
 
   // Re-fetch server totals when tab gains focus or a sale is recorded on this PC.
   useEffect(() => {
-    const bump = () => setSalesRpcTick((n) => n + 1)
+    const bump = () => {
+      setSalesRpcTick((n) => n + 1)
+      setCashTick((n) => n + 1)
+    }
     const onFocus = () => bump()
     window.addEventListener('focus', onFocus)
     const unsub = subscribeSalesData(bump)
@@ -888,74 +887,86 @@ function BranchOpsDashboard() {
   const now = useMemo(() => new Date(), [todayKey])
 
   useEffect(() => {
-    if (!showCompanyCashOnHand) {
-      setCompanyCashCollectedRpc(null)
-      setCompanyCashByBranch({})
-      setCompanyDoctorFeesCashRpc(null)
-      setCompanyDoctorFeesByBranch({})
-      return
-    }
     let cancelled = false
     const cashDay = cashBusinessDateKey()
-    void Promise.all(
-      COMPANY_OWNED_BRANCH_IDS.map(async (branchId) => {
-        const [cash, doctorFees] = await Promise.all([
-          fetchBranchCashCollected({ branchId, cashDay }),
-          fetchBranchDoctorFeesCashDay({ branchId, cashDay }),
-        ])
-        return [branchId, cash, doctorFees] as const
-      }),
-    ).then((rows) => {
-      if (cancelled) return
-      const byBranch: Record<string, number> = {}
-      const doctorByBranch: Record<string, number> = {}
-      let total = 0
-      let doctorTotal = 0
-      let anyCashRpc = false
-      let anyDoctorRpc = false
-      for (const [id, amount, doctorFees] of rows) {
-        if (amount != null) {
-          anyCashRpc = true
-          byBranch[id] = amount
-          total += amount
-        }
-        if (doctorFees != null) {
-          anyDoctorRpc = true
-          doctorByBranch[id] = doctorFees
-          doctorTotal += doctorFees
-        }
-      }
-      setCompanyCashByBranch(byBranch)
-      setCompanyCashCollectedRpc(anyCashRpc ? total : null)
-      setCompanyDoctorFeesByBranch(doctorByBranch)
-      setCompanyDoctorFeesCashRpc(anyDoctorRpc ? doctorTotal : 0)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [showCompanyCashOnHand, todayKey, cashTick])
+    const priorCashDay = cashPriorBusinessDateKey(cashDay)
 
-  useEffect(() => {
-    if (!scopeBranchId || showCompanyCashOnHand) {
-      setCashCollectedRpc(null)
-      setDoctorFeesCashRpc(null)
+    async function legacyBranchState(branchId: string): Promise<BranchCashOnHandState | null> {
+      const [cashIn, doctorFees] = await Promise.all([
+        fetchBranchCashCollected({ branchId, cashDay }),
+        fetchBranchDoctorFeesCashDay({ branchId, cashDay }),
+      ])
+      if (cashIn == null) return null
+      const beginning = readCashBeginning(branchId, cashDay)
+      const manualDeducted = readManualCashDeducted(branchId, cashDay)
+      const expenseCashOut = expenses
+        .filter(
+          (e) =>
+            e.expenseDate === cashDay &&
+            e.status === 'active' &&
+            e.deductCash &&
+            e.branchId === branchId,
+        )
+        .reduce((n, e) => n + (e.amount || 0), 0)
+      const doctorFeesCashDay = doctorFees ?? 0
+      const ending = beginning + cashIn - expenseCashOut - manualDeducted - doctorFeesCashDay
+      return {
+        ok: true,
+        branchId,
+        cashDay,
+        priorCashDay,
+        beginning,
+        beginningSource: 'legacy_client',
+        lastConfirmedDate: null,
+        unclosedDays: 0,
+        carriedBalance: beginning,
+        cashIn,
+        expenseCashOut,
+        doctorFeesCashDay,
+        manualDeducted,
+        ending,
+        priorDayComputedCash: 0,
+      }
+    }
+
+    if (showCompanyCashOnHand) {
+      setBranchCashState(null)
+      void fetchOrgCashOnHandState({ cashDay }).then((org) => {
+        if (cancelled) return
+        setOrgCashState(org)
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+
+    setOrgCashState(null)
+    if (!scopeBranchId) {
+      setBranchCashState(null)
       return
     }
-    let cancelled = false
-    const cashDay = cashBusinessDateKey()
-    void Promise.all([
-      fetchBranchCashCollected({ branchId: scopeBranchId, cashDay }),
-      fetchBranchDoctorFeesCashDay({ branchId: scopeBranchId, cashDay }),
-    ]).then(([amount, doctorFees]) => {
-      if (!cancelled) {
-        setCashCollectedRpc(amount)
-        setDoctorFeesCashRpc(doctorFees ?? 0)
+
+    void (async () => {
+      const state = await fetchBranchCashOnHandState({ branchId: scopeBranchId, cashDay })
+      if (cancelled) return
+      if (state) {
+        setBranchCashState(state)
+        return
       }
-    })
+      const legacy = await legacyBranchState(scopeBranchId)
+      if (!cancelled) setBranchCashState(legacy)
+    })()
+
     return () => {
       cancelled = true
     }
-  }, [scopeBranchId, showCompanyCashOnHand, todayKey, cashTick])
+  }, [
+    showCompanyCashOnHand,
+    scopeBranchId,
+    todayKey,
+    cashTick,
+    expenses,
+  ])
 
   const scopedSales = useMemo(
     () => (scopeBranchId ? sales.filter((s) => s.branchId === scopeBranchId) : sales),
@@ -1150,32 +1161,34 @@ function BranchOpsDashboard() {
 
   const cash = useMemo(() => {
     void cashTick
-    // Business day (8:00 AM Manila cutover) — Ending today becomes Beginning tomorrow at 8 AM.
     const cashDay = cashBusinessDateKey()
     const priorCashDay = cashPriorBusinessDateKey(cashDay)
-    const companySet = new Set<string>(companyCashScopes)
 
-    if (showCompanyCashOnHand) {
-      const beginning = readCompanyCashBeginning(companyCashScopes, priorCashDay)
-      const manualDeducted = readCompanyManualCashDeducted(companyCashScopes, cashDay)
-      const cashReady = companyCashCollectedRpc != null
-      const cashIn = cashReady ? companyCashCollectedRpc : 0
-      const expenseCashOut = expenses
-        .filter((e) => {
-          if (e.expenseDate !== cashDay || e.status !== 'active' || !e.deductCash) return false
-          const branchId = e.branchId
-          return branchId != null && companySet.has(branchId)
-        })
-        .reduce((n, e) => n + (e.amount || 0), 0)
-      const doctorFeesCashDay =
-        companyDoctorFeesCashRpc != null ? companyDoctorFeesCashRpc : 0
+    if (showCompanyCashOnHand && orgCashState) {
+      const {
+        beginning,
+        ending,
+        cashIn,
+        expenseCashOut,
+        doctorFeesCashDay,
+        manualDeducted,
+        unclosedDays,
+        carriedBalance,
+      } = orgCashState
+      const priorDayComputedCash = orgCashState.branches.reduce(
+        (n, b) => n + b.priorDayComputedCash,
+        0,
+      )
       const deducted = expenseCashOut + manualDeducted + doctorFeesCashDay
-      const ending = beginning + cashIn - deducted
       const confirmedToday = readCompanyConfirmedToday(
         companyCashScopes,
         cashDay,
         ending,
       )
+      const branchEndings: Record<string, number> = {}
+      for (const row of orgCashState.branches) {
+        if (row.branchId) branchEndings[row.branchId] = row.ending
+      }
       return {
         beginning,
         ending,
@@ -1187,50 +1200,74 @@ function BranchOpsDashboard() {
         cashDay,
         priorCashDay,
         companyCombined: true as const,
-        cashReady,
+        cashReady: true,
         cashIn,
+        unclosedDays,
+        carriedBalance,
+        priorDayComputedCash,
+        branchEndings,
       }
     }
 
-    const beginning = readCashBeginning(cashScope, cashDay)
-    const manualDeducted = readManualCashDeducted(cashScope, cashDay)
-    const cashReady = cashCollectedRpc != null
-    const cashIn = cashReady ? cashCollectedRpc : 0
-    const expenseCashOut = scopedExpenses
-      .filter(
-        (e) => e.expenseDate === cashDay && e.status === 'active' && e.deductCash,
-      )
-      .reduce((n, e) => n + (e.amount || 0), 0)
-    const doctorFeesCashDay = doctorFeesCashRpc != null ? doctorFeesCashRpc : 0
-    const deducted = expenseCashOut + manualDeducted + doctorFeesCashDay
-    const ending = beginning + cashIn - deducted
-    const confirmedToday = readConfirmedCash(cashScope, cashDay)
+    if (branchCashState && !showCompanyCashOnHand) {
+      const {
+        beginning,
+        ending,
+        cashIn,
+        expenseCashOut,
+        doctorFeesCashDay,
+        manualDeducted,
+        unclosedDays,
+        carriedBalance,
+        priorDayComputedCash,
+      } = branchCashState
+      const deducted = expenseCashOut + manualDeducted + doctorFeesCashDay
+      const confirmedToday = readConfirmedCash(cashScope, cashDay)
+      return {
+        beginning,
+        ending,
+        deducted,
+        expenseCashOut,
+        manualDeducted,
+        doctorFeesCashDay,
+        confirmedToday,
+        cashDay,
+        priorCashDay,
+        companyCombined: false as const,
+        cashReady: true,
+        cashIn,
+        unclosedDays,
+        carriedBalance,
+        priorDayComputedCash,
+        branchEndings: {} as Record<string, number>,
+      }
+    }
+
     return {
-      beginning,
-      ending,
-      deducted,
-      expenseCashOut,
-      manualDeducted,
-      doctorFeesCashDay,
-      confirmedToday,
+      beginning: 0,
+      ending: 0,
+      deducted: 0,
+      expenseCashOut: 0,
+      manualDeducted: 0,
+      doctorFeesCashDay: 0,
+      confirmedToday: null as number | null,
       cashDay,
       priorCashDay,
-      companyCombined: false as const,
-      cashReady,
-      cashIn,
+      companyCombined: showCompanyCashOnHand,
+      cashReady: false,
+      cashIn: 0,
+      unclosedDays: 0,
+      carriedBalance: 0,
+      priorDayComputedCash: 0,
+      branchEndings: {} as Record<string, number>,
     }
   }, [
     cashScope,
-    todayKey,
-    scopedExpenses,
     cashTick,
-    cashCollectedRpc,
-    doctorFeesCashRpc,
     showCompanyCashOnHand,
     companyCashScopes,
-    expenses,
-    companyCashCollectedRpc,
-    companyDoctorFeesCashRpc,
+    orgCashState,
+    branchCashState,
   ])
 
   const customerBirthdays = useMemo(() => {
@@ -1300,21 +1337,10 @@ function BranchOpsDashboard() {
         if (clinicsHaveCarry) {
           await Promise.all(
             companyCashScopes.map(async (branchId) => {
-              const beginning = readCashBeginning(branchId, cashDay)
-              const manualDeducted = readManualCashDeducted(branchId, cashDay)
-              const branchCash = companyCashByBranch[branchId] ?? 0
-              const branchDoctorFees = companyDoctorFeesByBranch[branchId] ?? 0
-              const expenseCashOut = expenses
-                .filter(
-                  (e) =>
-                    e.expenseDate === cashDay &&
-                    e.status === 'active' &&
-                    e.deductCash &&
-                    e.branchId === branchId,
-                )
-                .reduce((n, e) => n + (e.amount || 0), 0)
               const ending =
-                beginning + branchCash - expenseCashOut - manualDeducted - branchDoctorFees
+                cash.branchEndings[branchId] ??
+                orgCashState?.branches.find((b) => b.branchId === branchId)?.ending ??
+                0
               await writeConfirmedCash(branchId, cashDay, ending)
             }),
           )
@@ -1834,8 +1860,14 @@ function BranchOpsDashboard() {
                 Beginning
               </p>
               <p className="mt-1.5 font-metric text-lg font-semibold text-slate-900">
-                {formatPesoExact(cash.beginning)}
+                {cash.cashReady ? formatPesoExact(cash.beginning) : '—'}
               </p>
+              {cash.cashReady && cash.unclosedDays > 0 ? (
+                <p className="mt-1 text-[10px] font-medium text-amber-800">
+                  Includes {cash.unclosedDays} unclosed day
+                  {cash.unclosedDays === 1 ? '' : 's'} — confirm when you remit.
+                </p>
+              ) : null}
             </div>
             <div className="rounded-xl bg-emerald-50 px-3.5 py-3 ring-1 ring-emerald-100">
               <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-800/70">
@@ -1852,10 +1884,18 @@ function BranchOpsDashboard() {
             </p>
           ) : null}
           <p className="mt-2 text-[11px] text-slate-500">
-            Cash tenders only · 8am–8am Manila. Beginning = prior day&apos;s confirmed Ending (rolls
-            over at {CASH_DAY_CUTOVER_HOUR_MANILA}:00 AM). Ending = beginning + cash in
-            {cash.cashReady ? ` (${formatPesoExact(cash.cashIn)})` : ' (loading…)'} − cash out.
-            Not the same as Actual Sales.
+            Cash tenders only · 8am–8am Manila. Unclosed days auto-carry into Beginning until you
+            Confirm Cash (use ₱0 after remittance). Ending = carried
+            {cash.cashReady ? ` (${formatPesoExact(cash.carriedBalance)})` : ' (…)'}
+            {cash.cashReady && cash.cashIn > 0
+              ? ` + today cash in (${formatPesoExact(cash.cashIn)})`
+              : cash.cashReady
+                ? ' + today cash in (₱0.00)'
+                : ''}{' '}
+            − cash out. Not the same as Actual Sales.
+            {cash.cashReady && cash.priorDayComputedCash > 0
+              ? ` Prior day cash tenders: ${formatPesoExact(cash.priorDayComputedCash)}.`
+              : ''}
             {cash.expenseCashOut > 0
               ? ` Expenses (${formatPesoExact(cash.expenseCashOut)})`
               : ''}
