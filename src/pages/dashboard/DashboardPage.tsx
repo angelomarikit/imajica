@@ -48,6 +48,7 @@ import {
   fetchBranchDoctorFeesCashDay,
   fetchBranchDashboardSalesSummary,
   fetchOrgCashOnHandState,
+  PASIG_CASH_ON_HAND_EPOCH,
   fetchOrgDashboardSalesByBranch,
   type BranchCashOnHandState,
   type BranchDashboardSalesSummary,
@@ -895,8 +896,12 @@ function BranchOpsDashboard() {
       ])
       if (cashIn == null) return null
       let carry = 0
-      const lookbackStart = shiftDateKey(cashDay, -14)
-      for (let d = lookbackStart; d <= priorCashDay; d = shiftDateKey(d, 1)) {
+      const loopStart =
+        branchId === BRANCH_IDS.pasig
+          ? PASIG_CASH_ON_HAND_EPOCH
+          : shiftDateKey(cashDay, -14)
+      if (priorCashDay >= loopStart) {
+        for (let d = loopStart; d <= priorCashDay; d = shiftDateKey(d, 1)) {
         const [dayCash, dayDoctor] = await Promise.all([
           d === priorCashDay && priorCashIn != null
             ? Promise.resolve(priorCashIn)
@@ -915,6 +920,7 @@ function BranchOpsDashboard() {
           .reduce((n, e) => n + (e.amount || 0), 0)
         const dayManual = readManualCashDeducted(branchId, d)
         carry += dayCash - dayExpense - (dayDoctor ?? 0) - dayManual
+        }
       }
       const beginning = Math.max(0, carry)
       const manualDeducted = readManualCashDeducted(branchId, cashDay)
@@ -948,6 +954,7 @@ function BranchOpsDashboard() {
         manualDeducted,
         ending,
         priorDayComputedCash: priorCashIn ?? 0,
+        cashOnHandEpoch: branchId === BRANCH_IDS.pasig ? PASIG_CASH_ON_HAND_EPOCH : null,
       }
     }
 
@@ -1227,6 +1234,7 @@ function BranchOpsDashboard() {
         unclosedDays,
         carriedBalance,
         priorDayComputedCash,
+        cashOnHandEpoch: null as string | null,
         branchEndings,
       }
     }
@@ -1259,6 +1267,7 @@ function BranchOpsDashboard() {
         unclosedDays,
         carriedBalance,
         priorDayComputedCash,
+        cashOnHandEpoch: branchCashState.cashOnHandEpoch,
         branchEndings: {} as Record<string, number>,
       }
     }
@@ -1278,6 +1287,7 @@ function BranchOpsDashboard() {
       unclosedDays: 0,
       carriedBalance: 0,
       priorDayComputedCash: 0,
+      cashOnHandEpoch: null as string | null,
       branchEndings: {} as Record<string, number>,
     }
   }, [
@@ -1869,6 +1879,9 @@ function BranchOpsDashboard() {
             − cash out. Not the same as Actual Sales.
             {cash.cashReady && cash.priorDayComputedCash > 0
               ? ` Prior day cash tenders: ${formatPesoExact(cash.priorDayComputedCash)}.`
+              : ''}
+            {cash.cashOnHandEpoch
+              ? ` Carry for this clinic starts ${cash.cashOnHandEpoch} (earlier days excluded).`
               : ''}
             {cash.expenseCashOut > 0
               ? ` Expenses (${formatPesoExact(cash.expenseCashOut)})`

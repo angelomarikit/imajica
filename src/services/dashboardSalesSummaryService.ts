@@ -309,7 +309,11 @@ export type BranchCashOnHandState = {
   manualDeducted: number
   ending: number
   priorDayComputedCash: number
+  cashOnHandEpoch: string | null
 }
+
+/** Pasig rollout: prior cash before this date is excluded from till carry (client fallback). */
+export const PASIG_CASH_ON_HAND_EPOCH = '2026-11-13'
 
 export type OrgCashOnHandState = {
   ok: boolean
@@ -346,6 +350,9 @@ function mapBranchCashOnHandState(raw: Record<string, unknown>): BranchCashOnHan
     manualDeducted: num(raw.manual_deducted),
     ending: num(raw.ending),
     priorDayComputedCash: num(raw.prior_day_computed_cash),
+    cashOnHandEpoch: raw.cash_on_hand_epoch
+      ? String(raw.cash_on_hand_epoch).slice(0, 10)
+      : null,
   }
 }
 
