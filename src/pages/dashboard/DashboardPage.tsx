@@ -41,7 +41,7 @@ import {
   subscribeCashDrawer,
   writeManualCashDeducted,
 } from '@/services/cashDrawerService'
-import { getExpenses, subscribeExpenses } from '@/services/expenseService'
+import { getExpenses, preloadExpensesFromSupabase, subscribeExpenses } from '@/services/expenseService'
 import {
   fetchBranchCashCollected,
   fetchBranchCashOnHandState,
@@ -744,7 +744,10 @@ function BranchOpsDashboard() {
   useEffect(() => {
     const refreshSales = () => setSales(getSales())
     const refreshClients = () => setClients(getClients())
-    const refreshExpenses = () => setExpenses(getExpenses())
+    const refreshExpenses = () => {
+      setExpenses(getExpenses())
+      setCashTick((n) => n + 1)
+    }
     const refreshAppts = () => {
       void listAppointments().then(setAppointments)
     }
@@ -753,9 +756,11 @@ function BranchOpsDashboard() {
       scopeBranchId ? { branchId: scopeBranchId } : undefined,
     ).then(refreshSales)
     void preloadClientsFromSupabase().then(refreshClients)
+    void preloadExpensesFromSupabase(
+      scopeBranchId ? { branchId: scopeBranchId } : undefined,
+    ).then(() => refreshExpenses())
     refreshSales()
     refreshClients()
-    refreshExpenses()
     refreshAppts()
     const unsubs = [
       subscribeSalesData(refreshSales),
@@ -1860,12 +1865,6 @@ function BranchOpsDashboard() {
               <p className="mt-1.5 font-metric text-lg font-semibold text-slate-900">
                 {cash.cashReady ? formatPesoExact(cash.beginning) : '—'}
               </p>
-              {cash.cashReady && cash.unclosedDays > 0 ? (
-                <p className="mt-1 text-[10px] font-medium text-amber-800">
-                  Includes {cash.unclosedDays} unclosed day
-                  {cash.unclosedDays === 1 ? '' : 's'} — use Deduct Cash when you remit to owner/bank.
-                </p>
-              ) : null}
             </div>
             <div className="rounded-xl bg-emerald-50 px-3.5 py-3 ring-1 ring-emerald-100">
               <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-800/70">
@@ -1878,45 +1877,9 @@ function BranchOpsDashboard() {
           </div>
           {cash.companyCombined ? (
             <p className="mt-2 text-[11px] font-medium text-[#073D2C]">
-              This is the cash on hand on these 4 branches: San Mateo, Pasig, Cainta, and Lipa.
+              Combined drawer: San Mateo, Pasig, Cainta, and Lipa.
             </p>
           ) : null}
-          <p className="mt-2 text-[11px] text-slate-500">
-            Cash tenders only · 8am–8am Manila. Prior days auto-carry into Beginning (no shift close).
-            Use Deduct Cash when cash leaves the drawer. Ending = carried
-            {cash.cashReady ? ` (${formatPesoExact(cash.carriedBalance)})` : ' (…)'}
-            {cash.cashReady && cash.cashIn > 0
-              ? ` + today cash in (${formatPesoExact(cash.cashIn)})`
-              : cash.cashReady
-                ? ' + today cash in (₱0.00)'
-                : ''}{' '}
-            − cash out. Not the same as Actual Sales.
-            {cash.cashReady && cash.priorDayComputedCash > 0 ? (
-              <>
-                {' '}Prior day ({cash.priorCashDay}) cash: {formatPesoExact(cash.priorDayComputedCash)}
-                {cash.priorDayDoctorFees > 0
-                  ? ` − doctor payout ${formatPesoExact(cash.priorDayDoctorFees)}`
-                  : ''}
-                {cash.priorDayExpenseCashOut > 0
-                  ? ` − expenses ${formatPesoExact(cash.priorDayExpenseCashOut)}`
-                  : ''}
-                .
-              </>
-            ) : null}
-            {cash.cashOnHandEpoch
-              ? ` Carry from ${cash.cashOnHandEpoch} (Nov 1–12 ignored).`
-              : ''}
-            {cash.expenseCashOut > 0
-              ? ` Expenses (${formatPesoExact(cash.expenseCashOut)})`
-              : ''}
-            {cash.manualDeducted > 0
-              ? ` − manual deductions (${formatPesoExact(cash.manualDeducted)})`
-              : ''}
-            {cash.doctorFeesCashDay > 0
-              ? ` − doctor procedure payouts (${formatPesoExact(cash.doctorFeesCashDay)})`
-              : ''}
-            .
-          </p>
           <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
             {(branchOwner || hqView) ? (
               <Button type="button" variant="gold" className="rounded-xl" onClick={openDeductCash}>

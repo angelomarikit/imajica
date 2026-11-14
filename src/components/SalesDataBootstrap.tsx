@@ -4,6 +4,7 @@ import { preloadCatalogFromSupabase } from '@/services/catalogService'
 import { preloadCatalogPriceOverrides } from '@/services/catalogPriceOverrideService'
 import { preloadCatalogProductsFromSupabase } from '@/services/productCatalogService'
 import { refreshRemoteSalesAfterAuth } from '@/services/salesService'
+import { preloadExpensesFromSupabase } from '@/services/expenseService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { isBranchScopedStaff } from '@/utils/franchiseAccess'
 
@@ -30,7 +31,10 @@ export function SalesDataBootstrap() {
         if (!data.session || cancelled) return
       }
       const branchId = isBranchScopedStaff(user) ? user.branchId : undefined
-      await refreshRemoteSalesAfterAuth(branchId)
+      await Promise.all([
+        refreshRemoteSalesAfterAuth(branchId),
+        preloadExpensesFromSupabase(branchId ? { branchId } : undefined),
+      ])
     })()
     return () => {
       cancelled = true

@@ -20,9 +20,13 @@ import {
   createExpense,
   deleteExpense,
   getExpenses,
+  getExpensesPreloadError,
+  preloadExpensesFromSupabase,
   saveExpense,
   subscribeExpenses,
 } from '@/services/expenseService'
+import { isSupabaseConfigured } from '@/lib/supabase'
+import { isBranchScopedStaff } from '@/utils/franchiseAccess'
 import type { ExpenseScope, OperationalExpense } from '@/types'
 import { formatPeso, formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -61,6 +65,8 @@ export function ExpensesPage() {
   const forcedBranchId = useForcedBranchId()
   const effectiveBranchId = useEffectiveBranchId()
   const [expenses, setExpenses] = useState(() => getExpenses())
+  const [expensesLoading, setExpensesLoading] = useState(isSupabaseConfigured)
+  const [expensesLoadError, setExpensesLoadError] = useState<string | null>(null)
   const [tab, setTab] = useState<TabId>(franchiseOwner ? 'branch' : 'all')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
@@ -80,7 +86,33 @@ export function ExpensesPage() {
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [status, setStatus] = useState<'active' | 'inactive'>('active')
 
-  useEffect(() => subscribeExpenses(() => setExpenses(getExpenses())), [])
+  const preloadBranchId =
+    forcedBranchId ||
+    (effectiveBranchId !== 'all' ? effectiveBranchId : undefined) ||
+    (isBranchScopedStaff(user) ? user?.branchId : undefined)
+
+  const loadExpenses = () => {
+    if (!isSupabaseConfigured) {
+      setExpenses(getExpenses())
+      setExpensesLoading(false)
+      return Promise.resolve()
+    }
+    setExpensesLoading(true)
+    setExpensesLoadError(null)
+    return preloadExpensesFromSupabase(
+      preloadBranchId ? { branchId: preloadBranchId } : undefined,
+    )
+      .then(() => {
+        setExpenses(getExpenses())
+        setExpensesLoadError(getExpensesPreloadError())
+      })
+      .finally(() => setExpensesLoading(false))
+  }
+
+  useEffect(() => {
+    void loadExpenses()
+    return subscribeExpenses(() => setExpenses(getExpenses()))
+  }, [preloadBranchId])
 
   const resolveBranch = () => {
     const branchId =
@@ -148,7 +180,7 @@ export function ExpensesPage() {
     setDrawerOpen(true)
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!name.trim()) {
       toast.error('Expense name is required')
       return
@@ -166,51 +198,55 @@ export function ExpensesPage() {
       return
     }
 
-    if (editing) {
-      saveExpense({
-        ...editing,
-        name: name.trim(),
-        category,
-        department: department.trim() || undefined,
-        amount: amt,
-        scope: resolvedScope,
-        deductCash,
-        expenseDate,
-        status,
-        branchId:
-          resolvedScope === 'branch'
-            ? branchId ?? editing.branchId
-            : undefined,
-        branchName:
-          resolvedScope === 'branch'
-            ? branchName ?? editing.branchName
-            : undefined,
-      })
-      toast.success(
-        deductCash
-          ? `Expense updated — cash drawer deducted ${formatPesoExact(amt)}`
-          : 'Expense updated (cash not deducted)',
-      )
-    } else {
-      createExpense({
-        name,
-        category,
-        department,
-        amount: amt,
-        scope: resolvedScope,
-        deductCash,
-        expenseDate,
-        status,
-        branchId: resolvedScope === 'branch' ? branchId : undefined,
-        branchName: resolvedScope === 'branch' ? branchName : undefined,
-      })
-      toast.success(
-        deductCash
-          ? `Expense logged — cash drawer deducted ${formatPesoExact(amt)}`
-          : 'Expense logged (cash not deducted)',
-      )
+    try {
+      if (editing) {
+        await saveExpense({
+          ...editing,
+          name: name.trim(),
+          category,
+          department: department.trim() || undefined,
+          amount: amt,
+          scope: resolvedScope,
+          deductCash,
+          expenseDate,
+          status,
+          branchId:
+            resolvedScope === 'branch'
+              ? branchId ?? editing.branchId
+              : undefined,
+          branchName:
+            resolvedScope === 'branch'
+              ? branchName ?? editing.branchName
+              : undefined,
+        })
+        toast.success(
+          deductCash
+            ? `Expense updated — cash drawer deducted ${formatPesoExact(amt)}`
+            : 'Expense updated (cash not deducted)',
+        )
+      } else {
+        await createExpense({
+          name,
+          category,
+          department,
+          amount: amt,
+          scope: resolvedScope,
+          deductCash,
+          expenseDate,
+          status,
+          branchId: resolvedScope === 'branch' ? branchId : undefined,
+          branchName: resolvedScope === 'branch' ? branchName : undefined,
+        })
+        toast.success(
+          deductCash
+            ? `Expense logged — cash drawer deducted ${formatPesoExact(amt)}`
+            : 'Expense logged (cash not deducted)',
+        )
+      }
+      setDrawerOpen(false)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save expense')
     }
-    setDrawerOpen(false)
   }
 
   function exportCsv() {
@@ -285,6 +321,15 @@ export function ExpensesPage() {
           </button>
         ))}
       </div>
+
+      {expensesLoadError ? (
+        <Card className="flex flex-wrap items-center justify-between gap-3 border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <span>Could not load expenses from Supabase: {expensesLoadError}</span>
+          <Button variant="secondary" size="sm" onClick={() => void loadExpenses()}>
+            Retry
+          </Button>
+        </Card>
+      ) : null}
 
       <Card className="p-4 sm:p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
@@ -402,10 +447,12 @@ export function ExpensesPage() {
                         type="button"
                         aria-label="Delete"
                         onClick={() => {
-                          if (confirm(`Delete expense “${e.name}”?`)) {
-                            deleteExpense(e.id)
-                            toast.message('Expense removed')
-                          }
+                          if (!confirm(`Delete expense “${e.name}”?`)) return
+                          void deleteExpense(e.id)
+                            .then(() => toast.message('Expense removed'))
+                            .catch((err) =>
+                              toast.error(err instanceof Error ? err.message : 'Delete failed'),
+                            )
                         }}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-red-100 text-red-700"
                       >
@@ -418,7 +465,7 @@ export function ExpensesPage() {
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="px-2 py-10 text-center text-slate-ui">
-                    No expenses found.
+                    {expensesLoading ? 'Loading expenses…' : 'No expenses found.'}
                   </td>
                 </tr>
               ) : null}
