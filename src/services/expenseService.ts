@@ -237,36 +237,40 @@ export async function saveExpense(expense: OperationalExpense): Promise<Operatio
   const { data: userData } = await supabase.auth.getUser()
   const userId = userData.user?.id ?? null
 
+  const expenseSelect =
+    'id, name, category, department, amount, expense_type, deduct_cash, status, scope, expense_date, branch_id, notes, created_at'
+
   if (isUuid(normalized.id)) {
-    const { data, error } = await supabase
+    const { data: updated, error: updateError } = await supabase
       .from('operational_expenses')
       .update({
         ...expenseToDbPayload(normalized),
         updated_at: new Date().toISOString(),
       })
       .eq('id', normalized.id)
-      .select(
-        'id, name, category, department, amount, expense_type, deduct_cash, status, scope, expense_date, branch_id, notes, created_at',
-      )
-      .single()
+      .select(expenseSelect)
+      .maybeSingle()
 
-    if (error) throw new Error(error.message)
-    const mapped = mapDbRow(data as DbExpenseRow)
-    remoteReady = true
-    upsertCache(mapped)
-    writeLocalMirror(cache)
-    emit()
-    return mapped
+    if (updateError) throw new Error(updateError.message)
+    if (updated) {
+      const mapped = mapDbRow(updated as DbExpenseRow)
+      remoteReady = true
+      upsertCache(mapped)
+      writeLocalMirror(cache)
+      emit()
+      return mapped
+    }
+  }
+
+  const insertBody = {
+    ...expenseToDbPayload(normalized, userId),
+    ...(isUuid(normalized.id) ? { id: normalized.id } : {}),
   }
 
   const { data, error } = await supabase
     .from('operational_expenses')
-    .insert({
-      ...expenseToDbPayload(normalized, userId),
-    })
-    .select(
-      'id, name, category, department, amount, expense_type, deduct_cash, status, scope, expense_date, branch_id, notes, created_at',
-    )
+    .insert(insertBody)
+    .select(expenseSelect)
     .single()
 
   if (error) throw new Error(error.message)
