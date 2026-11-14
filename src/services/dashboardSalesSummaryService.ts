@@ -318,7 +318,12 @@ export type BranchCashOnHandState = {
 /** Company clinics rolling out Cash on Hand from this business date (ignore earlier cash). */
 export const CASH_ON_HAND_ROLLOUT_EPOCH = '2026-11-13'
 
-const BRANCHES_WITH_CASH_EPOCH = new Set<string>([BRANCH_IDS.pasig, BRANCH_IDS.cainta])
+const BRANCHES_WITH_CASH_EPOCH = new Set<string>([
+  BRANCH_IDS.sanMateo,
+  BRANCH_IDS.cainta,
+  BRANCH_IDS.pasig,
+  BRANCH_IDS.lipa,
+])
 
 /** @deprecated use cashOnHandEpochForBranch */
 export const PASIG_CASH_ON_HAND_EPOCH = CASH_ON_HAND_ROLLOUT_EPOCH
