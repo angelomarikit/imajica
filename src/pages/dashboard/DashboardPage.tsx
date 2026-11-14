@@ -30,19 +30,15 @@ import {
 import { getClients, preloadClientsFromSupabase, subscribeClients } from '@/services/clientService'
 import { BRANCH_IDS, COMPANY_OWNED_BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import {
-  CASH_DAY_CUTOVER_HOUR_MANILA,
   HQ_CASH_SCOPE,
   cashBusinessDateKey,
   cashPriorBusinessDateKey,
   migrateLocalCashDrawerToSupabase,
   preloadCashDrawer,
-  readCashBeginning,
-  readCompanyConfirmedToday,
   readConfirmedCash,
   readManualCashDeducted,
   recoverCompanyCashOnHand,
   subscribeCashDrawer,
-  writeConfirmedCash,
   writeManualCashDeducted,
 } from '@/services/cashDrawerService'
 import { getExpenses, subscribeExpenses } from '@/services/expenseService'
@@ -892,12 +888,35 @@ function BranchOpsDashboard() {
     const priorCashDay = cashPriorBusinessDateKey(cashDay)
 
     async function legacyBranchState(branchId: string): Promise<BranchCashOnHandState | null> {
-      const [cashIn, doctorFees] = await Promise.all([
+      const [cashIn, doctorFees, priorCashIn] = await Promise.all([
         fetchBranchCashCollected({ branchId, cashDay }),
         fetchBranchDoctorFeesCashDay({ branchId, cashDay }),
+        fetchBranchCashCollected({ branchId, cashDay: priorCashDay }),
       ])
       if (cashIn == null) return null
-      const beginning = readCashBeginning(branchId, cashDay)
+      let carry = 0
+      const lookbackStart = shiftDateKey(cashDay, -14)
+      for (let d = lookbackStart; d <= priorCashDay; d = shiftDateKey(d, 1)) {
+        const [dayCash, dayDoctor] = await Promise.all([
+          d === priorCashDay && priorCashIn != null
+            ? Promise.resolve(priorCashIn)
+            : fetchBranchCashCollected({ branchId, cashDay: d }),
+          fetchBranchDoctorFeesCashDay({ branchId, cashDay: d }),
+        ])
+        if (dayCash == null) continue
+        const dayExpense = expenses
+          .filter(
+            (e) =>
+              e.expenseDate === d &&
+              e.status === 'active' &&
+              e.deductCash &&
+              e.branchId === branchId,
+          )
+          .reduce((n, e) => n + (e.amount || 0), 0)
+        const dayManual = readManualCashDeducted(branchId, d)
+        carry += dayCash - dayExpense - (dayDoctor ?? 0) - dayManual
+      }
+      const beginning = Math.max(0, carry)
       const manualDeducted = readManualCashDeducted(branchId, cashDay)
       const expenseCashOut = expenses
         .filter(
@@ -909,7 +928,10 @@ function BranchOpsDashboard() {
         )
         .reduce((n, e) => n + (e.amount || 0), 0)
       const doctorFeesCashDay = doctorFees ?? 0
-      const ending = beginning + cashIn - expenseCashOut - manualDeducted - doctorFeesCashDay
+      const ending = Math.max(
+        0,
+        beginning + cashIn - expenseCashOut - manualDeducted - doctorFeesCashDay,
+      )
       return {
         ok: true,
         branchId,
@@ -918,15 +940,21 @@ function BranchOpsDashboard() {
         beginning,
         beginningSource: 'legacy_client',
         lastConfirmedDate: null,
-        unclosedDays: 0,
+        unclosedDays: (priorCashIn ?? 0) > 0 ? 1 : 0,
         carriedBalance: beginning,
         cashIn,
         expenseCashOut,
         doctorFeesCashDay,
         manualDeducted,
         ending,
-        priorDayComputedCash: 0,
+        priorDayComputedCash: priorCashIn ?? 0,
       }
+    }
+
+    function shiftDateKey(dateKey: string, deltaDays: number) {
+      const [y, m, d] = dateKey.split('-').map(Number)
+      const utc = new Date(Date.UTC(y, m - 1, d + deltaDays))
+      return `${utc.getUTCFullYear()}-${String(utc.getUTCMonth() + 1).padStart(2, '0')}-${String(utc.getUTCDate()).padStart(2, '0')}`
     }
 
     if (showCompanyCashOnHand) {
@@ -1180,11 +1208,6 @@ function BranchOpsDashboard() {
         0,
       )
       const deducted = expenseCashOut + manualDeducted + doctorFeesCashDay
-      const confirmedToday = readCompanyConfirmedToday(
-        companyCashScopes,
-        cashDay,
-        ending,
-      )
       const branchEndings: Record<string, number> = {}
       for (const row of orgCashState.branches) {
         if (row.branchId) branchEndings[row.branchId] = row.ending
@@ -1196,7 +1219,6 @@ function BranchOpsDashboard() {
         expenseCashOut,
         manualDeducted,
         doctorFeesCashDay,
-        confirmedToday,
         cashDay,
         priorCashDay,
         companyCombined: true as const,
@@ -1222,7 +1244,6 @@ function BranchOpsDashboard() {
         priorDayComputedCash,
       } = branchCashState
       const deducted = expenseCashOut + manualDeducted + doctorFeesCashDay
-      const confirmedToday = readConfirmedCash(cashScope, cashDay)
       return {
         beginning,
         ending,
@@ -1230,7 +1251,6 @@ function BranchOpsDashboard() {
         expenseCashOut,
         manualDeducted,
         doctorFeesCashDay,
-        confirmedToday,
         cashDay,
         priorCashDay,
         companyCombined: false as const,
@@ -1250,7 +1270,6 @@ function BranchOpsDashboard() {
       expenseCashOut: 0,
       manualDeducted: 0,
       doctorFeesCashDay: 0,
-      confirmedToday: null as number | null,
       cashDay,
       priorCashDay,
       companyCombined: showCompanyCashOnHand,
@@ -1322,50 +1341,6 @@ function BranchOpsDashboard() {
     return { today: todayList, upcoming: upcoming.slice(0, 12) }
   }, [scopeBranchId, now])
 
-  async function confirmCash() {
-    const cashDay = cash.cashDay
-    const priorCashDay = cash.priorCashDay
-
-    if (showCompanyCashOnHand) {
-      try {
-        // Always persist HQ combined row (source of truth across devices).
-        await writeConfirmedCash(HQ_CASH_SCOPE, cashDay, cash.ending)
-        const clinicsHaveCarry =
-          companyCashScopes.some((id) => readConfirmedCash(id, priorCashDay) != null)
-        // Only write per-clinic rows when those clinics already have drawer history —
-        // otherwise clinic zeros would override the combined `all` beginning tomorrow.
-        if (clinicsHaveCarry) {
-          await Promise.all(
-            companyCashScopes.map(async (branchId) => {
-              const ending =
-                cash.branchEndings[branchId] ??
-                orgCashState?.branches.find((b) => b.branchId === branchId)?.ending ??
-                0
-              await writeConfirmedCash(branchId, cashDay, ending)
-            }),
-          )
-        }
-        setCashTick((n) => n + 1)
-        toast.success('Cash on hand confirmed', {
-          description: `Ending ${formatPesoExact(cash.ending)} saved for ${cashDay}. Becomes Beginning after ${CASH_DAY_CUTOVER_HOUR_MANILA}:00 AM Manila.`,
-        })
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Could not save cash on hand')
-      }
-      return
-    }
-
-    try {
-      await writeConfirmedCash(cashScope, cashDay, cash.ending)
-      setCashTick((n) => n + 1)
-      toast.success('Cash on hand confirmed', {
-        description: `Ending ${formatPesoExact(cash.ending)} saved for ${cashDay}. Becomes Beginning after ${CASH_DAY_CUTOVER_HOUR_MANILA}:00 AM Manila.`,
-      })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save cash on hand')
-    }
-  }
-
   function openDeductCash() {
     setDeductAmount('')
     setDeductOpen(true)
@@ -1428,7 +1403,6 @@ function BranchOpsDashboard() {
       const scope = showCompanyCashOnHand ? HQ_CASH_SCOPE : cashScope
       const cashDay = cash.cashDay
       await writeManualCashDeducted(scope, cashDay, nextManual)
-      await writeConfirmedCash(scope, cashDay, cash.ending - amount)
       setCashTick((n) => n + 1)
       setDeductOpen(false)
       setDeductAmount('')
@@ -1865,7 +1839,7 @@ function BranchOpsDashboard() {
               {cash.cashReady && cash.unclosedDays > 0 ? (
                 <p className="mt-1 text-[10px] font-medium text-amber-800">
                   Includes {cash.unclosedDays} unclosed day
-                  {cash.unclosedDays === 1 ? '' : 's'} — confirm when you remit.
+                  {cash.unclosedDays === 1 ? '' : 's'} — use Deduct Cash when you remit to owner/bank.
                 </p>
               ) : null}
             </div>
@@ -1884,8 +1858,8 @@ function BranchOpsDashboard() {
             </p>
           ) : null}
           <p className="mt-2 text-[11px] text-slate-500">
-            Cash tenders only · 8am–8am Manila. Unclosed days auto-carry into Beginning until you
-            Confirm Cash (use ₱0 after remittance). Ending = carried
+            Cash tenders only · 8am–8am Manila. Prior days auto-carry into Beginning (no shift close).
+            Use Deduct Cash when cash leaves the drawer. Ending = carried
             {cash.cashReady ? ` (${formatPesoExact(cash.carriedBalance)})` : ' (…)'}
             {cash.cashReady && cash.cashIn > 0
               ? ` + today cash in (${formatPesoExact(cash.cashIn)})`
@@ -1905,17 +1879,11 @@ function BranchOpsDashboard() {
             {cash.doctorFeesCashDay > 0
               ? ` − doctor procedure payouts (${formatPesoExact(cash.doctorFeesCashDay)})`
               : ''}
-            {cash.confirmedToday != null
-              ? ' · confirmed for tonight’s carryover'
-              : ' · tap Confirm Cash at end of shift so Ending becomes tomorrow’s Beginning'}
             .
           </p>
           <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
-            <Button type="button" variant="gold" className="rounded-xl" onClick={() => void confirmCash()}>
-              Confirm Cash
-            </Button>
             {(branchOwner || hqView) ? (
-              <Button type="button" variant="secondary" className="rounded-xl" onClick={openDeductCash}>
+              <Button type="button" variant="gold" className="rounded-xl" onClick={openDeductCash}>
                 <Minus className="mr-1.5 h-3.5 w-3.5" />
                 Deduct Cash
               </Button>
