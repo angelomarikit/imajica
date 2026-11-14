@@ -1452,7 +1452,6 @@ function BranchOpsDashboard() {
   const actualSalesHint = metrics.isSingleDay
     ? `Gross paid for ${rangeLabel} from Supabase — full customer total, no doctor fee deducted.`
     : `Gross paid across ${metrics.daySpan} days (${rangeLabel}) from Supabase — full customer total, no doctor fee deducted.`
-  const totalExpensesHint = `Active expenses in ${rangeLabel} — same total as Operational Expenses (All tab, date range).`
   const medicalProcedureHint = metrics.isSingleDay
     ? `Doctor fees for medical procedures on ${rangeLabel}.`
     : `Doctor fees for medical procedures in ${rangeLabel}.`
@@ -1812,7 +1811,6 @@ function BranchOpsDashboard() {
         <StatCard
           title="Total Expenses"
           value={formatPesoExact(metrics.totalExpenses)}
-          hint={totalExpensesHint}
           tag={
             metrics.expenseCount
               ? `${metrics.expenseCount} expense${metrics.expenseCount === 1 ? '' : 's'}`
@@ -1820,15 +1818,6 @@ function BranchOpsDashboard() {
           }
           tagTone="rose"
           icon={<Minus className="h-4 w-4" />}
-          action={
-            <Link
-              to="/admin/expenses"
-              className="text-xs font-semibold text-emerald-800 hover:underline"
-              onClick={(e) => e.stopPropagation()}
-            >
-              View All
-            </Link>
-          }
         />
         <StatCard
           title="Actual Sales"
