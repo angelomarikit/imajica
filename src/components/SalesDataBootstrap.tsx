@@ -5,8 +5,9 @@ import { preloadCatalogPriceOverrides } from '@/services/catalogPriceOverrideSer
 import { preloadCatalogProductsFromSupabase } from '@/services/productCatalogService'
 import { refreshRemoteSalesAfterAuth } from '@/services/salesService'
 import { preloadExpensesFromSupabase } from '@/services/expenseService'
+import { preloadGeneratedForms } from '@/services/imajicaFormsService'
+import { isHqRole, isOperationsManagerRole, isBranchScopedStaff } from '@/utils/franchiseAccess'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
-import { isBranchScopedStaff } from '@/utils/franchiseAccess'
 
 /** Loads catalog overrides + product prices from Supabase + ops sales warm-cache after login. */
 export function SalesDataBootstrap() {
@@ -31,9 +32,17 @@ export function SalesDataBootstrap() {
         if (!data.session || cancelled) return
       }
       const branchId = isBranchScopedStaff(user) ? user.branchId : undefined
+      const orgWide = isHqRole(user.role) || isOperationsManagerRole(user.role)
       await Promise.all([
         refreshRemoteSalesAfterAuth(branchId),
         preloadExpensesFromSupabase(branchId ? { branchId } : undefined),
+        preloadGeneratedForms(
+          orgWide
+            ? { orgWide: true }
+            : branchId
+              ? { branchId, orgWide: false }
+              : { orgWide: false },
+        ),
       ])
     })()
     return () => {

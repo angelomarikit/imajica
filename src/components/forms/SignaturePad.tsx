@@ -29,10 +29,11 @@ export function SignaturePad({
     canvas.height = h * ratio
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.scale(ratio, ratio)
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
     ctx.lineWidth = 2
     ctx.lineCap = 'round'
     ctx.strokeStyle = '#073D2C'
-    ctx.clearRect(0, 0, w, h)
     if (value) {
       const img = new Image()
       img.onload = () => ctx.drawImage(img, 0, 0, w, h)
@@ -64,12 +65,27 @@ export function SignaturePad({
     ctx.stroke()
   }
 
+  function exportSignature() {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ratio = Math.min(1.5, window.devicePixelRatio || 1)
+    const w = canvas.clientWidth
+    const h = canvas.clientHeight
+    const out = document.createElement('canvas')
+    out.width = Math.max(1, Math.round(w * ratio))
+    out.height = Math.max(1, Math.round(h * ratio))
+    const ctx = out.getContext('2d')
+    if (!ctx) return
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, out.width, out.height)
+    ctx.drawImage(canvas, 0, 0, out.width, out.height)
+    onChange(out.toDataURL('image/jpeg', 0.72))
+  }
+
   function end() {
     if (!drawing.current) return
     drawing.current = false
-    const canvas = canvasRef.current
-    // JPEG is much smaller than PNG — critical for tablet localStorage limits
-    if (canvas) onChange(canvas.toDataURL('image/jpeg', 0.72))
+    exportSignature()
   }
 
   function clear() {

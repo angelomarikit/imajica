@@ -7,7 +7,9 @@ import {
   requireSupabaseSession,
   softRefreshSupabaseSession,
 } from '@/utils/supabaseSession'
+import { pdfSafeText } from '@/utils/pdfSafeText'
 import { isUuid } from '@/utils/uuid'
+import type { PDFPage, PDFFont } from 'pdf-lib'
 
 const LEGACY_STORAGE_KEY = 'imajica_generated_forms'
 const SIG_BUCKET = 'form-signatures'
@@ -22,6 +24,8 @@ export type GeneratedFormRecord = {
   templateId: string
   templateFile: string
   branch: string
+  /** Clinic UUID for Supabase filter (optional legacy rows). */
+  branchId?: string
   submittedAt: string
   fieldValues: Record<string, unknown>
   /** In-memory / hydrated data URL for PDF stamping */
@@ -35,6 +39,11 @@ const DEFAULT_HISTORY: GeneratedFormRecord[] = []
 
 /** Session-only mirror of DB rows (never written to localStorage). */
 let memoryCache: GeneratedFormRecord[] = []
+let preloadError: string | null = null
+
+export function getFormsPreloadError(): string | null {
+  return preloadError
+}
 
 function emit() {
   window.dispatchEvent(new Event(CHANGE_EVENT))
@@ -174,6 +183,7 @@ type RemoteFormRow = {
   form_type: string | null
   template_file: string | null
   branch_code: string | null
+  branch_id: string | null
   field_values: Record<string, unknown> | null
   submitted_at: string | null
   title: string | null
@@ -197,6 +207,7 @@ function mapRemoteRow(row: RemoteFormRow): GeneratedFormRecord {
     templateId: typeof __templateId === 'string' ? __templateId : '',
     templateFile: row.template_file || '',
     branch: row.branch_code || '',
+    branchId: row.branch_id ?? undefined,
     submittedAt: row.submitted_at || new Date().toISOString(),
     fieldValues: rest,
     // Prefer storage paths; keep legacy base64 only if still in jsonb
@@ -208,19 +219,9 @@ function mapRemoteRow(row: RemoteFormRow): GeneratedFormRecord {
 }
 
 export function getGeneratedForms(): GeneratedFormRecord[] {
-  const deleted = new Set<string>()
-  try {
-    const raw = localStorage.getItem(`${LEGACY_STORAGE_KEY}_deleted`)
-    if (raw) {
-      const parsed = JSON.parse(raw) as string[]
-      if (Array.isArray(parsed)) parsed.forEach((id) => deleted.add(id))
-    }
-  } catch {
-    /* ignore */
-  }
   const seedIds = new Set(DEFAULT_HISTORY.map((r) => r.id))
   const customs = memoryCache.filter((r) => !seedIds.has(r.id))
-  return [...customs, ...DEFAULT_HISTORY.filter((r) => !deleted.has(r.id))].sort((a, b) =>
+  return [...customs, ...DEFAULT_HISTORY].sort((a, b) =>
     b.submittedAt.localeCompare(a.submittedAt),
   )
 }
@@ -251,6 +252,20 @@ async function persistRemote(record: GeneratedFormRecord): Promise<void> {
       : Promise.resolve(record.otherSignaturePath || null),
   ])
 
+  if (record.clientSignature && !clientPath) {
+    throw new Error(
+      'Signature upload failed. Confirm the form-signatures storage bucket is enabled on Supabase (migration 20261024000095), then sign in again and retry.',
+    )
+  }
+  if (record.otherSignature && !otherPath) {
+    throw new Error(
+      'Secondary signature upload failed. Confirm the form-signatures storage bucket is enabled on Supabase, then retry.',
+    )
+  }
+
+  const { data: userData } = await supabase.auth.getUser()
+  const createdBy = userData.user?.id ?? null
+
   // Prefer storage paths; only embed tiny legacy sigs in jsonb as last resort
   const fieldValues: Record<string, unknown> = {
     ...record.fieldValues,
@@ -266,16 +281,18 @@ async function persistRemote(record: GeneratedFormRecord): Promise<void> {
   const { error } = await supabase.from('imajica_forms').upsert(
     {
       id,
-      title: `${record.formType} — ${record.clientName}`,
+      title: `${record.formType} - ${record.clientName}`,
       form_type: record.formType,
       client_name: record.clientName,
       template_file: record.templateFile,
       branch_code: record.branch,
+      branch_id: record.branchId ?? null,
       field_values: fieldValues,
       client_signature_path: clientPath,
       other_signature_path: otherPath,
       submitted_at: record.submittedAt,
       status: 'active',
+      created_by: createdBy,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'id' },
@@ -296,12 +313,15 @@ export type FormsPreloadOptions = {
    * When set with orgWide=false, preload only that clinic’s rows.
    */
   branch?: string | null
+  /** Preferred filter when header branch UUID is known. */
+  branchId?: string | null
   /** OM / HQ All Branches — larger org window, no clinic filter. */
   orgWide?: boolean
 }
 
 export async function preloadGeneratedForms(options?: FormsPreloadOptions): Promise<void> {
   clearLegacyBrowserStorage()
+  preloadError = null
 
   if (!isSupabaseConfigured || !supabase) {
     emit()
@@ -310,18 +330,22 @@ export async function preloadGeneratedForms(options?: FormsPreloadOptions): Prom
 
   const orgWide = Boolean(options?.orgWide)
   const branch = options?.branch?.trim() || ''
+  const branchId = options?.branchId?.trim() || ''
   const limit = orgWide ? 120 : 80
 
   let query = supabase
     .from('imajica_forms')
     .select(
-      'id, client_name, form_type, template_file, branch_code, field_values, submitted_at, title, client_signature_path, other_signature_path',
+      'id, client_name, form_type, template_file, branch_code, branch_id, field_values, submitted_at, title, client_signature_path, other_signature_path',
     )
+    .eq('status', 'active')
     .order('submitted_at', { ascending: false })
     .limit(limit)
 
   // Single-clinic sessions (company or franchise): do not let HQ volume starve history.
-  if (!orgWide && branch) {
+  if (!orgWide && branchId && isUuid(branchId)) {
+    query = query.eq('branch_id', branchId)
+  } else if (!orgWide && branch) {
     const token = branch.split(',')[0]?.trim() || branch
     // branch_code stores display name (e.g. "Bacoor, Cavite"); match city/token only
     // (avoid .or() with commas — PostgREST treats commas as separators).
@@ -331,6 +355,7 @@ export async function preloadGeneratedForms(options?: FormsPreloadOptions): Prom
   const { data, error } = await query
 
   if (error) {
+    preloadError = error.message
     console.warn('[forms] preload failed', error.message)
     emit()
     return
@@ -345,6 +370,7 @@ export async function prepareGeneratedForm(input: {
   template: FormTemplateDef
   clientName: string
   branch?: string
+  branchId?: string
   fieldValues: Record<string, unknown>
   clientSignature: string
   otherSignature?: string
@@ -365,6 +391,7 @@ export async function prepareGeneratedForm(input: {
     templateId: input.template.id,
     templateFile: input.template.fileName,
     branch: input.branch ?? 'BR01',
+    branchId: input.branchId,
     submittedAt: new Date().toISOString(),
     fieldValues: input.fieldValues,
     clientSignature,
@@ -404,6 +431,7 @@ export async function createGeneratedForm(input: {
   template: FormTemplateDef
   clientName: string
   branch?: string
+  branchId?: string
   fieldValues: Record<string, unknown>
   clientSignature: string
   otherSignature?: string
@@ -419,13 +447,11 @@ export function deleteGeneratedForm(id: string) {
   if (!isSupabaseConfigured || !supabase || !isUuid(id)) return
 
   void (async () => {
-    try {
-      await supabase.storage.from(SIG_BUCKET).remove([`${id}/client.jpg`, `${id}/client.png`, `${id}/other.jpg`, `${id}/other.png`])
-    } catch {
-      /* ignore */
-    }
-    const { error } = await supabase.from('imajica_forms').delete().eq('id', id)
-    if (error) console.warn('[forms] remote delete failed', error.message)
+    const { error } = await supabase
+      .from('imajica_forms')
+      .update({ status: 'inactive', updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) console.warn('[forms] remote archive failed', error.message)
   })()
 }
 
@@ -447,8 +473,8 @@ function dataUrlToBytes(dataUrl: string): { bytes: Uint8Array; kind: 'png' | 'jp
 }
 
 function formatFieldValue(value: unknown): string {
-  if (value == null || value === '') return '—'
-  if (Array.isArray(value)) return value.length ? value.join(', ') : '—'
+  if (value == null || value === '') return '-'
+  if (Array.isArray(value)) return value.length ? pdfSafeText(value.join(', ')) : '-'
   if (typeof value === 'object') {
     const o = value as Record<string, unknown>
     if ('client' in o || 'family' in o || 'comments' in o) {
@@ -457,11 +483,24 @@ function formatFieldValue(value: unknown): string {
         o.family != null && o.family !== '' ? `Family: ${o.family}` : '',
         o.comments != null && o.comments !== '' ? `Comments: ${o.comments}` : '',
       ].filter(Boolean)
-      return parts.join(' · ') || '—'
+      return pdfSafeText(parts.join(' | ') || '-')
     }
-    return JSON.stringify(value)
+    return pdfSafeText(JSON.stringify(value))
   }
-  return String(value)
+  return pdfSafeText(String(value))
+}
+
+type DrawTextOpts = {
+  x: number
+  y: number
+  size: number
+  font: PDFFont
+  color: ReturnType<typeof rgb>
+  maxWidth?: number
+}
+
+function drawTextSafe(page: PDFPage, text: string, options: DrawTextOpts) {
+  page.drawText(pdfSafeText(text), options)
 }
 
 function hasFilledFields(fieldValues: Record<string, unknown>) {
@@ -476,7 +515,8 @@ function hasFilledFields(fieldValues: Record<string, unknown>) {
 }
 
 async function embedSignature(pdfDoc: PDFDocument, dataUrl: string) {
-  const parsed = dataUrlToBytes(dataUrl)
+  const flattened = await compressSignatureDataUrl(dataUrl)
+  const parsed = dataUrlToBytes(flattened)
   if (!parsed) return null
   return parsed.kind === 'png'
     ? pdfDoc.embedPng(parsed.bytes)
@@ -494,11 +534,13 @@ async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
   const submitted = new Date(record.submittedAt)
-  const dateLabel = submitted.toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  })
+  const dateLabel = pdfSafeText(
+    submitted.toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    }),
+  )
 
   void height
 
@@ -522,14 +564,14 @@ async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord
     })
   }
 
-  page.drawText('Patient / Client Signature', {
+  drawTextSafe(page, 'Patient / Client Signature', {
     x: sigX,
     y: sigY - 12,
     size: 8,
     font,
     color: rgb(0.35, 0.4, 0.45),
   })
-  page.drawText(record.clientName, {
+  drawTextSafe(page, record.clientName, {
     x: sigX,
     y: sigY - 24,
     size: 9,
@@ -538,14 +580,14 @@ async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord
   })
 
   const dateX = width * 0.58
-  page.drawText(dateLabel, {
+  drawTextSafe(page, dateLabel, {
     x: dateX,
     y: sigY + 18,
     size: 10,
     font,
     color: rgb(0.05, 0.1, 0.12),
   })
-  page.drawText('Date', {
+  drawTextSafe(page, 'Date', {
     x: dateX,
     y: sigY - 12,
     size: 8,
@@ -562,7 +604,7 @@ async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord
         width: Math.min(160, width * 0.28),
         height: 40,
       })
-      page.drawText('Other signature', {
+      drawTextSafe(page, 'Other signature', {
         x: dateX,
         y: sigY + 30,
         size: 7,
@@ -572,8 +614,9 @@ async function stampConsentPage(pdfDoc: PDFDocument, record: GeneratedFormRecord
     }
   }
 
-  page.drawText(
-    `Signed electronically · ${record.branch} · ${submitted.toLocaleString()}`,
+  drawTextSafe(
+    page,
+    `Signed electronically | ${record.branch} | ${submitted.toLocaleString()}`,
     {
       x: 18,
       y: 28,
@@ -600,7 +643,7 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
     page = pdfDoc.addPage()
     ;({ width, height } = page.getSize())
     y = height - margin
-    page.drawText(`${record.formType} — answers (continued)`, {
+    drawTextSafe(page, `${record.formType} - answers (continued)`, {
       x: margin,
       y,
       size: 11,
@@ -610,7 +653,7 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
     y -= 22
   }
 
-  page.drawText('Imajica Medical Aesthetics', {
+  drawTextSafe(page, 'Imajica Medical Aesthetics', {
     x: margin,
     y,
     size: 16,
@@ -618,7 +661,7 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
     color: rgb(0.773, 0.627, 0.349),
   })
   y -= 22
-  page.drawText(`${record.formType} — Completed answers`, {
+  drawTextSafe(page, `${record.formType} - Completed answers`, {
     x: margin,
     y,
     size: 12,
@@ -626,8 +669,9 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
     color: rgb(0.027, 0.239, 0.173),
   })
   y -= 18
-  page.drawText(
-    `Client: ${record.clientName}  ·  Branch: ${record.branch}  ·  ${new Date(record.submittedAt).toLocaleString()}`,
+  drawTextSafe(
+    page,
+    `Client: ${record.clientName}  |  Branch: ${record.branch}  |  ${new Date(record.submittedAt).toLocaleString()}`,
     {
       x: margin,
       y,
@@ -643,7 +687,7 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
     const text = formatFieldValue(value)
     const lines = wrapText(text, 90)
     ensureSpace(40 + lines.length * 13)
-    page.drawText(label, {
+    drawTextSafe(page, label, {
       x: margin,
       y,
       size: 8,
@@ -653,7 +697,7 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
     y -= 12
     for (const line of lines) {
       ensureSpace(50)
-      page.drawText(line, {
+      drawTextSafe(page, line, {
         x: margin,
         y,
         size: 10,
@@ -671,7 +715,7 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
     const img = await embedSignature(pdfDoc, record.clientSignature)
     if (img) {
       y -= 10
-      page.drawText('Client Signature', {
+      drawTextSafe(page, 'Client Signature', {
         x: margin,
         y,
         size: 9,
@@ -690,8 +734,8 @@ async function appendAnswersPage(pdfDoc: PDFDocument, record: GeneratedFormRecor
 }
 
 function wrapText(text: string, maxChars: number): string[] {
-  const words = text.split(/\s+/).filter(Boolean)
-  if (!words.length) return ['—']
+  const words = pdfSafeText(text).split(/\s+/).filter(Boolean)
+  if (!words.length) return ['-']
   const lines: string[] = []
   let current = ''
   for (const word of words) {
@@ -717,7 +761,7 @@ async function buildFallbackTemplatePdf(fileName: string): Promise<Uint8Array> {
   const { width, height } = page.getSize()
   const margin = 48
   let y = height - margin
-  page.drawText('IMAJICA MEDICAL AESTHETICS', {
+  drawTextSafe(page, 'IMAJICA MEDICAL AESTHETICS', {
     x: margin,
     y,
     size: 14,
@@ -725,7 +769,7 @@ async function buildFallbackTemplatePdf(fileName: string): Promise<Uint8Array> {
     color: rgb(0.773, 0.627, 0.349),
   })
   y -= 28
-  page.drawText(title.slice(0, 64), {
+  drawTextSafe(page, title.slice(0, 64), {
     x: margin,
     y,
     size: 16,
@@ -733,7 +777,7 @@ async function buildFallbackTemplatePdf(fileName: string): Promise<Uint8Array> {
     color: rgb(0.027, 0.239, 0.173),
   })
   y -= 22
-  page.drawText('Clinic form packet — answers and signatures follow on the next page.', {
+  drawTextSafe(page, 'Clinic form packet - answers and signatures follow on the next page.', {
     x: margin,
     y,
     size: 10,
@@ -746,7 +790,7 @@ async function buildFallbackTemplatePdf(fileName: string): Promise<Uint8Array> {
     thickness: 0.8,
     color: rgb(0.7, 0.72, 0.74),
   })
-  page.drawText('Patient / Client Signature', {
+  drawTextSafe(page, 'Patient / Client Signature', {
     x: width * 0.12,
     y: 96,
     size: 8,
@@ -759,7 +803,7 @@ async function buildFallbackTemplatePdf(fileName: string): Promise<Uint8Array> {
     thickness: 0.8,
     color: rgb(0.7, 0.72, 0.74),
   })
-  page.drawText('Date', {
+  drawTextSafe(page, 'Date', {
     x: width * 0.58,
     y: 96,
     size: 8,

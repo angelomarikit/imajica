@@ -29,14 +29,15 @@ import {
   downloadGeneratedPacket,
   ensureFormTemplateReady,
   getGeneratedForms,
+  getFormsPreloadError,
   openGeneratedFormPdf,
   preloadGeneratedForms,
   prepareGeneratedForm,
-  rememberGeneratedFormLocally,
   saveGeneratedForm,
   subscribeGeneratedForms,
   type GeneratedFormRecord,
 } from '@/services/imajicaFormsService'
+import { isSupabaseConfigured } from '@/lib/supabase'
 import { cn } from '@/utils/cn'
 import {
   isFranchiseBranchOwner,
@@ -70,6 +71,8 @@ export function ImajicaFormsPage() {
   const [primaryOpen, setPrimaryOpen] = useState(true)
   const [assessmentOpen, setAssessmentOpen] = useState(false)
   const [history, setHistory] = useState(() => getGeneratedForms())
+  const [historyLoading, setHistoryLoading] = useState(isSupabaseConfigured)
+  const [historyLoadError, setHistoryLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [viewing, setViewing] = useState<GeneratedFormRecord | null>(null)
@@ -101,14 +104,34 @@ export function ImajicaFormsPage() {
     }
   }, [viewPdfUrl])
 
-  useEffect(() => {
+  const activeBranchUuid =
+    selectedBranchId !== 'all' && selectedBranchId ? selectedBranchId : user?.branchId
+
+  const loadHistory = () => {
     const orgWide = orgWideUser && !activeClinicName
-    void preloadGeneratedForms({
+    if (!isSupabaseConfigured) {
+      setHistory(getGeneratedForms())
+      setHistoryLoading(false)
+      return Promise.resolve()
+    }
+    setHistoryLoading(true)
+    setHistoryLoadError(null)
+    return preloadGeneratedForms({
       branch: activeClinicName,
+      branchId: activeBranchUuid,
       orgWide,
-    }).then(() => setHistory(getGeneratedForms()))
+    })
+      .then(() => {
+        setHistory(getGeneratedForms())
+        setHistoryLoadError(getFormsPreloadError())
+      })
+      .finally(() => setHistoryLoading(false))
+  }
+
+  useEffect(() => {
+    void loadHistory()
     return subscribeGeneratedForms(() => setHistory(getGeneratedForms()))
-  }, [activeClinicName, orgWideUser])
+  }, [activeClinicName, orgWideUser, activeBranchUuid])
 
   useEffect(() => {
     setValues({})
@@ -212,40 +235,22 @@ export function ImajicaFormsPage() {
         user?.branchId ||
         'Clinic'
 
-      // 1) Ensure template PDF is reachable, then build + download the packet.
-      //    PDF must succeed for every clinic/franchise/OM even if history save fails.
       await ensureFormTemplateReady(template.fileName)
       const record = await prepareGeneratedForm({
         template,
         clientName: patientName,
         branch: branchLabel,
+        branchId: activeBranchUuid,
         fieldValues: values,
         clientSignature: clientSig,
         otherSignature: template.otherSignature ? otherSig || undefined : undefined,
       })
-      await downloadGeneratedPacket(record)
-      // Always keep this generate in the on-screen history for this shift.
-      rememberGeneratedFormLocally(record)
+
+      // Save to Supabase + Storage first — then build PDF from hydrated paths.
+      const saved = await saveGeneratedForm(record)
+      await downloadGeneratedPacket(saved)
       setHistory(getGeneratedForms())
-
-      // 2) Save to Supabase after PDF — never undo a successful download.
-      let savedOk = false
-      try {
-        await saveGeneratedForm(record)
-        savedOk = true
-        setHistory(getGeneratedForms())
-      } catch (saveErr) {
-        const raw =
-          saveErr instanceof Error ? saveErr.message : 'Could not save form history'
-        const msg = mapBookingAuthError(raw)
-        toast.warning(
-          `PDF downloaded, but cloud history was not saved: ${msg}. The PDF file is ready to use.`,
-        )
-      }
-
-      if (savedOk) {
-        toast.success(`Generated ${record.formType} PDF`)
-      }
+      toast.success(`Generated ${saved.formType} PDF (saved to cloud)`)
       setPatientName('')
       setValues({})
       setClientSig('')
@@ -474,6 +479,15 @@ export function ImajicaFormsPage() {
         </div>
       </Card>
 
+      {historyLoadError ? (
+        <Card className="flex flex-wrap items-center justify-between gap-3 border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <span>Could not load form history from Supabase: {historyLoadError}</span>
+          <Button variant="secondary" size="sm" onClick={() => void loadHistory()}>
+            Retry
+          </Button>
+        </Card>
+      ) : null}
+
       <Card className="p-4 sm:p-5">
         <div className="flex items-center gap-2">
           <History className="h-5 w-5 text-emerald-800" />
@@ -554,7 +568,9 @@ export function ImajicaFormsPage() {
               {!filteredHistory.length ? (
                 <tr>
                   <td colSpan={5} className="px-2 py-10 text-center text-slate-ui">
-                    No generated forms found.
+                    {historyLoading
+                      ? 'Loading form history from cloud…'
+                      : 'No generated forms found yet.'}
                   </td>
                 </tr>
               ) : null}

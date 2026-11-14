@@ -69,7 +69,12 @@ import { getDirectoryStaff } from '@/services/staffDirectoryService'
 import type { Appointment, Client, OperationalExpense, Sale, Staff } from '@/types'
 import { formatPesoExact } from '@/utils/currency'
 import { cn } from '@/utils/cn'
-import { isBranchOwner, isHqRole, isOperationsManagerRole } from '@/utils/franchiseAccess'
+import {
+  isBranchOwner,
+  isFranchiseBranchOwner,
+  isHqRole,
+  isOperationsManagerRole,
+} from '@/utils/franchiseAccess'
 
 type BirthdayCard = {
   id: string
@@ -703,6 +708,7 @@ function BranchOpsDashboard() {
   const { branches, selectedBranchId, setSelectedBranchId, branchLocked } = useBranch()
   const forcedBranchId = useForcedBranchId()
   const branchOwner = isBranchOwner(user)
+  const franchiseOwner = isFranchiseBranchOwner(user)
   const hqView = isHqRole(user?.role) || isOperationsManagerRole(user?.role)
   // HQ aggregates every clinic when All Branches is selected (default after HQ login).
   const scopeBranchId = forcedBranchId ?? (selectedBranchId === 'all' ? undefined : selectedBranchId)
@@ -1032,22 +1038,9 @@ function BranchOpsDashboard() {
   const metrics = useMemo(() => {
     const rangeSales = scopedSales.filter((s) => inDateRange(saleDateKey(s), rangeFrom, rangeTo))
     const todaySales = scopedSales.filter((s) => saleDateKey(s) === todayKey)
-    const monthKey = rangeTo.slice(0, 7)
-    const monthStart = `${monthKey}-01`
-    const monthSalesLines = scopedSales.filter((s) => {
-      const d = saleDateKey(s)
-      return d >= monthStart && d <= rangeTo
-    })
-    const monthlyLabel = rpcSummary?.monthLabel
-      || new Date(`${monthKey}-01T12:00:00`).toLocaleDateString('en-US', {
-          month: 'long',
-          year: 'numeric',
-        })
-
     // Money + count cards from Supabase only when RPC is ready (never invent from local cache).
     let periodSalesTotal = 0
     let dailySales = 0
-    let monthlySales = 0
     let actualSales = 0
     let completedBookings = 0
     let patientsInRange = 0
@@ -1057,7 +1050,6 @@ function BranchOpsDashboard() {
     if (scopeBranchId && rpcSummary) {
       periodSalesTotal = rpcSummary.rangeSales
       dailySales = rpcSummary.todaySales
-      monthlySales = rpcSummary.monthSales
       actualSales = rpcSummary.rangeGross
       completedBookings = rpcSummary.bookings
       patientsInRange = rpcSummary.patients
@@ -1066,7 +1058,6 @@ function BranchOpsDashboard() {
     } else if (!scopeBranchId && orgSales) {
       periodSalesTotal = orgSales.branches.reduce((n, b) => n + b.clinicNet, 0)
       dailySales = orgSales.branches.reduce((n, b) => n + b.todayClinicNet, 0)
-      monthlySales = orgSales.branches.reduce((n, b) => n + b.monthClinicNet, 0)
       actualSales = orgSales.branches.reduce((n, b) => n + b.gross, 0)
       paymentsCount = orgSales.branches.reduce((n, b) => n + b.saleCount, 0)
       completedBookings = orgSales.branches.reduce((n, b) => n + b.bookingCount, 0)
@@ -1074,9 +1065,18 @@ function BranchOpsDashboard() {
       doctorFees = orgSales.branches.reduce((n, b) => n + b.doctorFees, 0)
     }
 
-    const rangeExpenseTotal = scopedExpenses
-      .filter((e) => e.status === 'active' && inDateRange(e.expenseDate, rangeFrom, rangeTo))
-      .reduce((n, e) => n + (e.amount || 0), 0)
+    const expensesLikePage = scopedExpenses.filter((e) => {
+      if (e.status !== 'active') return false
+      if (!inDateRange(e.expenseDate, rangeFrom, rangeTo)) return false
+      if (franchiseOwner) {
+        if (e.scope !== 'branch') return false
+        const matchId = scopeBranchId && e.branchId === scopeBranchId
+        const matchName = user?.branchName && e.branchName === user.branchName
+        if (!matchId && !matchName) return false
+      }
+      return true
+    })
+    const rangeExpenseTotal = expensesLikePage.reduce((n, e) => n + (e.amount || 0), 0)
     const todayExpenseTotal = scopedExpenses
       .filter((e) => e.expenseDate === todayKey && e.status === 'active')
       .reduce((n, e) => n + (e.amount || 0), 0)
@@ -1098,12 +1098,11 @@ function BranchOpsDashboard() {
       actualSales,
       medicalProcedureCommission: doctorFees,
       doctorCommissionRows: doctorSummary.byDoctor,
-      monthlySales,
-      monthlyLabel,
       rangeSalesLines: rangeSales,
       todaySalesLines: todaySales,
-      monthSalesLines,
       todayExpenses: includesToday && isSingleDay ? todayExpenseTotal : rangeExpenseTotal,
+      totalExpenses: rangeExpenseTotal,
+      expenseCount: expensesLikePage.length,
       rangeExpenseTotal,
       todayExpenseTotal,
       isSingleDay,
@@ -1121,6 +1120,8 @@ function BranchOpsDashboard() {
     rangeTo,
     rpcSummary,
     orgSales,
+    franchiseOwner,
+    user?.branchName,
   ])
 
   /** Per-clinic breakdown for HQ All Branches — Supabase org RPC only. */
@@ -1451,7 +1452,7 @@ function BranchOpsDashboard() {
   const actualSalesHint = metrics.isSingleDay
     ? `Gross paid for ${rangeLabel} from Supabase — full customer total, no doctor fee deducted.`
     : `Gross paid across ${metrics.daySpan} days (${rangeLabel}) from Supabase — full customer total, no doctor fee deducted.`
-  const monthlySalesHint = `Clinic net month-to-date through ${rangeTo} · ${metrics.monthlyLabel} (server).`
+  const totalExpensesHint = `Active expenses in ${rangeLabel} — same total as Operational Expenses (All tab, date range).`
   const medicalProcedureHint = metrics.isSingleDay
     ? `Doctor fees for medical procedures on ${rangeLabel}.`
     : `Doctor fees for medical procedures in ${rangeLabel}.`
@@ -1809,23 +1810,24 @@ function BranchOpsDashboard() {
           }
         />
         <StatCard
-          title="Monthly Sales"
-          value={moneyDisplay(metrics.monthlySales)}
-          hint={monthlySalesHint}
-          tag="Clinic net"
-          tagTone="amber"
-          icon={<Receipt className="h-4 w-4" />}
-          onClick={
-            moneyReady
-              ? () =>
-                  openSalesBreakdown(
-                    'Monthly Sales',
-                    monthlySalesHint,
-                    metrics.monthSalesLines,
-                    'clinic',
-                    metrics.monthlySales,
-                  )
-              : undefined
+          title="Total Expenses"
+          value={formatPesoExact(metrics.totalExpenses)}
+          hint={totalExpensesHint}
+          tag={
+            metrics.expenseCount
+              ? `${metrics.expenseCount} expense${metrics.expenseCount === 1 ? '' : 's'}`
+              : 'Operational'
+          }
+          tagTone="rose"
+          icon={<Minus className="h-4 w-4" />}
+          action={
+            <Link
+              to="/admin/expenses"
+              className="text-xs font-semibold text-emerald-800 hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              View All
+            </Link>
           }
         />
         <StatCard
