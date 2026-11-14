@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
 import { cashBusinessDayBounds } from '@/services/cashDrawerService'
 
 export type BranchDashboardSalesSummary = {
@@ -309,11 +310,22 @@ export type BranchCashOnHandState = {
   manualDeducted: number
   ending: number
   priorDayComputedCash: number
+  priorDayDoctorFees: number
+  priorDayExpenseCashOut: number
   cashOnHandEpoch: string | null
 }
 
-/** Pasig rollout: prior cash before this date is excluded from till carry (client fallback). */
-export const PASIG_CASH_ON_HAND_EPOCH = '2026-11-13'
+/** Company clinics rolling out Cash on Hand from this business date (ignore earlier cash). */
+export const CASH_ON_HAND_ROLLOUT_EPOCH = '2026-11-13'
+
+const BRANCHES_WITH_CASH_EPOCH = new Set<string>([BRANCH_IDS.pasig, BRANCH_IDS.cainta])
+
+/** @deprecated use cashOnHandEpochForBranch */
+export const PASIG_CASH_ON_HAND_EPOCH = CASH_ON_HAND_ROLLOUT_EPOCH
+
+export function cashOnHandEpochForBranch(branchId: string): string | null {
+  return BRANCHES_WITH_CASH_EPOCH.has(branchId) ? CASH_ON_HAND_ROLLOUT_EPOCH : null
+}
 
 export type OrgCashOnHandState = {
   ok: boolean
@@ -350,6 +362,8 @@ function mapBranchCashOnHandState(raw: Record<string, unknown>): BranchCashOnHan
     manualDeducted: num(raw.manual_deducted),
     ending: num(raw.ending),
     priorDayComputedCash: num(raw.prior_day_computed_cash),
+    priorDayDoctorFees: num(raw.prior_day_doctor_fees),
+    priorDayExpenseCashOut: num(raw.prior_day_expense_cash_out),
     cashOnHandEpoch: raw.cash_on_hand_epoch
       ? String(raw.cash_on_hand_epoch).slice(0, 10)
       : null,

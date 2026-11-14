@@ -48,7 +48,7 @@ import {
   fetchBranchDoctorFeesCashDay,
   fetchBranchDashboardSalesSummary,
   fetchOrgCashOnHandState,
-  PASIG_CASH_ON_HAND_EPOCH,
+  cashOnHandEpochForBranch,
   fetchOrgDashboardSalesByBranch,
   type BranchCashOnHandState,
   type BranchDashboardSalesSummary,
@@ -896,10 +896,8 @@ function BranchOpsDashboard() {
       ])
       if (cashIn == null) return null
       let carry = 0
-      const loopStart =
-        branchId === BRANCH_IDS.pasig
-          ? PASIG_CASH_ON_HAND_EPOCH
-          : shiftDateKey(cashDay, -14)
+      const epochDate = cashOnHandEpochForBranch(branchId)
+      const loopStart = epochDate ?? shiftDateKey(cashDay, -14)
       if (priorCashDay >= loopStart) {
         for (let d = loopStart; d <= priorCashDay; d = shiftDateKey(d, 1)) {
         const [dayCash, dayDoctor] = await Promise.all([
@@ -954,7 +952,9 @@ function BranchOpsDashboard() {
         manualDeducted,
         ending,
         priorDayComputedCash: priorCashIn ?? 0,
-        cashOnHandEpoch: branchId === BRANCH_IDS.pasig ? PASIG_CASH_ON_HAND_EPOCH : null,
+        cashOnHandEpoch: cashOnHandEpochForBranch(branchId),
+        priorDayDoctorFees: 0,
+        priorDayExpenseCashOut: 0,
       }
     }
 
@@ -1214,6 +1214,14 @@ function BranchOpsDashboard() {
         (n, b) => n + b.priorDayComputedCash,
         0,
       )
+      const priorDayDoctorFees = orgCashState.branches.reduce(
+        (n, b) => n + b.priorDayDoctorFees,
+        0,
+      )
+      const priorDayExpenseCashOut = orgCashState.branches.reduce(
+        (n, b) => n + b.priorDayExpenseCashOut,
+        0,
+      )
       const deducted = expenseCashOut + manualDeducted + doctorFeesCashDay
       const branchEndings: Record<string, number> = {}
       for (const row of orgCashState.branches) {
@@ -1234,6 +1242,8 @@ function BranchOpsDashboard() {
         unclosedDays,
         carriedBalance,
         priorDayComputedCash,
+        priorDayDoctorFees,
+        priorDayExpenseCashOut,
         cashOnHandEpoch: null as string | null,
         branchEndings,
       }
@@ -1267,6 +1277,8 @@ function BranchOpsDashboard() {
         unclosedDays,
         carriedBalance,
         priorDayComputedCash,
+        priorDayDoctorFees: branchCashState.priorDayDoctorFees,
+        priorDayExpenseCashOut: branchCashState.priorDayExpenseCashOut,
         cashOnHandEpoch: branchCashState.cashOnHandEpoch,
         branchEndings: {} as Record<string, number>,
       }
@@ -1287,6 +1299,8 @@ function BranchOpsDashboard() {
       unclosedDays: 0,
       carriedBalance: 0,
       priorDayComputedCash: 0,
+      priorDayDoctorFees: 0,
+      priorDayExpenseCashOut: 0,
       cashOnHandEpoch: null as string | null,
       branchEndings: {} as Record<string, number>,
     }
@@ -1877,11 +1891,20 @@ function BranchOpsDashboard() {
                 ? ' + today cash in (₱0.00)'
                 : ''}{' '}
             − cash out. Not the same as Actual Sales.
-            {cash.cashReady && cash.priorDayComputedCash > 0
-              ? ` Prior day cash tenders: ${formatPesoExact(cash.priorDayComputedCash)}.`
-              : ''}
+            {cash.cashReady && cash.priorDayComputedCash > 0 ? (
+              <>
+                {' '}Prior day ({cash.priorCashDay}) cash: {formatPesoExact(cash.priorDayComputedCash)}
+                {cash.priorDayDoctorFees > 0
+                  ? ` − doctor payout ${formatPesoExact(cash.priorDayDoctorFees)}`
+                  : ''}
+                {cash.priorDayExpenseCashOut > 0
+                  ? ` − expenses ${formatPesoExact(cash.priorDayExpenseCashOut)}`
+                  : ''}
+                .
+              </>
+            ) : null}
             {cash.cashOnHandEpoch
-              ? ` Carry for this clinic starts ${cash.cashOnHandEpoch} (earlier days excluded).`
+              ? ` Carry from ${cash.cashOnHandEpoch} (Nov 1–12 ignored).`
               : ''}
             {cash.expenseCashOut > 0
               ? ` Expenses (${formatPesoExact(cash.expenseCashOut)})`
