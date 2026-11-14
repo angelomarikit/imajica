@@ -31,7 +31,7 @@ import {
   preloadCatalogProductsFromSupabase,
   subscribeProducts,
 } from '@/services/productCatalogService'
-import { preloadSalesData } from '@/services/salesService'
+import { refreshOpsSales } from '@/services/salesService'
 import type { Client } from '@/types'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
@@ -280,7 +280,7 @@ export function BookingPage() {
     setDiscountMode('none')
     setInvoiceId(makeInvoiceId())
     setTab('today')
-    void preloadSalesData()
+    void refreshOpsSales({ branchId: bookingListBranchId, force: true })
   }
 
   const clock = now.toLocaleString('en-US', {

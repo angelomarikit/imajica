@@ -179,6 +179,26 @@ let importedSales: Sale[] = []
 let remoteLiveSales: Sale[] = []
 let loadPromise: Promise<void> | null = null
 let loaded = false
+/** Tracks which branch scope was used for the warm cache (undefined = all branches). */
+let cacheScopeBranchId: string | undefined = undefined
+
+/** Live ops use Supabase only — localStorage sales are not authoritative. */
+function opsUseSupabaseOnly(): boolean {
+  return isSupabaseConfigured
+}
+
+export function resetSalesCache(): void {
+  loaded = false
+  loadPromise = null
+  cacheScopeBranchId = undefined
+  if (opsUseSupabaseOnly()) {
+    try {
+      localStorage.removeItem(EXTRA_KEY)
+    } catch {
+      /* ignore */
+    }
+  }
+}
 
 function emitChange() {
   window.dispatchEvent(new Event(CHANGE))
@@ -211,11 +231,13 @@ function pruneExtraSalesAgainstRemote(extra: Sale[]): Sale[] {
 }
 
 function mergeSales(): Sale[] {
+  if (opsUseSupabaseOnly()) {
+    return [...remoteLiveSales].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  }
   const importIds = new Set(importedSales.map((s) => s.id))
   const remoteIds = new Set(remoteLiveSales.map((s) => s.id))
   const rawExtra = readExtraSales().filter((s) => !importIds.has(s.id) && !remoteIds.has(s.id))
   const extra = pruneExtraSalesAgainstRemote(rawExtra)
-  // Persist prune so Today's Booking stays clean across reloads
   if (extra.length !== rawExtra.length) {
     try {
       safeLocalSetItem(EXTRA_KEY, JSON.stringify(extra.slice(0, 80)))
@@ -296,6 +318,7 @@ type RemoteSaleRow = {
   referred_by_name: string | null
   referred_by_client_id: string | null
   contract_amount: number | null
+  payment_methods?: string[] | null
   sale_items:
     | Array<{
         id: string
@@ -375,6 +398,34 @@ function paymentMethodsFromPayments(
   return out
 }
 
+function paymentMethodsFromHeaderArray(raw: string[] | null | undefined): PaymentMethod[] {
+  const out: PaymentMethod[] = []
+  for (const m of raw ?? []) {
+    const method = normalizePaymentMethod(m)
+    if (method && !out.includes(method)) out.push(method)
+  }
+  return out
+}
+
+/** Canonical tender list for display — never assume cash. */
+export function resolveSalePaymentMethods(
+  sale: Pick<Sale, 'paymentBreakdown' | 'paymentMethods' | 'paymentMethod'>,
+): PaymentMethod[] {
+  if (sale.paymentBreakdown?.length) {
+    const out: PaymentMethod[] = []
+    for (const row of sale.paymentBreakdown) {
+      if (row.method && !out.includes(row.method)) out.push(row.method)
+    }
+    if (out.length) return out
+  }
+  if (sale.paymentMethods?.length) return [...sale.paymentMethods]
+  if (sale.paymentMethod && sale.paymentMethod !== 'other') {
+    const m = normalizePaymentMethod(sale.paymentMethod) || sale.paymentMethod
+    if (m && m !== 'other') return [m as PaymentMethod]
+  }
+  return []
+}
+
 function paymentBreakdownFromPayments(
   payments:
     | Array<{
@@ -407,10 +458,11 @@ function mapRemoteSales(rows: RemoteSaleRow[]): Sale[] {
     const fromLocal = row.client_id ? getClientById(row.client_id)?.fullName : undefined
     const clientName = fromJoin || fromLocal || 'Client'
     const branchName = branchNameFor(row.branch_id, row.branches)
-    const paymentMethods = paymentMethodsFromPayments(row.payments)
+    const fromPayments = paymentMethodsFromPayments(row.payments)
+    const fromHeader = paymentMethodsFromHeaderArray(row.payment_methods)
+    const paymentMethods = fromPayments.length ? fromPayments : fromHeader
     const paymentBreakdown = paymentBreakdownFromPayments(row.payments)
-    // Only default to cash when the sale truly has no payment rows (legacy / import gaps)
-    const paymentMethod = paymentMethods[0] ?? ('cash' as PaymentMethod)
+    const paymentMethod = paymentMethods[0] ?? ('other' as PaymentMethod)
     const items = row.sale_items?.length
       ? row.sale_items
       : [
@@ -494,14 +546,14 @@ const REMOTE_SALES_HEADER_SELECT: string =
   'id, client_id, branch_id, staff_name, doctor_name, is_doctors_procedure, doctor_fee_amount, ' +
   'clinic_net_amount, total_amount, status, created_at, ' +
   'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
-  'contract_amount'
+  'contract_amount, payment_methods'
 
 /** Single-client profile fetch can still use embeds (small result set). */
 const REMOTE_SALES_CLIENT_SELECT: string =
   'id, client_id, branch_id, staff_name, doctor_name, is_doctors_procedure, doctor_fee_amount, ' +
   'clinic_net_amount, total_amount, status, created_at, ' +
   'invoice_number, payment_type, booking_ref, lead_source, referred_by_name, referred_by_client_id, ' +
-  'contract_amount, ' +
+  'contract_amount, payment_methods, ' +
   'sale_items ( id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed ), ' +
   'payments ( payment_method, payment_status, payment_amount ), ' +
   'clients!client_id ( full_name ), ' +
@@ -844,27 +896,52 @@ export async function preloadSalesData(options?: {
   branchId?: string
   /** @deprecated JSON dump removed — ignored */
   skipImported?: boolean
+  /** Re-download when branch scope changes or after checkout */
+  force?: boolean
+}): Promise<void> {
+  return refreshOpsSales({
+    branchId: options?.branchId?.trim() || undefined,
+    force: options?.force,
+  })
+}
+
+/**
+ * Single Supabase refresh for ops sales (Booking, commissions, reports using getSales).
+ * Re-fetches when branch scope changes or when `force` is set.
+ */
+export async function refreshOpsSales(options?: {
+  branchId?: string
+  from?: string
+  to?: string
+  force?: boolean
 }): Promise<void> {
   const branchId = options?.branchId?.trim() || undefined
-
-  if (loaded) return
+  const scopeChanged = cacheScopeBranchId !== branchId
+  if (loaded && !options?.force && !scopeChanged) {
+    if (loadPromise) await loadPromise
+    return
+  }
+  if (scopeChanged || options?.force) {
+    if (scopeChanged) remoteLiveSales = []
+    resetSalesCache()
+    cacheScopeBranchId = branchId
+  }
   if (loadPromise) {
     await loadPromise
-    return
+    if (loaded && !options?.force) return
   }
 
   loadPromise = (async () => {
-    // Drop any leftover in-memory dump from older builds
     importedSales = []
     if (!isSupabaseConfigured) {
       loaded = true
+      cacheScopeBranchId = branchId
       emitChange()
       return
     }
     try {
-      const to = manilaDateKey()
-      // Recent ops only for app-wide warm cache (Franchise Sales / reports use their own ranges)
-      const from = daysAgoManila(90)
+      const to = options?.to || manilaDateKey()
+      const from = options?.from || daysAgoManila(90)
       await ensureBranchOpsSales({
         branchId,
         from,
@@ -875,6 +952,7 @@ export async function preloadSalesData(options?: {
       console.error('[sales] ops preload failed', err)
     }
     loaded = true
+    cacheScopeBranchId = branchId
     emitChange()
   })()
 
@@ -892,19 +970,8 @@ function daysAgoManila(days: number): string {
 /** Re-fetch remote sales after login (bootstrap often runs before a JWT exists). */
 export async function refreshRemoteSalesAfterAuth(branchId?: string): Promise<void> {
   if (!isSupabaseConfigured) return
-  // Ops only — never Migration dump, never sales-transactions.json.
-  // Full Clinic Report history stays in Supabase; Franchise Sales / Customer List
-  // fetch their own date ranges. Profiles use ensureClientRemoteSales.
-  const to = manilaDateKey()
-  const from = daysAgoManila(90)
-  await ensureBranchOpsSales({
-    branchId,
-    from,
-    to,
-    syncClients: false,
-  })
-  loaded = true
-  emitChange()
+  resetSalesCache()
+  await refreshOpsSales({ branchId, force: true })
 }
 
 export function isSalesDataLoaded(): boolean {
@@ -934,16 +1001,18 @@ export function subscribeSalesData(listener: () => void): () => void {
 
 /** Future: booking checkout appends here and recomputes client profile */
 export function appendExtraSale(sale: Sale): void {
+  if (opsUseSupabaseOnly() && (isRemoteLineId(sale.id) || isUuid(sale.id.split(':')[0] || ''))) {
+    mergeRemoteSaleLines([sale])
+    return
+  }
   const key = bookingMatchKey(sale)
   let extra = readExtraSales().filter((s) => s.id !== sale.id)
-  // When writing a real Supabase line, drop stale sale-live mirrors for the same booking.
   if (isRemoteLineId(sale.id) || isUuid(sale.id.split(':')[0] || '')) {
     extra = extra.filter(
       (s) => !(s.id.startsWith('sale-live-') && bookingMatchKey(s) === key),
     )
   }
   extra.unshift(sale)
-  // Cap low — Supabase is source of truth; local mirror must not crowd out the JWT.
   safeLocalSetItem(EXTRA_KEY, JSON.stringify(extra.slice(0, 80)))
   emitChange()
 }
@@ -1117,6 +1186,36 @@ export async function recordBookingCheckout(
             }).clinicNetAmount
           : null
 
+    const forceCashProcedure = isDoctorsProcedure
+    const rawSplits = (opts?.paymentSplits ?? []).filter(
+      (s) => s.paymentAmount > 0 && s.paymentMethod,
+    )
+    const normalizedSplits = forceCashProcedure
+      ? [
+          {
+            paymentMethod: 'cash' as PaymentMethod,
+            paymentAmount:
+              rawSplits.reduce((n, s) => n + (Number(s.paymentAmount) || 0), 0) || totalAmount,
+          },
+        ]
+      : rawSplits
+    const tenderRows =
+      normalizedSplits.length > 0
+        ? normalizedSplits
+        : [
+            {
+              paymentMethod: (forceCashProcedure ? 'cash' : head.paymentMethod) as PaymentMethod,
+              paymentAmount: totalAmount,
+            },
+          ]
+    const paymentMethodsStored = [
+      ...new Set(
+        tenderRows
+          .map((s) => normalizePaymentMethod(s.paymentMethod) || s.paymentMethod)
+          .filter(Boolean),
+      ),
+    ] as string[]
+
     const { error: saleError } = await supabase.from('sales').insert({
       id: saleId,
       client_id: head.clientId,
@@ -1141,6 +1240,7 @@ export async function recordBookingCheckout(
       referred_by_client_id: null,
       referred_by_name: head.referredByName ?? null,
       contract_amount: contractAmount,
+      payment_methods: paymentMethodsStored.length ? paymentMethodsStored : null,
       created_at: createdAt,
     })
 
@@ -1185,20 +1285,7 @@ export async function recordBookingCheckout(
       throw new Error(itemError.message || 'Could not save sale items')
     }
 
-    // Medical Procedure is always cash — force tender so Cash on Hand stays aligned.
-    const forceCashProcedure = isDoctorsProcedure
-    const rawSplits = (opts?.paymentSplits ?? []).filter(
-      (s) => s.paymentAmount > 0 && s.paymentMethod,
-    )
-    const normalizedSplits = forceCashProcedure
-      ? [
-          {
-            paymentMethod: 'cash' as PaymentMethod,
-            paymentAmount: rawSplits.reduce((n, s) => n + (Number(s.paymentAmount) || 0), 0) || totalAmount,
-          },
-        ]
-      : rawSplits
-    const splits = normalizedSplits.map((s) => ({
+    const paymentRows = tenderRows.map((s) => ({
       sale_id: saleId,
       provider: 'pos' as const,
       payment_method: forceCashProcedure ? 'cash' : s.paymentMethod,
@@ -1206,45 +1293,28 @@ export async function recordBookingCheckout(
       payment_amount: s.paymentAmount,
       payment_date: createdAt,
     }))
-    const paymentRows =
-      splits.length > 0
-        ? splits
-        : [
-            {
-              sale_id: saleId,
-              provider: 'pos' as const,
-              payment_method: forceCashProcedure ? 'cash' : head.paymentMethod,
-              payment_status: head.status === 'paid' ? 'paid' : 'pending',
-              payment_amount: totalAmount,
-              payment_date: createdAt,
-            },
-          ]
 
     const { error: payError } = await supabase.from('payments').insert(paymentRows)
 
     if (payError) {
-      // Sale + items already saved — warn but don't wipe the order / cause a duplicate retry
-      console.error('[sales] payment row failed', payError.message)
+      await supabase.from('sale_items').delete().eq('sale_id', saleId)
+      await supabase.from('sales').delete().eq('id', saleId)
+      throw new Error(payError.message || 'Could not save payment — order was not completed')
     }
 
-    const splitMethods = [
-      ...new Set(
-        paymentRows
-          .map((s) => normalizePaymentMethod(s.payment_method) || (s.payment_method as PaymentMethod))
-          .filter(Boolean),
-      ),
-    ] as PaymentMethod[]
-    const methodsForSale =
-      splitMethods.length > 0
-        ? splitMethods
-        : head.paymentMethod
-          ? [head.paymentMethod]
-          : undefined
-    const breakdownForSale: Sale['paymentBreakdown'] = paymentRows.map((row) => ({
-      method: (normalizePaymentMethod(row.payment_method) || 'cash') as PaymentMethod,
-      amount: Number(row.payment_amount) || 0,
-      status: row.payment_status,
-    }))
+    const splitMethods = paymentMethodsStored as PaymentMethod[]
+    const methodsForSale = splitMethods.length ? splitMethods : undefined
+    const breakdownForSale: Sale['paymentBreakdown'] = paymentRows
+      .map((row) => {
+        const method = normalizePaymentMethod(row.payment_method)
+        if (!method) return null
+        return {
+          method,
+          amount: Number(row.payment_amount) || 0,
+          status: row.payment_status,
+        }
+      })
+      .filter(Boolean) as Sale['paymentBreakdown']
 
     persisted = (insertedItems ?? itemRows).map((item, index) => {
       const line = lines[index]!
@@ -1267,9 +1337,9 @@ export async function recordBookingCheckout(
       }
     })
 
-    remoteLiveSales = [...persisted, ...remoteLiveSales]
-    // Also mirror to localStorage so Today's Booking stays visible if remote refresh fails
-    for (const sale of persisted) appendExtraSale(sale)
+    mergeRemoteSaleLines(persisted)
+    const day = manilaDateKey()
+    await refreshOpsSales({ branchId, from: day, to: day, force: true })
   } else {
     const localSplits = (opts?.paymentSplits ?? []).filter(
       (s) => s.paymentAmount > 0 && s.paymentMethod,
@@ -1397,6 +1467,8 @@ export async function recordSessionUse(saleLineId: string): Promise<Sale | null>
 export type TodayBookingRow = {
   bookingKey: string
   bookingId: string
+  /** Full invoice / booking ref (same on every device). */
+  invoiceRef: string
   patientName: string
   clientId: string
   services: string
@@ -1468,15 +1540,18 @@ function paymentMethodLabel(method: Sale['paymentMethod'] | string): string {
   return map[normalized] || String(normalized).toUpperCase().replace(/_/g, ' ')
 }
 
-function paymentMethodsDisplay(sale: Sale): string {
-  const methods =
-    sale.paymentMethods && sale.paymentMethods.length > 0
-      ? sale.paymentMethods
-      : sale.paymentMethod
-        ? [sale.paymentMethod]
-        : []
-  if (!methods.length) return 'CASH'
+export function paymentMethodsDisplay(sale: Sale): string {
+  const methods = resolveSalePaymentMethods(sale)
+  if (!methods.length) return '—'
   return methods.map((m) => paymentMethodLabel(m)).join(' + ')
+}
+
+function resolveBookingPaymentDisplay(lines: Sale[]): string {
+  for (const sale of lines) {
+    const label = paymentMethodsDisplay(sale)
+    if (label !== '—') return label
+  }
+  return '—'
 }
 
 function formatServiceLine(sale: Sale): string {
@@ -1524,11 +1599,12 @@ export function getBookingRows(opts?: {
 
   const rows: TodayBookingRow[] = []
   for (const [bookingKey, lines] of groups) {
-    // Prefer Supabase UUID lines over local sale-live duplicates for the same booking.
     const remoteOnly = lines.filter((l) => isRemoteLineId(l.id))
     const deduped = remoteOnly.length > 0 ? remoteOnly : lines
     const sorted = [...deduped].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     const head = sorted[0]!
+    const invoiceRef =
+      head.invoiceNumber || head.bookingRef || bookingKey
     const services = sorted
       .filter((l) => l.itemType !== 'product')
       .map(formatServiceLine)
@@ -1551,6 +1627,7 @@ export function getBookingRows(opts?: {
     rows.push({
       bookingKey,
       bookingId: shortBookingId(head),
+      invoiceRef,
       patientName: head.clientName,
       clientId: head.clientId,
       services: services.length ? services.join(', ') : 'N/A',
@@ -1564,7 +1641,7 @@ export function getBookingRows(opts?: {
       doctorName: head.doctorName,
       doctorFeeAmount: doctorFee,
       paymentType: paymentTypeShort(head.paymentType),
-      paymentMethod: paymentMethodsDisplay(head),
+      paymentMethod: resolveBookingPaymentDisplay(lines),
       branchId: head.branchId,
       branchName: head.branchName,
       saleIds: sorted.map((l) => l.id),

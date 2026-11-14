@@ -50,7 +50,7 @@ export function TodaysBookingPanel({
         }),
       )
     }
-    void preloadSalesData().then(refresh)
+    void preloadSalesData({ branchId, force: false }).then(refresh)
     refresh()
     return subscribeSalesData(refresh)
   }, [branchId, mode])
@@ -190,7 +190,12 @@ export function TodaysBookingPanel({
             ) : (
               pageRows.map((row) => (
                 <tr key={row.bookingKey} className="border-t border-border align-top">
-                  <td className="px-3 py-3 font-semibold text-[#073D2C]">{row.bookingId}</td>
+                  <td className="px-3 py-3 font-semibold text-[#073D2C]" title={row.invoiceRef}>
+                    <span>{row.bookingId}</span>
+                    <span className="mt-0.5 block max-w-[120px] truncate text-[10px] font-normal normal-case text-slate-ui">
+                      {row.invoiceRef}
+                    </span>
+                  </td>
                   <td className="px-3 py-3 font-medium uppercase text-[#073D2C]">
                     {row.patientName}
                   </td>

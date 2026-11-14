@@ -107,6 +107,7 @@ export function BookingSummaryModal({
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wide text-slate-ui">Booking ID</p>
               <p className="mt-1 text-xl font-bold text-[#0f172a]">{row.bookingId}</p>
+              <p className="mt-0.5 text-xs font-medium text-[#073D2C]">{row.invoiceRef}</p>
               <p className="mt-0.5 text-xs text-slate-ui">{formatSummaryDate(row.dateIso)}</p>
             </div>
             <div>
