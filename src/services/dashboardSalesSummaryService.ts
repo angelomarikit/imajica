@@ -250,3 +250,44 @@ export async function fetchBranchCashCollected(input: {
   const n = Number(data)
   return Number.isFinite(n) ? n : 0
 }
+
+/**
+ * Doctor procedure fees paid from cash drawer for one clinic over a cash business day
+ * (8:00 AM Manila window). No local fallback — null means unavailable.
+ */
+export async function fetchBranchDoctorFeesCashDay(input: {
+  branchId: string
+  cashDay: string
+}): Promise<number | null> {
+  if (!isSupabaseConfigured || !supabase || !input.branchId || !input.cashDay) return null
+
+  const coolKey = `doctor-cash:${input.branchId}`
+  const cool = cooldownUntil.get(coolKey) ?? 0
+  if (cool > Date.now()) return null
+
+  const { fromIso, toIso } = cashBusinessDayBounds(input.cashDay)
+  const { data, error } = await supabase.rpc('branch_doctor_fees_cash_day', {
+    p_branch_id: input.branchId,
+    p_from: fromIso,
+    p_to: toIso,
+  })
+
+  if (error) {
+    const msg = error.message || ''
+    if (/429|rate limit|too many/i.test(msg) || (error as { status?: number }).status === 429) {
+      cooldownUntil.set(coolKey, Date.now() + 60_000)
+      console.warn('[dashboard] doctor fees cash day rate-limited')
+      return null
+    }
+    if (/could not find|does not exist|PGRST202/i.test(msg)) {
+      console.warn(
+        '[dashboard] branch_doctor_fees_cash_day missing — apply migration 20261115000113',
+      )
+      return null
+    }
+    console.error('[dashboard] doctor fees cash day rpc failed', msg)
+    return null
+  }
+  const n = Number(data)
+  return Number.isFinite(n) ? n : 0
+}

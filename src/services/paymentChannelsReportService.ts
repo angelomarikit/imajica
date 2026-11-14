@@ -1,6 +1,6 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
-import { ensureBranchOpsSales, getSales } from '@/services/salesService'
-import type { PaymentMethod, Sale } from '@/types'
+import { resolveSalePaymentMethods } from '@/services/salesService'
+import type { Sale } from '@/types'
 
 /** Checkout payment channels shown on the Payment Channels Report. */
 export const PAYMENT_CHANNEL_KEYS = [
@@ -19,6 +19,15 @@ export type PaymentChannelRow = {
   amount: number
   count: number
   sharePct: number
+}
+
+export type PaymentChannelsReportResult = {
+  channels: PaymentChannelRow[]
+  total: number
+  txnCount: number
+  /** Sum of sales.total_amount in range (matches dashboard gross). */
+  salesGross?: number
+  salesCount?: number
 }
 
 const CHANNEL_LABELS: Record<PaymentChannelKey | 'other', string> = {
@@ -71,7 +80,7 @@ function emptyBuckets(): Record<PaymentChannelKey | 'other', { amount: number; c
 
 function toRows(
   buckets: Record<PaymentChannelKey | 'other', { amount: number; count: number }>,
-): { channels: PaymentChannelRow[]; total: number; txnCount: number } {
+): PaymentChannelsReportResult {
   const keys: Array<PaymentChannelKey | 'other'> = [...PAYMENT_CHANNEL_KEYS, 'other']
   const total = round2(keys.reduce((s, k) => s + buckets[k].amount, 0))
   const txnCount = keys.reduce((s, k) => s + buckets[k].count, 0)
@@ -87,117 +96,207 @@ function toRows(
   return { channels, total, txnCount }
 }
 
+function mapRpcChannels(
+  raw: Array<{ key?: string; amount?: number; count?: number }> | null | undefined,
+): PaymentChannelsReportResult {
+  const buckets = emptyBuckets()
+  for (const row of raw ?? []) {
+    const key = normalizePaymentChannel(row.key)
+    buckets[key].amount += Number(row.amount) || 0
+    buckets[key].count += Number(row.count) || 0
+  }
+  const built = toRows(buckets)
+  return built
+}
+
+async function fetchPaymentChannelsViaRpc(input: {
+  from: string
+  to: string
+  branchId?: string | null
+}): Promise<PaymentChannelsReportResult | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase.rpc('payment_channels_report', {
+    p_branch_id: input.branchId || null,
+    p_from: input.from,
+    p_to: input.to,
+  })
+  if (error) {
+    if (/does not exist|schema cache|42883/i.test(error.message)) return null
+    throw new Error(error.message)
+  }
+  const payload = (data ?? {}) as {
+    ok?: boolean
+    error?: string
+    channels?: Array<{ key?: string; amount?: number; count?: number }>
+    total?: number
+    txn_count?: number
+    sales_gross?: number
+    sales_count?: number
+  }
+  if (payload.ok === false) {
+    throw new Error(payload.error || 'Payment channels report not allowed')
+  }
+  const mapped = mapRpcChannels(payload.channels)
+  return {
+    ...mapped,
+    total: round2(Number(payload.total) ?? mapped.total),
+    txnCount: Number(payload.txn_count) ?? mapped.txnCount,
+    salesGross: Number(payload.sales_gross) || undefined,
+    salesCount: Number(payload.sales_count) || undefined,
+  }
+}
+
 /**
- * Sum customer-paid amounts by payment channel (actual `payments` rows).
- * Uses 100% paid amounts (not clinic net after doctor's fee).
- *
- * Loads sale headers first (same pattern as Franchise Sales), then payments —
- * nested PostgREST filters on payments→sales were returning empty under RLS.
+ * Sum customer-paid amounts by payment channel from Supabase (RPC — same rules as dashboard).
  */
 export async function fetchPaymentChannelsReport(input: {
   from: string
   to: string
   /** Clinic UUID, or omit / null for all branches (HQ). */
   branchId?: string | null
-}): Promise<{ channels: PaymentChannelRow[]; total: number; txnCount: number }> {
+}): Promise<PaymentChannelsReportResult> {
   const fromDay = input.from.slice(0, 10)
   const toDay = input.to.slice(0, 10)
   if (!fromDay || !toDay) {
-    return { channels: toRows(emptyBuckets()).channels, total: 0, txnCount: 0 }
+    return toRows(emptyBuckets())
   }
 
   if (isSupabaseConfigured && supabase) {
-    const toExclusive = (() => {
-      const d = new Date(`${toDay}T00:00:00+08:00`)
-      d.setDate(d.getDate() + 1)
-      return d.toISOString()
-    })()
-    const fromInclusive = `${fromDay}T00:00:00+08:00`
-    const buckets = emptyBuckets()
-
-    const saleIds: string[] = []
-    const pageSize = 500
-    for (let from = 0; from < 20_000; from += pageSize) {
-      let query = supabase
-        .from('sales')
-        .select('id')
-        .gte('created_at', fromInclusive)
-        .lt('created_at', toExclusive)
-        .or('lead_source.is.null,lead_source.neq.Migration')
-        .order('created_at', { ascending: false })
-        .range(from, from + pageSize - 1)
-
-      if (input.branchId) {
-        query = query.eq('branch_id', input.branchId)
-      }
-
-      const { data, error } = await query
-      if (error) {
-        console.error('[payment-channels] sales fetch failed', error.message)
-        break
-      }
-      const rows = (data ?? []) as Array<{ id: string }>
-      if (!rows.length) break
-      for (const r of rows) saleIds.push(r.id)
-      if (rows.length < pageSize) break
+    try {
+      const rpc = await fetchPaymentChannelsViaRpc({
+        from: fromDay,
+        to: toDay,
+        branchId: input.branchId,
+      })
+      if (rpc) return rpc
+    } catch (err) {
+      console.error('[payment-channels] rpc failed', err)
+      throw err instanceof Error ? err : new Error('Payment channels load failed')
     }
 
-    if (!saleIds.length) {
-      return toRows(buckets)
-    }
-
-    const chunkSize = 200
-    for (let i = 0; i < saleIds.length; i += chunkSize) {
-      const chunk = saleIds.slice(i, i + chunkSize)
-      const { data, error } = await supabase
-        .from('payments')
-        .select('payment_method, payment_amount, payment_status')
-        .in('sale_id', chunk)
-
-      if (error) {
-        console.error('[payment-channels] payments fetch failed', error.message)
-        continue
-      }
-
-      for (const row of (data ?? []) as Array<{
-        payment_method: string
-        payment_amount: number
-        payment_status: string
-      }>) {
-        const status = String(row.payment_status || '').toLowerCase()
-        if (status === 'failed' || status === 'cancelled' || status === 'refunded') continue
-        const amount = Number(row.payment_amount) || 0
-        if (amount <= 0) continue
-        const channel = normalizePaymentChannel(row.payment_method)
-        buckets[channel].amount += amount
-        buckets[channel].count += 1
-      }
-    }
-
-    return toRows(buckets)
+    return fetchPaymentChannelsClientDirect({
+      from: fromDay,
+      to: toDay,
+      branchId: input.branchId,
+    })
   }
 
-  await ensureBranchOpsSales({
-    branchId: input.branchId || undefined,
-    from: fromDay,
-    to: toDay,
-    syncClients: false,
-  })
-  return paymentChannelsFromSales(getSales(), fromDay, toDay, input.branchId || undefined)
+  return { channels: toRows(emptyBuckets()).channels, total: 0, txnCount: 0 }
 }
 
-/** Fallback aggregation from hydrated Sale lines (no per-split amounts). */
+/** Client-side path when RPC not migrated yet — mirrors RPC logic. */
+async function fetchPaymentChannelsClientDirect(input: {
+  from: string
+  to: string
+  branchId?: string | null
+}): Promise<PaymentChannelsReportResult> {
+  const buckets = emptyBuckets()
+  let salesGross = 0
+  let salesCount = 0
+
+  type SaleHeader = {
+    id: string
+    total_amount: number
+    payment_methods: string[] | null
+    created_at: string
+  }
+
+  const headers: SaleHeader[] = []
+  const pageSize = 500
+  for (let from = 0; from < 20_000; from += pageSize) {
+    let query = supabase!
+      .from('sales')
+      .select('id, total_amount, payment_methods, created_at')
+      .or('lead_source.is.null,lead_source.neq.Migration')
+      .order('created_at', { ascending: false })
+      .range(from, from + pageSize - 1)
+
+    if (input.branchId) query = query.eq('branch_id', input.branchId)
+
+    const { data, error } = await query
+    if (error) throw new Error(error.message)
+    const rows = (data ?? []) as SaleHeader[]
+    if (!rows.length) break
+    for (const row of rows) {
+      const manilaDay = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Manila',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date(row.created_at))
+      if (manilaDay < input.from || manilaDay > input.to) continue
+      headers.push(row)
+      salesGross += Number(row.total_amount) || 0
+      salesCount += 1
+    }
+    if (rows.length < pageSize) break
+  }
+
+  const paidBySale = new Map<string, number>()
+  const saleIds = headers.map((h) => h.id)
+
+  const chunkSize = 200
+  for (let i = 0; i < saleIds.length; i += chunkSize) {
+    const chunk = saleIds.slice(i, i + chunkSize)
+    const { data, error } = await supabase!
+      .from('payments')
+      .select('sale_id, payment_method, payment_amount, payment_status')
+      .in('sale_id', chunk)
+    if (error) throw new Error(error.message)
+
+    for (const row of (data ?? []) as Array<{
+      sale_id: string
+      payment_method: string
+      payment_amount: number
+      payment_status: string
+    }>) {
+      const status = String(row.payment_status || '').toLowerCase()
+      if (status === 'failed' || status === 'cancelled' || status === 'refunded') continue
+      const amount = Number(row.payment_amount) || 0
+      if (amount <= 0) continue
+      const channel = normalizePaymentChannel(row.payment_method)
+      buckets[channel].amount += amount
+      buckets[channel].count += 1
+      paidBySale.set(row.sale_id, (paidBySale.get(row.sale_id) ?? 0) + amount)
+    }
+  }
+
+  for (const h of headers) {
+    if ((paidBySale.get(h.id) ?? 0) > 0) continue
+    const total = Number(h.total_amount) || 0
+    if (total <= 0) continue
+    const methods = (h.payment_methods ?? [])
+      .map((m) => normalizePaymentChannel(m))
+      .filter((m) => m !== 'other')
+    const list = methods.length ? methods : (['other'] as const)
+    const share = total / list.length
+    for (const channel of list) {
+      buckets[channel].amount += share
+      buckets[channel].count += 1
+    }
+  }
+
+  const built = toRows(buckets)
+  return { ...built, salesGross: round2(salesGross), salesCount }
+}
+
+/** Fallback aggregation from hydrated Sale lines (offline / tests only). */
 export function paymentChannelsFromSales(
   sales: Sale[],
   from: string,
   to: string,
   branchId?: string,
-): { channels: PaymentChannelRow[]; total: number; txnCount: number } {
+): PaymentChannelsReportResult {
   const buckets = emptyBuckets()
   const seenHeaders = new Set<string>()
 
   for (const s of sales) {
-    const day = s.createdAt.slice(0, 10)
+    const day = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(s.createdAt))
     if (day < from || day > to) continue
     if (branchId && s.branchId !== branchId) continue
     if ((s.leadSource || '') === 'Migration') continue
@@ -206,12 +305,21 @@ export function paymentChannelsFromSales(
     if (seenHeaders.has(headerId)) continue
     seenHeaders.add(headerId)
 
-    const methods: PaymentMethod[] =
-      s.paymentMethods && s.paymentMethods.length
-        ? s.paymentMethods
-        : s.paymentMethod
-          ? [s.paymentMethod]
-          : ['cash']
+    if (s.paymentBreakdown?.length) {
+      for (const row of s.paymentBreakdown) {
+        const status = String(row.status || '').toLowerCase()
+        if (status === 'failed' || status === 'cancelled' || status === 'refunded') continue
+        const amount = Number(row.amount) || 0
+        if (amount <= 0) continue
+        const channel = normalizePaymentChannel(row.method)
+        buckets[channel].amount += amount
+        buckets[channel].count += 1
+      }
+      continue
+    }
+
+    const methods = resolveSalePaymentMethods(s)
+    if (!methods.length) continue
 
     const gross = sales
       .filter((x) => {

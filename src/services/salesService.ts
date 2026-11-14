@@ -1186,25 +1186,15 @@ export async function recordBookingCheckout(
             }).clinicNetAmount
           : null
 
-    const forceCashProcedure = isDoctorsProcedure
     const rawSplits = (opts?.paymentSplits ?? []).filter(
       (s) => s.paymentAmount > 0 && s.paymentMethod,
     )
-    const normalizedSplits = forceCashProcedure
-      ? [
-          {
-            paymentMethod: 'cash' as PaymentMethod,
-            paymentAmount:
-              rawSplits.reduce((n, s) => n + (Number(s.paymentAmount) || 0), 0) || totalAmount,
-          },
-        ]
-      : rawSplits
     const tenderRows =
-      normalizedSplits.length > 0
-        ? normalizedSplits
+      rawSplits.length > 0
+        ? rawSplits
         : [
             {
-              paymentMethod: (forceCashProcedure ? 'cash' : head.paymentMethod) as PaymentMethod,
+              paymentMethod: head.paymentMethod as PaymentMethod,
               paymentAmount: totalAmount,
             },
           ]
@@ -1288,7 +1278,7 @@ export async function recordBookingCheckout(
     const paymentRows = tenderRows.map((s) => ({
       sale_id: saleId,
       provider: 'pos' as const,
-      payment_method: forceCashProcedure ? 'cash' : s.paymentMethod,
+      payment_method: s.paymentMethod,
       payment_status: head.status === 'paid' ? 'paid' : 'pending',
       payment_amount: s.paymentAmount,
       payment_date: createdAt,
@@ -1344,35 +1334,22 @@ export async function recordBookingCheckout(
     const localSplits = (opts?.paymentSplits ?? []).filter(
       (s) => s.paymentAmount > 0 && s.paymentMethod,
     )
-    const forceCash = Boolean(head.isDoctorsProcedure)
     const localBreakdown: Sale['paymentBreakdown'] =
       localSplits.length > 0
-        ? forceCash
-          ? [
-              {
-                method: 'cash',
-                amount: localSplits.reduce((n, s) => n + (Number(s.paymentAmount) || 0), 0),
-                status: head.status === 'paid' ? 'paid' : 'pending',
-              },
-            ]
-          : localSplits.map((s) => ({
-              method: (normalizePaymentMethod(s.paymentMethod) || s.paymentMethod) as PaymentMethod,
-              amount: Number(s.paymentAmount) || 0,
-              status: head.status === 'paid' ? 'paid' : 'pending',
-            }))
+        ? localSplits.map((s) => ({
+            method: (normalizePaymentMethod(s.paymentMethod) || s.paymentMethod) as PaymentMethod,
+            amount: Number(s.paymentAmount) || 0,
+            status: head.status === 'paid' ? 'paid' : 'pending',
+          }))
         : [
             {
-              method: forceCash ? 'cash' : head.paymentMethod,
+              method: head.paymentMethod,
               amount: totalAmount,
               status: head.status === 'paid' ? 'paid' : 'pending',
             },
           ]
     persisted = persisted.map((sale) => ({
       ...sale,
-      paymentMethod: forceCash ? 'cash' : sale.paymentMethod,
-      paymentMethods: forceCash
-        ? (['cash'] as PaymentMethod[])
-        : sale.paymentMethods,
       paymentBreakdown: localBreakdown,
     }))
     for (const sale of persisted) appendExtraSale(sale)

@@ -79,6 +79,7 @@ export function PaymentChannelsReportPage() {
   const [channels, setChannels] = useState<PaymentChannelRow[]>([])
   const [total, setTotal] = useState(0)
   const [txnCount, setTxnCount] = useState(0)
+  const [salesGross, setSalesGross] = useState<number | null>(null)
 
   // Keep page in sync when HQ changes the header branch dropdown
   useEffect(() => {
@@ -125,6 +126,11 @@ export function PaymentChannelsReportPage() {
         setChannels(result.channels)
         setTotal(result.total)
         setTxnCount(result.txnCount)
+        setSalesGross(
+          typeof result.salesGross === 'number' && Number.isFinite(result.salesGross)
+            ? result.salesGross
+            : null,
+        )
       })
       .catch((err) => {
         console.error('[payment-channels] load failed', err)
@@ -132,6 +138,7 @@ export function PaymentChannelsReportPage() {
           setChannels([])
           setTotal(0)
           setTxnCount(0)
+          setSalesGross(null)
           toast.error('Could not load payment channels')
         }
       })
@@ -179,16 +186,23 @@ export function PaymentChannelsReportPage() {
         title="Payment Channels Report"
         description={
           clinicOnly
-            ? `Amounts customers paid by tender at ${branchLabel} (Cash, cards, QR PH, Owners Account).`
-            : 'Amounts customers paid by tender. Choose a branch or view all clinics.'
+            ? `Live Supabase tenders at ${branchLabel} — same Manila date rules as dashboard sales (not browser cache).`
+            : 'Live Supabase tenders by branch. Same Manila date rules as dashboard gross sales.'
         }
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <KpiCard
-          label="Total collected"
+          label="Total collected (tenders)"
           value={formatPesoExact(total)}
           icon={<Wallet className="h-4 w-4" />}
+          hint={
+            salesGross != null && Math.abs(salesGross - total) > 0.02
+              ? `Sales gross in range: ${formatPesoExact(salesGross)}`
+              : salesGross != null
+                ? 'Matches sales gross in this range'
+                : undefined
+          }
         />
         <KpiCard
           label="Payment rows"
@@ -351,10 +365,12 @@ function KpiCard({
   label,
   value,
   icon,
+  hint,
 }: {
   label: string
   value: string
   icon: ReactNode
+  hint?: string
 }) {
   return (
     <div className="rounded-[14px] border border-[#073D2C]/15 bg-gradient-to-br from-[#F7F4EC] via-white to-[#E8F0EC] px-4 py-3.5 shadow-[0_8px_24px_rgba(7,61,44,0.06)]">
@@ -365,6 +381,7 @@ function KpiCard({
         <p className="text-[11px] font-bold uppercase tracking-wide">{label}</p>
       </div>
       <p className="mt-2 font-display text-xl text-[#073D2C]">{value}</p>
+      {hint ? <p className="mt-1 text-[11px] text-slate-ui">{hint}</p> : null}
     </div>
   )
 }

@@ -50,6 +50,7 @@ import {
 import { getExpenses, subscribeExpenses } from '@/services/expenseService'
 import {
   fetchBranchCashCollected,
+  fetchBranchDoctorFeesCashDay,
   fetchBranchDashboardSalesSummary,
   fetchOrgDashboardSalesByBranch,
   type BranchDashboardSalesSummary,
@@ -739,8 +740,13 @@ function BranchOpsDashboard() {
   const [salesRpcTick, setSalesRpcTick] = useState(0)
   /** Cash on Hand: cash tenders only (RPC), per clinic and company combined. */
   const [cashCollectedRpc, setCashCollectedRpc] = useState<number | null>(null)
+  const [doctorFeesCashRpc, setDoctorFeesCashRpc] = useState<number | null>(null)
   const [companyCashCollectedRpc, setCompanyCashCollectedRpc] = useState<number | null>(null)
+  const [companyDoctorFeesCashRpc, setCompanyDoctorFeesCashRpc] = useState<number | null>(null)
   const [companyCashByBranch, setCompanyCashByBranch] = useState<Record<string, number>>({})
+  const [companyDoctorFeesByBranch, setCompanyDoctorFeesByBranch] = useState<
+    Record<string, number>
+  >({})
 
   useEffect(() => {
     const refreshSales = () => setSales(getSales())
@@ -885,28 +891,44 @@ function BranchOpsDashboard() {
     if (!showCompanyCashOnHand) {
       setCompanyCashCollectedRpc(null)
       setCompanyCashByBranch({})
+      setCompanyDoctorFeesCashRpc(null)
+      setCompanyDoctorFeesByBranch({})
       return
     }
     let cancelled = false
     const cashDay = cashBusinessDateKey()
     void Promise.all(
       COMPANY_OWNED_BRANCH_IDS.map(async (branchId) => {
-        const amount = await fetchBranchCashCollected({ branchId, cashDay })
-        return [branchId, amount] as const
+        const [cash, doctorFees] = await Promise.all([
+          fetchBranchCashCollected({ branchId, cashDay }),
+          fetchBranchDoctorFeesCashDay({ branchId, cashDay }),
+        ])
+        return [branchId, cash, doctorFees] as const
       }),
-    ).then((pairs) => {
+    ).then((rows) => {
       if (cancelled) return
       const byBranch: Record<string, number> = {}
+      const doctorByBranch: Record<string, number> = {}
       let total = 0
-      let anyRpc = false
-      for (const [id, amount] of pairs) {
-        if (amount == null) continue
-        anyRpc = true
-        byBranch[id] = amount
-        total += amount
+      let doctorTotal = 0
+      let anyCashRpc = false
+      let anyDoctorRpc = false
+      for (const [id, amount, doctorFees] of rows) {
+        if (amount != null) {
+          anyCashRpc = true
+          byBranch[id] = amount
+          total += amount
+        }
+        if (doctorFees != null) {
+          anyDoctorRpc = true
+          doctorByBranch[id] = doctorFees
+          doctorTotal += doctorFees
+        }
       }
       setCompanyCashByBranch(byBranch)
-      setCompanyCashCollectedRpc(anyRpc ? total : null)
+      setCompanyCashCollectedRpc(anyCashRpc ? total : null)
+      setCompanyDoctorFeesByBranch(doctorByBranch)
+      setCompanyDoctorFeesCashRpc(anyDoctorRpc ? doctorTotal : 0)
     })
     return () => {
       cancelled = true
@@ -916,12 +938,19 @@ function BranchOpsDashboard() {
   useEffect(() => {
     if (!scopeBranchId || showCompanyCashOnHand) {
       setCashCollectedRpc(null)
+      setDoctorFeesCashRpc(null)
       return
     }
     let cancelled = false
     const cashDay = cashBusinessDateKey()
-    void fetchBranchCashCollected({ branchId: scopeBranchId, cashDay }).then((amount) => {
-      if (!cancelled) setCashCollectedRpc(amount)
+    void Promise.all([
+      fetchBranchCashCollected({ branchId: scopeBranchId, cashDay }),
+      fetchBranchDoctorFeesCashDay({ branchId: scopeBranchId, cashDay }),
+    ]).then(([amount, doctorFees]) => {
+      if (!cancelled) {
+        setCashCollectedRpc(amount)
+        setDoctorFeesCashRpc(doctorFees ?? 0)
+      }
     })
     return () => {
       cancelled = true
@@ -1138,7 +1167,9 @@ function BranchOpsDashboard() {
           return branchId != null && companySet.has(branchId)
         })
         .reduce((n, e) => n + (e.amount || 0), 0)
-      const deducted = expenseCashOut + manualDeducted
+      const doctorFeesCashDay =
+        companyDoctorFeesCashRpc != null ? companyDoctorFeesCashRpc : 0
+      const deducted = expenseCashOut + manualDeducted + doctorFeesCashDay
       const ending = beginning + cashIn - deducted
       const confirmedToday = readCompanyConfirmedToday(
         companyCashScopes,
@@ -1151,6 +1182,7 @@ function BranchOpsDashboard() {
         deducted,
         expenseCashOut,
         manualDeducted,
+        doctorFeesCashDay,
         confirmedToday,
         cashDay,
         priorCashDay,
@@ -1169,7 +1201,8 @@ function BranchOpsDashboard() {
         (e) => e.expenseDate === cashDay && e.status === 'active' && e.deductCash,
       )
       .reduce((n, e) => n + (e.amount || 0), 0)
-    const deducted = expenseCashOut + manualDeducted
+    const doctorFeesCashDay = doctorFeesCashRpc != null ? doctorFeesCashRpc : 0
+    const deducted = expenseCashOut + manualDeducted + doctorFeesCashDay
     const ending = beginning + cashIn - deducted
     const confirmedToday = readConfirmedCash(cashScope, cashDay)
     return {
@@ -1178,6 +1211,7 @@ function BranchOpsDashboard() {
       deducted,
       expenseCashOut,
       manualDeducted,
+      doctorFeesCashDay,
       confirmedToday,
       cashDay,
       priorCashDay,
@@ -1191,10 +1225,12 @@ function BranchOpsDashboard() {
     scopedExpenses,
     cashTick,
     cashCollectedRpc,
+    doctorFeesCashRpc,
     showCompanyCashOnHand,
     companyCashScopes,
     expenses,
     companyCashCollectedRpc,
+    companyDoctorFeesCashRpc,
   ])
 
   const customerBirthdays = useMemo(() => {
@@ -1267,6 +1303,7 @@ function BranchOpsDashboard() {
               const beginning = readCashBeginning(branchId, cashDay)
               const manualDeducted = readManualCashDeducted(branchId, cashDay)
               const branchCash = companyCashByBranch[branchId] ?? 0
+              const branchDoctorFees = companyDoctorFeesByBranch[branchId] ?? 0
               const expenseCashOut = expenses
                 .filter(
                   (e) =>
@@ -1276,7 +1313,8 @@ function BranchOpsDashboard() {
                     e.branchId === branchId,
                 )
                 .reduce((n, e) => n + (e.amount || 0), 0)
-              const ending = beginning + branchCash - expenseCashOut - manualDeducted
+              const ending =
+                beginning + branchCash - expenseCashOut - manualDeducted - branchDoctorFees
               await writeConfirmedCash(branchId, cashDay, ending)
             }),
           )
@@ -1823,6 +1861,9 @@ function BranchOpsDashboard() {
               : ''}
             {cash.manualDeducted > 0
               ? ` − manual deductions (${formatPesoExact(cash.manualDeducted)})`
+              : ''}
+            {cash.doctorFeesCashDay > 0
+              ? ` − doctor procedure payouts (${formatPesoExact(cash.doctorFeesCashDay)})`
               : ''}
             {cash.confirmedToday != null
               ? ' · confirmed for tonight’s carryover'

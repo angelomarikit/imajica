@@ -251,15 +251,6 @@ export function BookingCheckoutModal({
   }, [open, total, patient.id])
 
   function handlePaymentTypeChange(next: BookingPaymentType) {
-    if (isDoctorsProcedure && next !== 'Full Payment') {
-      toast.error('Medical Procedure must be paid in Cash (Full Payment)')
-      setPaymentType('Full Payment')
-      setPaymentMethod('cash')
-      setPaymentMethod2('')
-      setPaymentAmount2('')
-      setPaymentAmount(String(total.toFixed(2)))
-      return
-    }
     setPaymentType(next)
     if (next === 'Split Payment') {
       const due = Math.round(total * 100) / 100
@@ -355,11 +346,8 @@ export function BookingCheckoutModal({
       return
     }
 
-    // Medical Procedure is always cash at full till amount.
-    const effectivePaymentMethod: BookingPaymentMethodChoice = isDoctorsProcedure
-      ? 'cash'
-      : paymentMethod
-    const effectiveSplit = isDoctorsProcedure ? false : isSplitPayment
+    const effectivePaymentMethod: BookingPaymentMethodChoice = paymentMethod
+    const effectiveSplit = isSplitPayment
     const pointsDiscount = usePoints
       ? Math.min(patient.rewardPoints ?? 0, Math.round(total * 100) / 100)
       : 0
@@ -367,7 +355,7 @@ export function BookingCheckoutModal({
 
     const amount1 = Math.max(0, Number(paymentAmount) || 0)
     const amount2 = effectiveSplit ? Math.max(0, Number(paymentAmount2) || 0) : 0
-    const isInstallment = !isDoctorsProcedure && paymentType === 'Installment'
+    const isInstallment = paymentType === 'Installment'
     if (effectiveSplit) {
       if (amount1 <= 0 || amount2 <= 0) {
         toast.error('Enter amounts for both payment processors')
@@ -492,7 +480,7 @@ export function BookingCheckoutModal({
             : line.kind === 'package'
               ? 'package'
               : 'service') as 'service' | 'package' | 'product',
-          paymentType: isDoctorsProcedure ? 'Full Payment' : paymentType,
+          paymentType,
           bookingRef,
           quantity: line.quantity,
           unitRetailPrice: line.unitPrice,
@@ -532,14 +520,14 @@ export function BookingCheckoutModal({
           downPayment: paidAmount,
           notes: [
             isDoctorsProcedure
-              ? `Doctor's Procedure · ${doctorNameTrimmed} · Fee ${formatPesoExact(doctorFeeAmount)} · Clinic net ${formatPesoExact(clinicNetAmount)} · Cash ${formatPesoExact(paidAmount)}`
+              ? `Doctor's Procedure · ${doctorNameTrimmed} · Fee ${formatPesoExact(doctorFeeAmount)} · Clinic net ${formatPesoExact(clinicNetAmount)} · ${paymentLabel(effectivePaymentMethod)} ${formatPesoExact(paidAmount)}`
               : null,
             selectedReferrer ? `Referred by: ${selectedReferrer.fullName}` : null,
             effectiveSplit && paymentMethod2
               ? `Payment: Split · ${paymentLabel(paymentMethod)} ${formatPesoExact(amount1)} + ${paymentLabel(paymentMethod2)} ${formatPesoExact(amount2)}`
               : isInstallment
                 ? `Payment: Installment · collected ${formatPesoExact(paidAmount)} of ${formatPesoExact(dueAfterPoints)} · ${paymentLabel(effectivePaymentMethod)}`
-                : `Payment: ${isDoctorsProcedure ? 'Full Payment' : paymentType} / ${paymentLabel(effectivePaymentMethod)}`,
+                : `Payment: ${paymentType} / ${paymentLabel(effectivePaymentMethod)}`,
             discount > 0 ? `Discount: ${formatPesoExact(discount)}` : null,
           ]
             .filter(Boolean)
@@ -705,7 +693,6 @@ export function BookingCheckoutModal({
                   className={fieldControl}
                   value={paymentType}
                   onChange={(e) => handlePaymentTypeChange(e.target.value as BookingPaymentType)}
-                  disabled={isDoctorsProcedure}
                 >
                   {PAYMENT_TYPES.map((t) => (
                     <option key={t} value={t}>
@@ -713,11 +700,6 @@ export function BookingCheckoutModal({
                     </option>
                   ))}
                 </select>
-                {isDoctorsProcedure ? (
-                  <p className="mt-1 text-[11px] text-slate-ui">
-                    Medical Procedure is always Cash (full amount to Cash on Hand).
-                  </p>
-                ) : null}
               </label>
               <label className="block">
                 <span className={fieldLabel}>
@@ -730,7 +712,6 @@ export function BookingCheckoutModal({
                     setPaymentMethod(e.target.value as BookingPaymentMethodChoice | '')
                   }
                   required
-                  disabled={isDoctorsProcedure}
                 >
                   <option value="">Select Payment Method</option>
                   {PAYMENT_METHODS.map((m) => (
@@ -762,7 +743,7 @@ export function BookingCheckoutModal({
                   }}
                   inputMode="decimal"
                 />
-                {paymentType === 'Installment' && !isDoctorsProcedure ? (
+                {paymentType === 'Installment' ? (
                   <p className="mt-1 text-[11px] text-slate-ui">
                     Only this amount is recorded as sales. Package total stays as remaining balance.
                   </p>
@@ -941,14 +922,7 @@ export function BookingCheckoutModal({
                       setIsDoctorsProcedure(on)
                       if (!on) {
                         setDoctorName('')
-                        return
                       }
-                      // Medical Procedure is always cash — align Cash on Hand.
-                      setPaymentType('Full Payment')
-                      setPaymentMethod('cash')
-                      setPaymentMethod2('')
-                      setPaymentAmount2('')
-                      setPaymentAmount(String(total.toFixed(2)))
                     }}
                   />
                   <span>
@@ -957,8 +931,8 @@ export function BookingCheckoutModal({
                     </span>
                     <span className="mt-0.5 block text-[11px] text-slate-ui">
                       {hendraDoctor
-                        ? 'Hendra earns 5% doctor’s commission. Customer still pays full amount in cash; clinic net sale becomes 95%.'
-                        : 'Outsourced doctor earns 20%. Customer still pays full amount in cash; clinic net sale becomes 80%.'}
+                        ? 'Hendra earns 5%. Customer may pay any method; doctor fee is paid out from cash on hand; clinic net sale becomes 95%.'
+                        : 'Outsourced doctor earns 20%. Customer may pay any method; doctor fee is paid out from cash on hand; clinic net sale becomes 80%.'}
                     </span>
                   </span>
                 </label>
