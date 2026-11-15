@@ -1522,7 +1522,7 @@ function BranchOpsDashboard() {
             }}
           />
           <span className="mt-1.5 block text-xs text-slate-500">
-            Available ending cash: {formatPesoExact(cash.ending)}
+            Available in drawer: {formatPesoExact(cash.ending)}
           </span>
         </label>
       </Dialog>
@@ -1851,21 +1851,39 @@ function BranchOpsDashboard() {
           <div className="mt-4 grid grid-cols-2 gap-3">
             <div className="rounded-xl bg-slate-50 px-3.5 py-3 ring-1 ring-slate-200/70">
               <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
-                Beginning
+                Carried over
               </p>
               <p className="mt-1.5 font-metric text-lg font-semibold text-slate-900">
                 {cash.cashReady ? formatPesoExact(cash.beginning) : '—'}
               </p>
+              {cash.cashReady ? (
+                <p className="mt-1 text-[10px] font-medium text-slate-500">
+                  Into today&apos;s drawer · {cash.cashDay}
+                </p>
+              ) : null}
             </div>
             <div className="rounded-xl bg-emerald-50 px-3.5 py-3 ring-1 ring-emerald-100">
               <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-800/70">
-                Ending
+                In drawer now
               </p>
               <p className="mt-1.5 font-metric text-lg font-semibold text-emerald-950">
                 {cash.cashReady ? formatPesoExact(cash.ending) : '—'}
               </p>
             </div>
           </div>
+          <div className="mt-3 flex items-center justify-between rounded-xl border border-dashed border-slate-200/90 bg-slate-50/60 px-3.5 py-2.5">
+            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+              Today&apos;s cash collected
+            </p>
+            <p className="font-metric text-sm font-semibold text-[#0A2E26]">
+              {cash.cashReady ? formatPesoExact(cash.cashIn) : '—'}
+            </p>
+          </div>
+          {cash.cashReady ? (
+            <p className="mt-2 text-[10px] leading-snug text-slate-500">
+              Carried over + today&apos;s cash in − today&apos;s deductions = in drawer now
+            </p>
+          ) : null}
           {cash.companyCombined ? (
             <p className="mt-2 text-[11px] font-medium text-[#073D2C]">
               Combined drawer: San Mateo, Pasig, Cainta, and Lipa.
