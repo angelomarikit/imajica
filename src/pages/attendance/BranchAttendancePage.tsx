@@ -35,6 +35,7 @@ import {
   type StaffAttendanceSummary,
 } from '@/services/attendanceService'
 import { listAccessUsers } from '@/services/userAccessService'
+import { isHeadOfficeStaffPerson } from '@/constants/headOfficeStaff'
 import {
   canAccessHqOps,
   canAccessPeopleOps,
@@ -134,19 +135,17 @@ export function BranchAttendancePage() {
         listAccessUsers(),
       ])
 
-      // This clinic's staff + Clinic Manager + org-wide Operations Manager
+      // This clinic's staff + Clinic Manager. Head Office tagged staff (Samerah) stay off clinic rosters.
       const peopleMap = new Map<string, AccessUser>()
       for (const u of users) {
         if (u.status === 'inactive') continue
-        if (!isAttendanceRosterRole(u.role)) continue
-        if (isOperationsManagerRole(u.role)) {
-          peopleMap.set(u.id, {
-            ...u,
-            branchId: u.branchId || branchId,
-            branchName: u.branchName || branchName,
-          })
+        if (
+          isOperationsManagerRole(u.role) ||
+          isHeadOfficeStaffPerson({ email: u.email, fullName: u.fullName })
+        ) {
           continue
         }
+        if (!isAttendanceRosterRole(u.role)) continue
         if (u.branchId === branchId) peopleMap.set(u.id, u)
       }
 
@@ -156,14 +155,15 @@ export function BranchAttendancePage() {
         if (peopleMap.has(punch.userId)) continue
         if (punch.branchId !== branchId) continue
         const known = users.find((u) => u.id === punch.userId)
+        if (known?.branchId && known.branchId !== branchId) continue
+        if (known && !isAttendanceRosterRole(known.role)) continue
         if (
-          known?.branchId &&
-          known.branchId !== branchId &&
-          !isOperationsManagerRole(known.role)
+          known &&
+          (isOperationsManagerRole(known.role) ||
+            isHeadOfficeStaffPerson({ email: known.email, fullName: known.fullName }))
         ) {
           continue
         }
-        if (known && !isAttendanceRosterRole(known.role)) continue
         peopleMap.set(punch.userId, {
           id: punch.userId,
           fullName: known?.fullName ?? `Staff ${punch.userId.slice(0, 8)}`,
@@ -192,7 +192,6 @@ export function BranchAttendancePage() {
       ).filter((s) => {
         const person = peopleMap.get(s.userId)
         if (!person) return false
-        if (isOperationsManagerRole(person.role)) return true
         return person.branchId === branchId
       })
 

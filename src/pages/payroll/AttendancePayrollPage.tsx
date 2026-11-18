@@ -23,6 +23,7 @@ import { PAYROLL_DEFAULT_SHIFT } from '@/constants/payrollRosterSeed'
 import {
   formatManilaTime,
   listAttendanceForBranches,
+  listAttendanceForUsers,
   listMyAttendance,
   manilaDateKey,
   subscribeAttendance,
@@ -52,6 +53,8 @@ import { preloadPlanBIncentives, subscribePlanBIncentives } from '@/services/pla
 import { preloadSalesData, subscribeSalesData } from '@/services/salesService'
 import { preloadAccessUsers } from '@/services/userAccessService'
 import { canAccessPeopleOps, isBranchOwner } from '@/utils/franchiseAccess'
+import { HQ_SENTINEL_BRANCH_ID } from '@/constants/teamAccountsSeed'
+import { isHeadOfficeStaffPerson } from '@/constants/headOfficeStaff'
 import { formatPeso } from '@/utils/currency'
 import { cn } from '@/utils/cn'
 import type { AttendancePunch } from '@/types'
@@ -86,9 +89,17 @@ function sumIncentives(
   branchAttendancePunches: AttendancePunch[] = [],
 ) {
   const branchId = row.employee.branchId
-  const branchScoped = branchId
-    ? branchAttendancePunches.filter((p) => p.branchId === branchId)
-    : branchAttendancePunches
+  // Head Office / OM: punches may be on any branch — do not drop clinic-tagged logs
+  const headOfficeEmployee = isHeadOfficeStaffPerson({
+    email: row.employee.email,
+    emails: row.employee.matchEmails,
+    fullName: row.employee.fullName,
+  }) || branchId === HQ_SENTINEL_BRANCH_ID
+  const branchScoped = headOfficeEmployee
+    ? branchAttendancePunches
+    : branchId
+      ? branchAttendancePunches.filter((p) => p.branchId === branchId)
+      : branchAttendancePunches
   // Employee punches for attendance incentive (matched timeclock / login id)
   const attendancePunches = row.matchedUserId
     ? branchScoped.filter((p) => p.userId === row.matchedUserId)
@@ -200,7 +211,35 @@ export function AttendancePayrollPage({
           Number(to.slice(8, 10)) >= 16
             ? `${month}-${String(monthLast).padStart(2, '0')}`
             : to
-        setBranchPunches(await listAttendanceForBranches(ids, punchFrom, punchTo))
+        const byBranch = await listAttendanceForBranches(ids, punchFrom, punchTo)
+        const headOfficeIds = [
+          ...new Set(
+            next
+              .filter((r) =>
+                isHeadOfficeStaffPerson({
+                  email: r.employee.email,
+                  emails: r.employee.matchEmails,
+                  fullName: r.employee.fullName,
+                }),
+              )
+              .flatMap((r) =>
+                [r.matchedUserId, r.employee.id].filter(Boolean) as string[],
+              ),
+          ),
+        ]
+        if (!headOfficeIds.length) {
+          setBranchPunches(byBranch)
+        } else {
+          const byUser = await listAttendanceForUsers(headOfficeIds, punchFrom, punchTo)
+          const seen = new Set(byBranch.map((p) => p.id))
+          const merged = [...byBranch]
+          for (const p of byUser) {
+            if (seen.has(p.id)) continue
+            seen.add(p.id)
+            merged.push(p)
+          }
+          setBranchPunches(merged)
+        }
       } catch {
         setBranchPunches([])
       }

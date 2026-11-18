@@ -4,6 +4,7 @@ import { useBranch } from '@/contexts/BranchContext'
 import {
   COMPANY_OWNED_BRANCH_IDS,
   FRANCHISE_CLINIC_BRANCH_IDS,
+  HQ_SENTINEL_BRANCH_ID,
 } from '@/constants/teamAccountsSeed'
 import { AttendancePayrollPage } from '@/pages/payroll/AttendancePayrollPage'
 import { canAccessPeopleOps, isBranchOwner } from '@/utils/franchiseAccess'
@@ -35,8 +36,28 @@ export function HrBranchSalaryPage() {
   return (
     <AttendancePayrollPage
       title="Branch Salary"
-      description="Company-owned clinics: San Mateo, Pasig, Lipa, and Cainta. 1–15 basic only; 16–end adds incentives, commission, and allowance."
-      branchIds={[...COMPANY_OWNED_BRANCH_IDS]}
+      description="Company-owned clinics (San Mateo, Pasig, Lipa, Cainta) plus Operations Manager / Head Office (Samerah Sandigan — all branches). 1–15 basic only; 16–end adds incentives, commission, and allowance."
+      branchIds={[...COMPANY_OWNED_BRANCH_IDS, HQ_SENTINEL_BRANCH_ID]}
+    />
+  )
+}
+
+/** HR: Head Office salary (e.g. Samerah Sandigan — Operations Manager). */
+export function HrHeadOfficeSalaryPage() {
+  const { user } = useAuth()
+
+  if (isBranchOwner(user) && user?.branchId) {
+    return <Navigate to={`/admin/hr/salary/${user.branchId}`} replace />
+  }
+  if (!canAccessPeopleOps(user)) {
+    return <Navigate to="/admin/dashboard" replace />
+  }
+
+  return (
+    <AttendancePayrollPage
+      title="Head Office Salary"
+      description="Payroll for Head Office / organization staff (Operations Manager). Driven by Head Office Time In / Time Out."
+      branchIds={[HQ_SENTINEL_BRANCH_ID]}
     />
   )
 }
@@ -66,6 +87,11 @@ export function HrClinicSalaryPage() {
   const { branchId } = useParams<{ branchId: string }>()
   const { user } = useAuth()
   const { branches } = useBranch()
+
+  if (branchId === HQ_SENTINEL_BRANCH_ID || branchId === 'head-office') {
+    return <Navigate to="/admin/hr/salary/head-office" replace />
+  }
+
   const branch = branches.find((b) => b.id === branchId)
   const clinicManager = isBranchOwner(user)
 

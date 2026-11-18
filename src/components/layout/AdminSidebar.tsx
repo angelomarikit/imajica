@@ -369,6 +369,11 @@ function buildHrPeopleOpsNavItems(clinics: Branch[]): NavNode[] {
       icon: Clock,
       end: true,
     },
+    {
+      to: '/admin/hr/attendance/head-office',
+      label: 'Head Office Attendance',
+      icon: Clock,
+    },
     ...clinics.map((b) => ({
       to: `/admin/hr/attendance/${b.id}`,
       label: `${shortBranchName(b.name)} Attendance`,
@@ -393,6 +398,12 @@ function buildHrPeopleOpsNavItems(clinics: Branch[]): NavNode[] {
         {
           to: '/admin/hr/salary/franchise',
           label: 'Franchise Salary',
+          icon: Banknote,
+          end: true,
+        },
+        {
+          to: '/admin/hr/salary/head-office',
+          label: 'Head Office Salary',
           icon: Banknote,
           end: true,
         },

@@ -1014,6 +1014,70 @@ export async function listAttendanceForBranches(
   return enrichAttendanceLabels(rows)
 }
 
+/**
+ * Punches for specific people regardless of branch_id.
+ * Used for Head Office / OM staff whose logs may be split across HQ + clinics.
+ */
+export async function listAttendanceForUsers(
+  userIds: string[],
+  fromDateKey?: string,
+  toDateKey?: string,
+): Promise<AttendancePunch[]> {
+  const ids = [...new Set(userIds.filter(Boolean))]
+  if (!ids.length) return []
+
+  let rows: AttendancePunch[]
+  if (isSupabaseConfigured && supabase) {
+    let query = supabase
+      .from('staff_attendance_logs')
+      .select(ATTENDANCE_SELECT)
+      .in('user_id', ids)
+      .order('punched_at', { ascending: false })
+
+    if (fromDateKey) {
+      query = query.gte('punched_at', `${fromDateKey}T00:00:00+08:00`)
+    }
+    if (toDateKey) {
+      query = query.lte('punched_at', `${toDateKey}T23:59:59.999+08:00`)
+    }
+
+    let { data, error } = await query
+
+    if (error && /location_label/i.test(error.message)) {
+      let fallback = supabase
+        .from('staff_attendance_logs')
+        .select(
+          'id, user_id, branch_id, punch_type, punched_at, photo_url, latitude, longitude, accuracy_m, created_at',
+        )
+        .in('user_id', ids)
+        .order('punched_at', { ascending: false })
+      if (fromDateKey) fallback = fallback.gte('punched_at', `${fromDateKey}T00:00:00+08:00`)
+      if (toDateKey) fallback = fallback.lte('punched_at', `${toDateKey}T23:59:59.999+08:00`)
+      const retry = await fallback
+      data = (retry.data as DbRow[] | null)?.map((r) => ({
+        ...r,
+        location_label: null,
+      })) as typeof data
+      error = retry.error
+    }
+
+    if (error) throw new Error(error.message)
+    rows = ((data as DbRow[] | null) ?? []).map(mapRow)
+  } else {
+    const idSet = new Set(ids)
+    rows = readLocal()
+      .filter((p) => idSet.has(p.userId))
+      .filter((p) => {
+        const key = manilaDateKey(p.punchedAt)
+        if (fromDateKey && key < fromDateKey) return false
+        if (toDateKey && key > toDateKey) return false
+        return true
+      })
+      .sort((a, b) => b.punchedAt.localeCompare(a.punchedAt))
+  }
+  return enrichAttendanceLabels(rows)
+}
+
 export type AttendanceSession = {
   dateKey: string
   timeIn: AttendancePunch

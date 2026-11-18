@@ -13,13 +13,15 @@ import {
 import {
   buildAttendanceSessions,
   listAttendanceForBranches,
+  listAttendanceForUsers,
   manilaDateKey,
   type AttendanceSession,
 } from '@/services/attendanceService'
 import type { AttendancePunch } from '@/types'
 import { getAccessUsers } from '@/services/userAccessService'
 import { staffNamesMatch } from '@/services/staffCommissionService'
-import { BRANCH_IDS } from '@/constants/teamAccountsSeed'
+import { isHeadOfficeStaffPerson } from '@/constants/headOfficeStaff'
+import { BRANCH_IDS, HQ_SENTINEL_BRANCH_ID } from '@/constants/teamAccountsSeed'
 import {
   getMergedPayrollRoster,
   listPayrollProfilesForHr,
@@ -459,7 +461,8 @@ function buildRow(
   }
 }
 
-const ALL_CLINIC_BRANCH_IDS = Object.values(BRANCH_IDS)
+/** Clinics + Head Office (OM / org-wide staff punches for All Salary). */
+const ALL_CLINIC_BRANCH_IDS = [...Object.values(BRANCH_IDS), HQ_SENTINEL_BRANCH_ID]
 
 function profileToRosterEmployee(p: PayrollProfileRecord): PayrollRosterEmployee {
   return {
@@ -518,7 +521,7 @@ export async function computeAttendancePayroll(
     opts?.branchIds?.length ? opts.branchIds : ALL_CLINIC_BRANCH_IDS
   const allowed = new Set(scopeIds)
   const year = Number(from.slice(0, 4)) || leaveYear()
-  const [punches, profiles, leaveRequests] = await Promise.all([
+  const [branchPunches, profiles, leaveRequests] = await Promise.all([
     listAttendanceForBranches(scopeIds, from, to),
     listPayrollProfilesForHr(),
     listLeaveRequests({ status: 'approved', year }),
@@ -531,15 +534,51 @@ export async function computeAttendancePayroll(
 
   if (opts?.branchIds?.length) {
     const punchUserIds = new Set(
-      punches.filter((p) => allowed.has(p.branchId)).map((p) => p.userId),
+      branchPunches.filter((p) => allowed.has(p.branchId)).map((p) => p.userId),
     )
+    const headOfficeScope = allowed.has(HQ_SENTINEL_BRANCH_ID)
     roster = roster.filter((e) => {
       if (e.branchId && allowed.has(e.branchId)) return true
-      // Org-wide OM (no clinic tag) appears on All Salary and each clinic salary view
-      if (!e.branchId) return true
+      // OM / Head Office tagged (Samerah): Branch Salary + Head Office Salary (org-wide), not single-clinic pages
+      if (
+        headOfficeScope &&
+        isHeadOfficeStaffPerson({
+          email: e.email,
+          emails: e.matchEmails,
+          fullName: e.fullName,
+        })
+      ) {
+        return true
+      }
       const ids = resolveUserIds(e)
       return ids.some((id) => punchUserIds.has(id))
     })
+  }
+
+  // Head Office / OM punches may live on HQ *or* a clinic — load by person so salary matches attendance
+  const headOfficeUserIds = new Set<string>()
+  for (const e of roster) {
+    if (
+      !isHeadOfficeStaffPerson({
+        email: e.email,
+        emails: e.matchEmails,
+        fullName: e.fullName,
+      })
+    ) {
+      continue
+    }
+    for (const id of resolveUserIds(e)) headOfficeUserIds.add(id)
+  }
+  let punches = branchPunches
+  if (headOfficeUserIds.size) {
+    const byUser = await listAttendanceForUsers([...headOfficeUserIds], from, to)
+    const seen = new Set(branchPunches.map((p) => p.id))
+    punches = [...branchPunches]
+    for (const p of byUser) {
+      if (seen.has(p.id)) continue
+      seen.add(p.id)
+      punches.push(p)
+    }
   }
 
   return roster

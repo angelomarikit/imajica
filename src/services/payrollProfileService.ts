@@ -13,7 +13,12 @@ import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { listDirectoryStaff } from '@/services/staffDirectoryService'
 import { listBranchAccounts } from '@/services/userAccessService'
 import type { AccessUser, EmployeeBenefitLine, Staff } from '@/types'
-import { isAttendanceRosterRole } from '@/utils/franchiseAccess'
+import {
+  HEAD_OFFICE_BRANCH_ID,
+  HEAD_OFFICE_BRANCH_LABEL,
+  isHeadOfficeStaffPerson,
+} from '@/constants/headOfficeStaff'
+import { isAttendanceRosterRole, isOperationsManagerRole } from '@/utils/franchiseAccess'
 import { formatRoleLabel } from '@/utils/roleLabels'
 import { isUuid } from '@/utils/uuid'
 
@@ -402,6 +407,34 @@ type SalarySourcePerson = {
   benefits?: EmployeeBenefitLine[]
 }
 
+/** Salary roster: attendance roles, or Head Office–tagged people (e.g. Samerah when primary role is HR). */
+function canAppearOnSalaryRoster(person: {
+  role: string
+  email?: string | null
+  fullName?: string | null
+}): boolean {
+  if (isAttendanceRosterRole(person.role) || isOperationsManagerRole(person.role)) return true
+  // Dual-role OM+HR often surfaces as HR in the directory view — still include if tagged
+  if (
+    person.role === 'HR' &&
+    isHeadOfficeStaffPerson({ email: person.email, fullName: person.fullName })
+  ) {
+    return true
+  }
+  return false
+}
+
+function applyHeadOfficeTag(person: SalarySourcePerson): SalarySourcePerson {
+  if (!isHeadOfficeStaffPerson({ email: person.email, fullName: person.fullName })) {
+    return person
+  }
+  return {
+    ...person,
+    branchId: HEAD_OFFICE_BRANCH_ID,
+    branchName: HEAD_OFFICE_BRANCH_LABEL,
+  }
+}
+
 function sourceKey(p: { id: string; email?: string | null }) {
   return (p.email || '').trim().toLowerCase() || p.id
 }
@@ -473,30 +506,31 @@ function buildCanonicalSalaryPeople(
   const canonical = new Map<string, SalarySourcePerson>()
 
   const upsert = (person: SalarySourcePerson) => {
-    if (!isAttendanceRosterRole(person.role)) return
+    if (!canAppearOnSalaryRoster(person)) return
     if (isExcludedFromSalaryRoster(person)) return
-    const key = sourceKey(person)
+    const tagged = applyHeadOfficeTag(person)
+    const key = sourceKey(tagged)
     const prev = canonical.get(key)
     if (!prev) {
-      canonical.set(key, person)
+      canonical.set(key, tagged)
       return
     }
     canonical.set(key, {
       ...prev,
-      ...person,
-      id: person.id || prev.id,
-      email: person.email || prev.email,
-      fullName: person.fullName || prev.fullName,
-      role: person.role || prev.role,
-      branchId: person.branchId ?? prev.branchId,
-      branchName: person.branchName || prev.branchName,
-      title: formatRoleLabel(person.role) || person.title || prev.title,
+      ...tagged,
+      id: tagged.id || prev.id,
+      email: tagged.email || prev.email,
+      fullName: tagged.fullName || prev.fullName,
+      role: tagged.role || prev.role,
+      branchId: tagged.branchId ?? prev.branchId,
+      branchName: tagged.branchName || prev.branchName,
+      title: formatRoleLabel(tagged.role) || tagged.title || prev.title,
       dailyRate:
-        person.dailyRate != null && person.dailyRate > 0
-          ? person.dailyRate
+        tagged.dailyRate != null && tagged.dailyRate > 0
+          ? tagged.dailyRate
           : prev.dailyRate,
       benefits:
-        person.benefits && person.benefits.length > 0 ? person.benefits : prev.benefits,
+        tagged.benefits && tagged.benefits.length > 0 ? tagged.benefits : prev.benefits,
     })
   }
 
@@ -607,6 +641,11 @@ export async function listPayrollProfilesForHr(): Promise<PayrollProfileRecord[]
         ? normalizeBenefitLines(person.benefits)
         : undefined
 
+    const headOffice = isHeadOfficeStaffPerson({
+      email: person.email || overlay.email,
+      emails: overlay.matchEmails,
+      fullName: person.fullName || overlay.fullName,
+    })
     out.push({
       ...overlay,
       userId: overlay.userId || person.id,
@@ -616,8 +655,12 @@ export async function listPayrollProfilesForHr(): Promise<PayrollProfileRecord[]
       middleName: stub.middleName || overlay.middleName,
       lastName: stub.lastName || overlay.lastName,
       email: person.email || overlay.email,
-      branchId: person.branchId ?? overlay.branchId ?? null,
-      branchLabel: person.branchName || overlay.branchLabel || '',
+      branchId: headOffice
+        ? HEAD_OFFICE_BRANCH_ID
+        : (person.branchId ?? overlay.branchId ?? null),
+      branchLabel: headOffice
+        ? HEAD_OFFICE_BRANCH_LABEL
+        : (person.branchName || overlay.branchLabel || ''),
       // Role from Branches Accounts / Staff list wins
       jobTitle: roleTitle || person.title || overlay.jobTitle || 'Staff',
       salaryPerDay: directoryRate ?? overlay.salaryPerDay,

@@ -102,12 +102,14 @@ import { HrDeductionsPage } from '@/pages/hr/HrDeductionsPage'
 import {
   HrAllBranchesAttendancePage,
   HrClinicAttendancePage,
+  HrHeadOfficeAttendancePage,
 } from '@/pages/hr/HrAttendancePages'
 import {
   HrAllSalaryPage,
   HrBranchSalaryPage,
   HrClinicSalaryPage,
   HrFranchiseSalaryPage,
+  HrHeadOfficeSalaryPage,
 } from '@/pages/hr/HrSalaryPages'
 import { HrRecruitmentPage } from '@/pages/hr/HrRecruitmentPage'
 import { HrNewHiresPage } from '@/pages/hr/HrNewHiresPage'
@@ -290,6 +292,14 @@ export default function App() {
                   }
                 />
                 <Route
+                  path="hr/salary/head-office"
+                  element={
+                    <RequirePeopleOps>
+                      <HrHeadOfficeSalaryPage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
                   path="hr/salary/:branchId"
                   element={
                     <RequireRole
@@ -304,6 +314,14 @@ export default function App() {
                   element={
                     <RequirePeopleOps>
                       <HrAllBranchesAttendancePage />
+                    </RequirePeopleOps>
+                  }
+                />
+                <Route
+                  path="hr/attendance/head-office"
+                  element={
+                    <RequirePeopleOps>
+                      <HrHeadOfficeAttendancePage />
                     </RequirePeopleOps>
                   }
                 />

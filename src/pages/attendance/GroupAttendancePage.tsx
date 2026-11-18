@@ -27,6 +27,7 @@ import {
   formatManilaDateTime,
   formatManilaTime,
   listAttendanceForBranches,
+  listAttendanceForUsers,
   manilaDateKey,
   subscribeAttendance,
   summarizeStaffAttendance,
@@ -35,7 +36,13 @@ import {
 } from '@/services/attendanceService'
 import { listAccessUsers } from '@/services/userAccessService'
 import {
+  HEAD_OFFICE_BRANCH_ID,
+  HEAD_OFFICE_BRANCH_LABEL,
+  isHeadOfficeStaffPerson,
+} from '@/constants/headOfficeStaff'
+import {
   canAccessPeopleOps,
+  HQ_SENTINEL_BRANCH_ID,
   isAttendanceRosterRole,
   isOperationsManagerRole,
 } from '@/utils/franchiseAccess'
@@ -43,12 +50,28 @@ import { cn } from '@/utils/cn'
 import { formatRoleLabel } from '@/utils/roleLabels'
 import type { AccessUser } from '@/types'
 
-function defaultRange() {
+function defaultMonthRange() {
   const to = manilaDateKey()
   const d = new Date(`${to}T12:00:00+08:00`)
   d.setDate(1)
   const from = manilaDateKey(d)
   return { from, to }
+}
+
+/** Same semi-monthly cut as Branch / Head Office Salary (1–15 or 16–end). */
+function defaultPayCutRange() {
+  const today = manilaDateKey()
+  const [y, m, dayStr] = today.split('-')
+  const day = Number(dayStr)
+  const month = `${y}-${m}`
+  const lastDay = new Date(Date.UTC(Number(y), Number(m), 0)).getUTCDate()
+  if (day <= 15) {
+    return { from: `${month}-01`, to: `${month}-15` }
+  }
+  return {
+    from: `${month}-16`,
+    to: `${month}-${String(lastDay).padStart(2, '0')}`,
+  }
 }
 
 function roleLabel(role: string) {
@@ -61,6 +84,8 @@ export type GroupAttendancePageProps = {
   /** Clinic UUIDs included in this HQ group view */
   branchIds: string[]
   exportSlug: string
+  /** Match salary screens: use current 1–15 / 16–end cut as the default date range */
+  defaultRangeMode?: 'month' | 'pay_cut'
 }
 
 /** HQ multi-branch attendance review (company branches or franchise clinics). */
@@ -69,20 +94,23 @@ export function GroupAttendancePage({
   description,
   branchIds,
   exportSlug,
+  defaultRangeMode = 'month',
 }: GroupAttendancePageProps) {
   const { user } = useAuth()
   const { branches } = useBranch()
   const allowed = canAccessPeopleOps(user)
 
-  const groupBranches = useMemo(
-    () =>
-      branches
-        .filter((b) => branchIds.includes(b.id))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [branches, branchIds],
-  )
+  const groupBranches = useMemo(() => {
+    const clinics = branches
+      .filter((b) => branchIds.includes(b.id) && b.id !== HQ_SENTINEL_BRANCH_ID)
+      .map((b) => ({ id: b.id, name: b.name, code: b.code }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    if (!branchIds.includes(HQ_SENTINEL_BRANCH_ID)) return clinics
+    return [{ id: HQ_SENTINEL_BRANCH_ID, name: 'Head Office', code: 'HQ' }, ...clinics]
+  }, [branches, branchIds])
 
-  const initial = defaultRange()
+  const initial =
+    defaultRangeMode === 'pay_cut' ? defaultPayCutRange() : defaultMonthRange()
   const [fromDraft, setFromDraft] = useState(initial.from)
   const [toDraft, setToDraft] = useState(initial.to)
   const [from, setFrom] = useState(initial.from)
@@ -150,24 +178,35 @@ export function GroupAttendancePage({
 
       const idSet = new Set(activeBranchIds)
       const branchNameById = new Map(branches.map((b) => [b.id, b.name]))
+      branchNameById.set(HQ_SENTINEL_BRANCH_ID, 'Head Office')
 
       const peopleMap = new Map<string, AccessUser>()
+      const includesHeadOffice = idSet.has(HQ_SENTINEL_BRANCH_ID)
+
+      function isHeadOfficeRosterUser(u: {
+        email?: string | null
+        fullName?: string | null
+        role?: string | null
+      }) {
+        return (
+          isOperationsManagerRole(u.role) ||
+          isHeadOfficeStaffPerson({ email: u.email, fullName: u.fullName })
+        )
+      }
+
       for (const u of users) {
         if (u.status === 'inactive') continue
-        if (!isAttendanceRosterRole(u.role)) continue
-        // Org-wide OM: always on HR attendance (All Branches or any clinic filter)
-        if (isOperationsManagerRole(u.role)) {
-          const fallbackBranch = activeBranchIds[0] ?? null
+        // Tagged Head Office people (Samerah) + OM — even if primary role is HR
+        if (isHeadOfficeRosterUser(u)) {
+          if (!includesHeadOffice) continue
           peopleMap.set(u.id, {
             ...u,
-            branchId: u.branchId && idSet.has(u.branchId) ? u.branchId : fallbackBranch,
-            branchName:
-              u.branchName ||
-              (fallbackBranch ? branchNameById.get(fallbackBranch) : null) ||
-              'All Branches',
+            branchId: HEAD_OFFICE_BRANCH_ID,
+            branchName: HEAD_OFFICE_BRANCH_LABEL,
           })
           continue
         }
+        if (!isAttendanceRosterRole(u.role)) continue
         if (u.branchId && idSet.has(u.branchId)) peopleMap.set(u.id, u)
       }
 
@@ -175,30 +214,51 @@ export function GroupAttendancePage({
         if (!idSet.has(punch.branchId)) continue
         if (peopleMap.has(punch.userId)) continue
         const known = users.find((u) => u.id === punch.userId)
+        const headOffice =
+          known != null && isHeadOfficeRosterUser(known) && includesHeadOffice
         if (
           known?.branchId &&
           !idSet.has(known.branchId) &&
-          !isOperationsManagerRole(known.role)
+          !headOffice
         ) {
           continue
         }
-        if (known && !isAttendanceRosterRole(known.role)) continue
+        if (known && !isAttendanceRosterRole(known.role) && !headOffice) continue
         peopleMap.set(punch.userId, {
           id: punch.userId,
           fullName: known?.fullName ?? `Staff ${punch.userId.slice(0, 8)}`,
           email: known?.email ?? '',
           role: known?.role ?? 'STAFF',
-          branchId: known?.branchId ?? punch.branchId,
-          branchName:
-            known?.branchName ?? branchNameById.get(punch.branchId) ?? 'Branch',
+          branchId: headOffice
+            ? HEAD_OFFICE_BRANCH_ID
+            : (known?.branchId ?? punch.branchId),
+          branchName: headOffice
+            ? HEAD_OFFICE_BRANCH_LABEL
+            : (known?.branchName ?? branchNameById.get(punch.branchId) ?? 'Branch'),
           status: known?.status ?? 'active',
         })
       }
 
       const rosterIds = new Set(peopleMap.keys())
-      const scopedPunches = punches.filter(
+      let scopedPunches = punches.filter(
         (p) => idSet.has(p.branchId) && rosterIds.has(p.userId),
       )
+
+      // OM / Head Office (Samerah): punches may be on HQ or a clinic — load by person so totals match salary
+      if (includesHeadOffice) {
+        const headOfficeIds = [...peopleMap.values()]
+          .filter((u) => isHeadOfficeRosterUser(u))
+          .map((u) => u.id)
+        if (headOfficeIds.length) {
+          const byUser = await listAttendanceForUsers(headOfficeIds, from, to)
+          const seen = new Set(scopedPunches.map((p) => p.id))
+          for (const p of byUser) {
+            if (seen.has(p.id)) continue
+            seen.add(p.id)
+            scopedPunches.push(p)
+          }
+        }
+      }
 
       const next = summarizeStaffAttendance(
         scopedPunches,
@@ -216,7 +276,7 @@ export function GroupAttendancePage({
       ).filter((s) => {
         const person = peopleMap.get(s.userId)
         if (!person) return false
-        if (isOperationsManagerRole(person.role)) return true
+        if (isHeadOfficeRosterUser(person)) return includesHeadOffice
         return Boolean(person.branchId && idSet.has(person.branchId))
       })
 
