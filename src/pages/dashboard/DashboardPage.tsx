@@ -549,6 +549,127 @@ function SalesBreakdownModal({
   )
 }
 
+type ExpenseBreakdownView = {
+  title: string
+  subtitle: string
+  branchLabel: string
+  expenses: OperationalExpense[]
+  total: number
+}
+
+function formatExpenseDate(iso: string) {
+  return new Date(`${iso}T12:00:00+08:00`).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+function ExpenseBreakdownModal({
+  open,
+  view,
+  onClose,
+}: {
+  open: boolean
+  view: ExpenseBreakdownView | null
+  onClose: () => void
+}) {
+  if (!open || !view) return null
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-end justify-center p-3 sm:items-center sm:p-6">
+      <button
+        type="button"
+        className="absolute inset-0 bg-[#041c18]/55 backdrop-blur-[2px]"
+        aria-label="Close expense breakdown"
+        onClick={onClose}
+      />
+      <div className="relative z-10 flex max-h-[min(92vh,52rem)] w-full max-w-2xl flex-col overflow-hidden rounded-[1.5rem] border border-white/10 bg-[#FBF8F2] shadow-[0_28px_80px_rgba(4,28,24,0.45)]">
+        <div className="relative shrink-0 overflow-hidden bg-[#05281F] px-6 py-6 text-white sm:px-8 sm:py-7">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -right-8 -top-10 h-36 w-36 rounded-full bg-[radial-gradient(circle,rgba(197,160,89,0.35)_0%,transparent_70%)]"
+          />
+          <div className="relative flex items-start justify-between gap-4">
+            <div className="min-w-0 pr-2">
+              <p className="inline-flex items-center gap-1.5 rounded-full bg-[#C5A059]/20 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[#F3E6C8]">
+                <Receipt className="h-3 w-3 text-[#C5A059]" />
+                Daily expense
+              </p>
+              <h3 className="mt-3 text-xl font-semibold tracking-tight sm:text-2xl">{view.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-white/65">{view.subtitle}</p>
+              <p className="mt-1.5 text-xs font-medium text-[#C5A059]">{view.branchLabel}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-full border border-white/15 bg-white/10 p-2.5 text-white hover:bg-white/15"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <p className="relative mt-6 font-metric text-[2.15rem] font-semibold leading-none tracking-tight sm:text-[2.35rem]">
+            {formatPesoExact(view.total)}
+          </p>
+          <div className="relative mt-4 flex flex-wrap gap-2.5 text-[11px] font-semibold text-white/75">
+            <span className="rounded-full bg-white/10 px-3 py-1.5">
+              {view.expenses.length} expense{view.expenses.length === 1 ? '' : 's'}
+            </span>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-6 sm:px-8 sm:py-7">
+          {view.expenses.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500">
+              No expenses logged for today.
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white">
+              <table className="w-full min-w-[28rem] text-left text-sm">
+                <thead className="bg-slate-50 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Name</th>
+                    <th className="px-4 py-3">Category</th>
+                    <th className="px-4 py-3">Branch</th>
+                    <th className="px-4 py-3 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {view.expenses.map((e) => (
+                    <tr key={e.id} className="border-t border-slate-100">
+                      <td className="px-4 py-3 font-medium text-slate-900">{e.name}</td>
+                      <td className="px-4 py-3 text-slate-600">{e.category}</td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {e.branchName || (e.scope === 'ops' ? 'Ops / HQ' : '—')}
+                      </td>
+                      <td className="px-4 py-3 text-right font-metric font-semibold text-slate-900">
+                        {formatPesoExact(e.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+            <Link
+              to="/admin/operations/expenses"
+              className="text-sm font-semibold text-[#073D2C] hover:text-emerald-800"
+              onClick={onClose}
+            >
+              Open expenses page
+            </Link>
+            <Button type="button" variant="gold" className="rounded-xl" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function DoctorFeeBreakdownModal({
   open,
   view,
@@ -727,6 +848,7 @@ function BranchOpsDashboard() {
   const [cashTick, setCashTick] = useState(0)
   const [breakdown, setBreakdown] = useState<SalesBreakdownView | null>(null)
   const [doctorBreakdown, setDoctorBreakdown] = useState<DoctorFeeBreakdownView | null>(null)
+  const [expenseBreakdown, setExpenseBreakdown] = useState<ExpenseBreakdownView | null>(null)
   const [deductOpen, setDeductOpen] = useState(false)
   const [deductAmount, setDeductAmount] = useState('')
   const [deductSaving, setDeductSaving] = useState(false)
@@ -874,6 +996,7 @@ function BranchOpsDashboard() {
     displayTotal?: number,
   ) {
     setDoctorBreakdown(null)
+    setExpenseBreakdown(null)
     setBreakdown({ title, subtitle, sales: lines, branchLabel, amountMode, displayTotal })
   }
 
@@ -884,7 +1007,20 @@ function BranchOpsDashboard() {
     totalFee: number,
   ) {
     setBreakdown(null)
+    setExpenseBreakdown(null)
     setDoctorBreakdown({ title, subtitle, branchLabel, rows, totalFee })
+  }
+
+  function openDailyExpenseBreakdown() {
+    setBreakdown(null)
+    setDoctorBreakdown(null)
+    setExpenseBreakdown({
+      title: 'Daily Expense',
+      subtitle: `Expenses logged for today (${formatRangeLabel(todayKey, todayKey)}). Not affected by the dashboard date range.`,
+      branchLabel,
+      expenses: metrics.dailyExpenses,
+      total: metrics.todayExpenseTotal,
+    })
   }
 
   /** HQ All Branches = San Mateo + Pasig + Cainta + Lipa combined. Single clinic = that drawer. */
@@ -1065,9 +1201,8 @@ function BranchOpsDashboard() {
       doctorFees = orgSales.branches.reduce((n, b) => n + b.doctorFees, 0)
     }
 
-    const expensesLikePage = scopedExpenses.filter((e) => {
+    function expenseVisible(e: OperationalExpense) {
       if (e.status !== 'active') return false
-      if (!inDateRange(e.expenseDate, rangeFrom, rangeTo)) return false
       if (franchiseOwner) {
         if (e.scope !== 'branch') return false
         const matchId = scopeBranchId && e.branchId === scopeBranchId
@@ -1075,11 +1210,19 @@ function BranchOpsDashboard() {
         if (!matchId && !matchName) return false
       }
       return true
-    })
-    const rangeExpenseTotal = expensesLikePage.reduce((n, e) => n + (e.amount || 0), 0)
-    const todayExpenseTotal = scopedExpenses
-      .filter((e) => e.expenseDate === todayKey && e.status === 'active')
-      .reduce((n, e) => n + (e.amount || 0), 0)
+    }
+
+    // Range expenses — follows dashboard date filter (overall table)
+    const expensesInRange = scopedExpenses
+      .filter((e) => expenseVisible(e) && inDateRange(e.expenseDate, rangeFrom, rangeTo))
+      .sort((a, b) => b.expenseDate.localeCompare(a.expenseDate) || b.createdAt.localeCompare(a.createdAt))
+    const rangeExpenseTotal = expensesInRange.reduce((n, e) => n + (e.amount || 0), 0)
+
+    // Daily expenses — always Manila today; ignores dashboard date range
+    const dailyExpenses = scopedExpenses
+      .filter((e) => expenseVisible(e) && e.expenseDate === todayKey)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    const todayExpenseTotal = dailyExpenses.reduce((n, e) => n + (e.amount || 0), 0)
 
     const isSingleDay = rangeFrom === rangeTo
     const includesToday = inDateRange(todayKey, rangeFrom, rangeTo)
@@ -1100,9 +1243,12 @@ function BranchOpsDashboard() {
       doctorCommissionRows: doctorSummary.byDoctor,
       rangeSalesLines: rangeSales,
       todaySalesLines: todaySales,
-      todayExpenses: includesToday && isSingleDay ? todayExpenseTotal : rangeExpenseTotal,
+      dailyExpenses,
+      expensesInRange,
+      todayExpenses: todayExpenseTotal,
       totalExpenses: rangeExpenseTotal,
-      expenseCount: expensesLikePage.length,
+      expenseCount: expensesInRange.length,
+      dailyExpenseCount: dailyExpenses.length,
       rangeExpenseTotal,
       todayExpenseTotal,
       isSingleDay,
@@ -1470,6 +1616,11 @@ function BranchOpsDashboard() {
         view={doctorBreakdown}
         onClose={() => setDoctorBreakdown(null)}
       />
+      <ExpenseBreakdownModal
+        open={Boolean(expenseBreakdown)}
+        view={expenseBreakdown}
+        onClose={() => setExpenseBreakdown(null)}
+      />
 
       {salesRpcError ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
@@ -1809,15 +1960,17 @@ function BranchOpsDashboard() {
           }
         />
         <StatCard
-          title="Total Expenses"
-          value={formatPesoExact(metrics.totalExpenses)}
+          title="Daily Expense"
+          value={formatPesoExact(metrics.todayExpenseTotal)}
+          hint={`Today only (${formatRangeLabel(todayKey, todayKey)}). Date range filter does not change this card.`}
           tag={
-            metrics.expenseCount
-              ? `${metrics.expenseCount} expense${metrics.expenseCount === 1 ? '' : 's'}`
-              : 'Operational'
+            metrics.dailyExpenseCount
+              ? `${metrics.dailyExpenseCount} today`
+              : 'Today'
           }
           tagTone="rose"
           icon={<Minus className="h-4 w-4" />}
+          onClick={openDailyExpenseBreakdown}
         />
         <StatCard
           title="Actual Sales"
@@ -2025,6 +2178,81 @@ function BranchOpsDashboard() {
           empty="No upcoming staff birthdays in the next 3 months."
           items={staffBirthdays.upcoming}
         />
+      </section>
+
+      {/* Expenses overall — follows dashboard date range */}
+      <section className="space-y-4 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.03)] sm:p-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold tracking-tight text-slate-900">
+              Expenses Overall
+            </h3>
+            <p className="mt-0.5 text-sm text-slate-500">
+              Operational expenses in {rangeLabel}. Updates when you change the date range.
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+              Period total
+            </p>
+            <p className="font-metric text-lg font-semibold text-slate-900">
+              {formatPesoExact(metrics.rangeExpenseTotal)}
+            </p>
+            <p className="text-[11px] text-slate-500">
+              {metrics.expenseCount} expense{metrics.expenseCount === 1 ? '' : 's'}
+            </p>
+          </div>
+        </div>
+        <div className="overflow-x-auto rounded-xl border border-slate-200/80">
+          <table className="w-full min-w-[36rem] text-left text-sm">
+            <thead className="bg-slate-50 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-3">Date</th>
+                <th className="px-3 py-3">Expense</th>
+                <th className="px-3 py-3">Category</th>
+                <th className="px-3 py-3">Branch</th>
+                <th className="px-3 py-3">Deduct cash</th>
+                <th className="px-3 py-3 text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {metrics.expensesInRange.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-3 py-10 text-center text-slate-500">
+                    No expenses in this date range.
+                  </td>
+                </tr>
+              ) : (
+                metrics.expensesInRange.map((e) => (
+                  <tr key={e.id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                    <td className="px-3 py-3 text-slate-600">
+                      {formatExpenseDate(e.expenseDate)}
+                    </td>
+                    <td className="px-3 py-3 font-medium text-slate-900">{e.name}</td>
+                    <td className="px-3 py-3 text-slate-600">{e.category}</td>
+                    <td className="px-3 py-3 text-slate-600">
+                      {e.branchName || (e.scope === 'ops' ? 'Ops / HQ' : '—')}
+                    </td>
+                    <td className="px-3 py-3 text-slate-600">
+                      {e.deductCash ? 'Yes' : 'No'}
+                    </td>
+                    <td className="px-3 py-3 text-right font-metric font-semibold text-slate-900">
+                      {formatPesoExact(e.amount)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex justify-end">
+          <Link
+            to="/admin/operations/expenses"
+            className="text-xs font-semibold text-slate-500 hover:text-emerald-800"
+          >
+            Manage all expenses
+          </Link>
+        </div>
       </section>
 
       <p className="pb-1 text-center text-xs text-slate-400">
