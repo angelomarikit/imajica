@@ -11,7 +11,6 @@ import {
   RequireCsrMarketing,
   RequireHqAdmin,
   RequireMarketing,
-  RequireOperationsAdmin,
   RequirePeopleOps,
   RequireRole,
   RequireStaff,
@@ -44,11 +43,8 @@ import { FranchiseOrdersPage } from '@/pages/admin/FranchiseOrdersPage'
 import { NewBranchOrderPage } from '@/pages/admin/NewBranchOrderPage'
 import { NewFranchiseOrderPage } from '@/pages/admin/NewFranchiseOrderPage'
 import { WasteInventoryPage } from '@/pages/admin/WasteInventoryPage'
-import { WarehousePage } from '@/pages/admin/WarehousePage'
-import { AddWarehouseItemPage } from '@/pages/admin/AddWarehouseItemPage'
+import { InventoryPage as ClinicInventoryPage } from '@/pages/admin/InventoryPage'
 import { ImajicaFormsPage } from '@/pages/admin/ImajicaFormsPage'
-import { StockTransfersPage } from '@/pages/admin/StockTransfersPage'
-import { NewStockTransferPage } from '@/pages/admin/NewStockTransferPage'
 import { RecruitmentLmsPage } from '@/pages/team/RecruitmentLmsPage'
 import { NewBranchPage } from '@/pages/team/NewBranchPage'
 import { TeamBranchesPage } from '@/pages/team/TeamBranchesPage'
@@ -704,37 +700,14 @@ export default function App() {
                   element={<NewFranchiseOrderPage />}
                 />
                 <Route path="operations/waste" element={<WasteInventoryPage />} />
+                <Route path="operations/inventory" element={<ClinicInventoryPage />} />
                 <Route
-                  path="operations/warehouse"
-                  element={
-                    <RequireOperationsAdmin>
-                      <WarehousePage />
-                    </RequireOperationsAdmin>
-                  }
+                  path="operations/warehouse/*"
+                  element={<Navigate to="/admin/operations/inventory" replace />}
                 />
                 <Route
-                  path="operations/warehouse/new"
-                  element={
-                    <RequireOperationsAdmin>
-                      <AddWarehouseItemPage />
-                    </RequireOperationsAdmin>
-                  }
-                />
-                <Route
-                  path="operations/stock-transfers"
-                  element={
-                    <RequireOperationsAdmin>
-                      <StockTransfersPage />
-                    </RequireOperationsAdmin>
-                  }
-                />
-                <Route
-                  path="operations/stock-transfers/new"
-                  element={
-                    <RequireOperationsAdmin>
-                      <NewStockTransferPage />
-                    </RequireOperationsAdmin>
-                  }
+                  path="operations/stock-transfers/*"
+                  element={<Navigate to="/admin/operations/inventory" replace />}
                 />
                 <Route path="forms/imajica" element={<ImajicaFormsPage />} />
                 <Route path="settings/*" element={<SettingsRoutes />} />

@@ -475,6 +475,7 @@ export function BookingCheckoutModal({
           doctorFeeAmount: isDoctorsProcedure ? doctorFeeAmount : 0,
           clinicNetAmount: isDoctorsProcedure ? clinicNetAmount : undefined,
           treatmentOrPackage: line.name,
+          catalogId: line.id,
           itemType: (line.kind === 'product'
             ? 'product'
             : line.kind === 'package'

@@ -443,6 +443,8 @@ export interface Sale {
   treatmentOrPackage: string
   /** Analytics / booking line classification */
   itemType?: 'service' | 'package' | 'product'
+  /** Catalog id so a sale can deduct the supplies linked to this line */
+  catalogId?: string
   /** Full Payment | Installment | Installment (Downpayment) | Installment Payment | Split Payment | Partial */
   paymentType?: string
   bookingRef?: string

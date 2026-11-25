@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { LowStockPanel } from '@/components/inventory/LowStockPanel'
 import { Button } from '@/components/ui/Button'
 import { Dialog } from '@/components/ui/Dialog'
 import { BRAND } from '@/constants/brand'
@@ -1640,6 +1641,8 @@ function BranchOpsDashboard() {
           Loading sales totals from Supabase…
         </div>
       ) : null}
+
+      <LowStockPanel />
 
       <Dialog
         open={deductOpen}

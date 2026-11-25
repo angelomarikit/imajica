@@ -19,7 +19,6 @@ import {
   List,
   LayoutGrid,
   FlaskConical,
-  ArrowLeftRight,
   ClipboardList,
   FileText,
   Receipt,
@@ -221,13 +220,7 @@ const hqNavSectionsBase: NavSection[] = [
             end: true,
           },
           { to: '/admin/operations/waste', label: 'Waste', icon: TriangleAlert, end: true },
-          { to: '/admin/operations/warehouse', label: 'Warehouse', icon: ShoppingBasket, end: true },
-          {
-            to: '/admin/operations/stock-transfers',
-            label: 'Stock Transfers',
-            icon: ArrowLeftRight,
-            end: true,
-          },
+          { to: '/admin/operations/inventory', label: 'Inventory', icon: Boxes, end: true },
         ],
       },
       {
@@ -639,6 +632,7 @@ function buildFranchiseOwnerNavSections(
             end: true,
           },
           { to: '/admin/operations/waste', label: 'Waste', icon: TriangleAlert, end: true },
+          { to: '/admin/operations/inventory', label: 'Inventory', icon: Boxes, end: true },
           {
             to: '/admin/catalog/products',
             label: 'Branch Stock',
@@ -809,13 +803,7 @@ function buildOperationsManagerNavSections(
               icon: ShoppingBasket,
               end: true,
             },
-            { to: '/admin/operations/warehouse', label: 'Warehouse', icon: ShoppingBasket, end: true },
-            {
-              to: '/admin/operations/stock-transfers',
-              label: 'Stock Transfers',
-              icon: ArrowLeftRight,
-              end: true,
-            },
+            { to: '/admin/operations/inventory', label: 'Inventory', icon: Boxes, end: true },
           ],
         },
         {

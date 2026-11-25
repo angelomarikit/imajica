@@ -10,6 +10,7 @@ import { getClientById, getClients, saveClient } from '@/services/clientService'
 import { safeLocalSetItem } from '@/utils/safeLocalStorage'
 import { mapBookingAuthError, requireSupabaseSession } from '@/utils/supabaseSession'
 import { isUuid } from '@/utils/uuid'
+import { applySaleStock, reverseSaleStock } from '@/services/inventoryService'
 
 /** Clinic share of an outsourced doctor's-procedure order (customer still pays 100%). */
 export const CLINIC_NET_RATE = 0.8
@@ -1055,6 +1056,7 @@ export async function deleteExtraSalesByBooking(bookingKey: string): Promise<voi
 
   if (isSupabaseConfigured && supabase) {
     if (headerIds.length > 0) {
+      await Promise.all(headerIds.map((id) => reverseSaleStock(id)))
       const { error: payErr } = await supabase.from('payments').delete().in('sale_id', headerIds)
       if (payErr) {
         console.error('[sales] delete payments failed', payErr.message)
@@ -1084,6 +1086,7 @@ export async function deleteExtraSalesByBooking(bookingKey: string): Promise<voi
       }
       const foundIds = (remoteRows ?? []).map((r) => r.id as string).filter(Boolean)
       if (foundIds.length) {
+        await Promise.all(foundIds.map((id) => reverseSaleStock(id)))
         await supabase.from('payments').delete().in('sale_id', foundIds)
         const { error: saleErr } = await supabase.from('sales').delete().in('id', foundIds)
         if (saleErr) {
@@ -1247,6 +1250,7 @@ export async function recordBookingCheckout(
       sale_id: saleId,
       item_type: line.itemType || 'service',
       item_id: null,
+      catalog_ref: line.catalogId ?? null,
       name: line.treatmentOrPackage,
       quantity: line.quantity ?? 1,
       unit_price: line.unitRetailPrice ?? line.totalAmount,
@@ -1264,12 +1268,19 @@ export async function recordBookingCheckout(
           : null,
     }))
 
-    const { data: insertedItems, error: itemError } = await supabase
+    const itemSelect =
+      'id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed'
+    let { data: insertedItems, error: itemError } = await supabase
       .from('sale_items')
       .insert(itemRows)
-      .select(
-        'id, name, quantity, unit_price, line_total, item_type, sku, sessions_total, sessions_completed',
-      )
+      .select(itemSelect)
+
+    if (itemError && /catalog_ref|schema cache|column/i.test(itemError.message)) {
+      const withoutCatalog = itemRows.map(({ catalog_ref: _catalogRef, ...row }) => row)
+      const retry = await supabase.from('sale_items').insert(withoutCatalog).select(itemSelect)
+      insertedItems = retry.data
+      itemError = retry.error
+    }
 
     if (itemError) {
       throw new Error(itemError.message || 'Could not save sale items')
@@ -1291,6 +1302,8 @@ export async function recordBookingCheckout(
       await supabase.from('sales').delete().eq('id', saleId)
       throw new Error(payError.message || 'Could not save payment — order was not completed')
     }
+
+    await applySaleStock(saleId)
 
     const splitMethods = paymentMethodsStored as PaymentMethod[]
     const methodsForSale = splitMethods.length ? splitMethods : undefined
