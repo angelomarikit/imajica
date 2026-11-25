@@ -1,8 +1,14 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { toast } from 'sonner'
 import './index.css'
 import App from './App.tsx'
 import { reclaimClinicStorageForAuth } from '@/utils/safeLocalStorage'
+import { toUserMessage } from '@/utils/userFacingError'
+
+const showError = toast.error.bind(toast)
+toast.error = (message, data) =>
+  showError(typeof message === 'string' ? toUserMessage(message) : message, data)
 
 /**
  * Clinic tablets (Lipa, etc.) accumulate old local caches. Free space on every

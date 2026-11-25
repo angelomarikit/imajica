@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { toUserMessage } from '@/utils/userFacingError'
 import {
   clearSupabaseAuthStorageKeys,
   reclaimClinicStorageForAuth,
@@ -149,5 +150,5 @@ export function mapBookingAuthError(message: string): string {
   if (/not signed in/i.test(message)) {
     return `Not signed in. ${RETRY_HINT}`
   }
-  return message
+  return toUserMessage(message)
 }

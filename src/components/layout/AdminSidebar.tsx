@@ -323,6 +323,7 @@ const hqNavSectionsBase: NavSection[] = [
 function buildMarketingNavItems(): NavItem[] {
   return [
     { to: '/admin/marketing/dashboard', label: 'KPI Overview', icon: LayoutGrid },
+    { to: '/admin/marketing/pipeline', label: 'Client pipeline', icon: Users },
     { to: '/admin/marketing/messages', label: 'Messages', icon: MessageCircle },
     { to: '/admin/marketing/ads', label: 'Ads', icon: Megaphone },
     { to: '/admin/marketing/sales', label: 'Sales & Goals', icon: TrendingUp },
@@ -352,7 +353,9 @@ function buildCsrMarketingNavSections(): NavSection[] {
       category: 'CSR Booking',
       categoryIcon: CalendarDays,
       items: [
-        { to: '/admin/csr/calendar', label: 'Calendar', icon: CalendarDays },
+        { to: '/admin/csr/calendar', label: 'Dashboard and Calendar', icon: CalendarDays },
+        { to: '/admin/csr/bookings', label: 'Bookings', icon: BarChart3 },
+        { to: '/admin/csr/pipeline', label: 'Client pipeline', icon: Users },
         { to: '/admin/csr/book', label: 'Book Appointment', icon: ShoppingBag },
         { to: '/admin/csr/patients', label: 'Patient Lookup', icon: Users },
       ],

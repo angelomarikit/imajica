@@ -8,6 +8,7 @@ import {
   Plus,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { BookingStatusStrip } from '@/components/marketing/BookingStatusStrip'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -229,7 +230,7 @@ export function CsrCalendarPage() {
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#C5A059]">
             CSR Scheduling
           </p>
-          <h1 className="font-display text-4xl text-[#073D2C]">Calendar</h1>
+          <h1 className="font-display text-4xl text-[#073D2C]">Dashboard and Calendar</h1>
           <p className="text-sm text-slate-ui">
             {selectedBranch?.name || 'Select a branch'} — same month view as clinic scheduling.
             Other clients show as “Booked” only.
@@ -240,6 +241,12 @@ export function CsrCalendarPage() {
           {selectedDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}
         </Button>
       </div>
+
+      <BookingStatusStrip
+        branchId={branchId}
+        monthCursor={monthCursor}
+        pipelinePath="/admin/csr/pipeline"
+      />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex items-center gap-2 text-sm text-slate-ui">

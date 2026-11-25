@@ -1,8 +1,9 @@
 import { getBranches, resolveClinicBranchId } from '@/services/branchService'
-import { deleteClient, getClientById, getClients, registerClient, saveClient } from '@/services/clientService'
+import { deleteClient, getClientById, getClients, registerClient, saveClient, createClientCode } from '@/services/clientService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import type { Appointment, AppointmentStatus } from '@/types'
 import { mapBookingAuthError, requireSupabaseSession } from '@/utils/supabaseSession'
+import { toUserMessage } from '@/utils/userFacingError'
 import { isUuid } from '@/utils/uuid'
 
 const STORAGE_KEY = 'imajica_appointments'
@@ -221,7 +222,8 @@ const SELECT_FIELDS = `
 `
 
 function supabaseErrorMessage(error: { message?: string; details?: string; hint?: string; code?: string }) {
-  return [error.message, error.details, error.hint].filter(Boolean).join(' — ') || 'Request failed'
+  const raw = [error.message, error.details, error.hint].filter(Boolean).join(' — ') || 'Request failed'
+  return toUserMessage(raw, 'Could not save that. Please try again.')
 }
 
 async function ensureRemoteBranch(branch: {
@@ -480,12 +482,11 @@ async function ensureRemoteClient(input: {
   }
 
   const id = crypto.randomUUID()
-  const code = `MJ-${Date.now().toString().slice(-8)}`
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('clients')
     .insert({
       id,
-      code,
+      code: createClientCode(),
       full_name: fullName,
       email: email || null,
       phone: phone || null,
@@ -496,8 +497,29 @@ async function ensureRemoteClient(input: {
     .select('id, full_name, email, phone')
     .single()
 
+  if (error && /clients_code_key/i.test(error.message)) {
+    const retry = await supabase
+      .from('clients')
+      .insert({
+        id,
+        code: createClientCode(),
+        full_name: fullName,
+        email: email || null,
+        phone: phone || null,
+        preferred_branch_id: branchId,
+        gender: 'prefer_not_to_say',
+        status: 'active',
+      })
+      .select('id, full_name, email, phone')
+      .single()
+    data = retry.data
+    error = retry.error
+  }
+
   if (error || !data) {
-    throw new Error(supabaseErrorMessage(error || { message: 'Could not create client' }))
+    throw new Error(
+      toUserMessage(error?.message, 'Could not add this patient. Please try again.'),
+    )
   }
 
   return mirror(data.id, data.full_name, data.email ?? undefined, data.phone ?? undefined)

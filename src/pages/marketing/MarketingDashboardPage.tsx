@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, Megaphone, MessageCircle, Target, TrendingUp } from 'lucide-react'
+import { BookingPipelineSummary } from '@/components/marketing/BookingPipelineSummary'
 import { AdminPageBanner } from '@/components/ui/AdminPageBanner'
 import { Card } from '@/components/ui/Card'
 import { KpiCard } from '@/components/ui/KpiCard'
@@ -76,6 +77,8 @@ export function MarketingDashboardPage() {
         title="KPI Overview"
         description="ADS → Message → Book → Show up → Buy. Track cost per message, booking rate, show-up rate, closing rate, and revenue vs ₱2M per branch."
       />
+
+      <BookingPipelineSummary pipelinePath="/admin/marketing/pipeline" />
 
       <Card className="p-4 sm:p-5">
         <p className="text-[11px] font-bold uppercase tracking-wide text-slate-ui">Funnel (this month)</p>

@@ -17,6 +17,7 @@ import {
   RequireStaff,
 } from '@/components/layout/RouteGuards'
 import { CsrBookAppointmentPage } from '@/pages/csr/CsrBookAppointmentPage'
+import { CsrBookingsPage } from '@/pages/csr/CsrBookingsPage'
 import { CsrCalendarPage } from '@/pages/csr/CsrCalendarPage'
 import { CsrPatientLookupPage } from '@/pages/csr/CsrPatientLookupPage'
 import { AuthProvider, isStaffRole, useAuth } from '@/contexts/AuthContext'
@@ -116,6 +117,7 @@ import { HrNewHiresPage } from '@/pages/hr/HrNewHiresPage'
 import { HrExitsPage } from '@/pages/hr/HrExitsPage'
 import { HrTrainingPage } from '@/pages/hr/HrTrainingPage'
 import { InventoryPage } from '@/pages/inventory/InventoryPage'
+import { BookingPipelinePage } from '@/pages/marketing/BookingPipelinePage'
 import { MarketingDashboardPage } from '@/pages/marketing/MarketingDashboardPage'
 import { MarketingMessagesPage } from '@/pages/marketing/MarketingMessagesPage'
 import { MarketingAdsPage } from '@/pages/marketing/MarketingAdsPage'
@@ -197,6 +199,22 @@ export default function App() {
                   element={
                     <RequireCsrMarketing>
                       <CsrCalendarPage />
+                    </RequireCsrMarketing>
+                  }
+                />
+                <Route
+                  path="csr/bookings"
+                  element={
+                    <RequireCsrMarketing>
+                      <CsrBookingsPage />
+                    </RequireCsrMarketing>
+                  }
+                />
+                <Route
+                  path="csr/pipeline"
+                  element={
+                    <RequireCsrMarketing>
+                      <BookingPipelinePage />
                     </RequireCsrMarketing>
                   }
                 />
@@ -586,6 +604,14 @@ export default function App() {
                   element={
                     <RequireMarketing>
                       <MarketingDashboardPage />
+                    </RequireMarketing>
+                  }
+                />
+                <Route
+                  path="marketing/pipeline"
+                  element={
+                    <RequireMarketing>
+                      <BookingPipelinePage />
                     </RequireMarketing>
                   }
                 />

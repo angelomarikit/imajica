@@ -8,6 +8,7 @@ import { getBranches, resolveClinicBranchId } from '@/services/branchService'
 import { isSupabaseConfigured, supabase } from '@/lib/supabase'
 import { safeLocalGetItem, safeLocalSetItem } from '@/utils/safeLocalStorage'
 import { isUuid } from '@/utils/uuid'
+import { toUserMessage } from '@/utils/userFacingError'
 
 const STORAGE_KEY = 'imajica_clients'
 const CHANGE_EVENT = 'imajica:clients-changed'
@@ -291,9 +292,11 @@ export function deleteClient(id: string): void {
   emitChange()
 }
 
+/** Unique patient number. Sequential MJ-000001 codes collided with imported records. */
 export function createClientCode(): string {
-  const n = getClients().length + 1
-  return `MJ-${String(n).padStart(6, '0')}`
+  const stamp = Date.now().toString(36).toUpperCase()
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase()
+  return `MJ-${stamp}${rand}`
 }
 
 export type NewClientInput = {
@@ -827,9 +830,8 @@ export async function persistClientToSupabase(client: Client): Promise<void> {
   const avatarUrl =
     client.avatarUrl && !client.avatarUrl.startsWith('data:') ? client.avatarUrl : null
 
-  const { error } = await supabase.from('clients').upsert({
+  const payload = {
     id: client.id,
-    code: client.code,
     full_name: client.fullName,
     email: client.email || null,
     phone: client.phone || null,
@@ -851,9 +853,17 @@ export async function persistClientToSupabase(client: Client): Promise<void> {
     current_medications: client.currentMedications || null,
     admin_notes: client.adminNotes || null,
     updated_at: new Date().toISOString(),
-  })
+  }
+
+  let { error } = await supabase.from('clients').upsert({ ...payload, code: client.code })
+  if (error && /clients_code_key/i.test(error.message)) {
+    const retry = await supabase
+      .from('clients')
+      .upsert({ ...payload, code: createClientCode() })
+    error = retry.error
+  }
   if (error && !/does not exist|schema cache|column/i.test(error.message)) {
-    throw new Error(error.message || 'Could not save client profile')
+    throw new Error(toUserMessage(error.message, 'Could not save this patient. Please try again.'))
   }
 }
 
