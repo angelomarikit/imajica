@@ -220,7 +220,12 @@ const hqNavSectionsBase: NavSection[] = [
             end: true,
           },
           { to: '/admin/operations/waste', label: 'Waste', icon: TriangleAlert, end: true },
-          { to: '/admin/operations/inventory', label: 'Inventory', icon: Boxes, end: true },
+          {
+            to: '/admin/operations/branch-inventory',
+            label: 'New Branch Inventory',
+            icon: Boxes,
+            end: true,
+          },
         ],
       },
       {
@@ -808,7 +813,12 @@ function buildOperationsManagerNavSections(
               icon: ShoppingBasket,
               end: true,
             },
-            { to: '/admin/operations/inventory', label: 'Inventory', icon: Boxes, end: true },
+            {
+              to: '/admin/operations/branch-inventory',
+              label: 'New Branch Inventory',
+              icon: Boxes,
+              end: true,
+            },
           ],
         },
         {

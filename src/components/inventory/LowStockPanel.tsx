@@ -46,8 +46,8 @@ export function LowStockPanel() {
             {ops && !branchId ? 'Branches and franchises' : 'This clinic'}
           </h2>
         </div>
-        <Link to="/admin/operations/inventory" className="text-sm font-semibold text-emerald-800 hover:underline">
-          Open inventory
+        <Link to="/admin/operations/branch-inventory" className="text-sm font-semibold text-emerald-800 hover:underline">
+          Open branch inventory
         </Link>
       </div>
       <ul className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">

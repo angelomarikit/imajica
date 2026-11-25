@@ -103,7 +103,7 @@ export function BranchInventoryPage() {
 
       {rows.length === 0 && !loading && !error ? (
         <p className="rounded-[12px] border border-dashed border-border px-4 py-8 text-center text-sm text-slate-ui">
-          No warehouse stock has been sent here yet. HQ or the Operations Manager can transfer items from Inventory.
+          No warehouse stock has been sent to this clinic yet.
         </p>
       ) : null}
 

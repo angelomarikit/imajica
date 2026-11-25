@@ -12,6 +12,58 @@ function monthBounds(monthCursor: Date) {
   return { from: key(start), to: key(end) }
 }
 
+function formatRate(rate: number) {
+  const rounded = Math.round(rate * 10) / 10
+  return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`
+}
+
+function ShowConversionCard({
+  counts,
+  from,
+  to,
+  pipelinePath,
+}: {
+  counts: Record<BookingBucket, number>
+  from: string
+  to: string
+  pipelinePath: string
+}) {
+  const total = BOOKING_BUCKETS.reduce((sum, bucket) => sum + counts[bucket], 0)
+  const rate = total === 0 ? null : (counts.show / total) * 100
+
+  return (
+    <article className="rounded-[12px] border border-[#E8D9B8] bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-wide text-[#8a6d2f]">Conversion</p>
+          <p className="font-metric text-3xl font-semibold text-[#073D2C]">
+            {rate == null ? '—' : formatRate(rate)}
+          </p>
+        </div>
+        <span className="rounded-full bg-[#FBF7F0] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-[#073D2C]">
+          Show
+        </span>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-[#073D2C]/80">
+        {rate == null
+          ? 'No bookings this month yet.'
+          : `${counts.show} of ${total} bookings showed up.`}
+      </p>
+      <p className="mt-3 border-t border-black/5 pt-3 text-sm leading-relaxed text-[#073D2C]">
+        Showed up divided by every booking this month: show, cancelled, pending, and rescheduled.
+      </p>
+      {rate == null ? null : (
+        <Link
+          to={pipelineHref(pipelinePath, { from, to, bucket: 'show' })}
+          className="mt-3 inline-block text-xs font-semibold text-emerald-800 hover:underline"
+        >
+          View clients
+        </Link>
+      )}
+    </article>
+  )
+}
+
 const tone: Record<BookingBucket, string> = {
   show: 'border-emerald-200 bg-emerald-50',
   cancelled: 'border-red-200 bg-red-50',
@@ -52,7 +104,7 @@ export function BookingStatusStrip({
       ) : error ? (
         <p className="text-sm text-red-700">{error}</p>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           {BOOKING_BUCKETS.map((bucket) => {
             const meta = BOOKING_BUCKET_META[bucket]
             return (
@@ -84,6 +136,7 @@ export function BookingStatusStrip({
               </article>
             )
           })}
+          <ShowConversionCard counts={counts} from={from} to={to} pipelinePath={pipelinePath} />
         </div>
       )}
     </section>

@@ -44,7 +44,6 @@ import { NewBranchOrderPage } from '@/pages/admin/NewBranchOrderPage'
 import { NewFranchiseOrderPage } from '@/pages/admin/NewFranchiseOrderPage'
 import { WasteInventoryPage } from '@/pages/admin/WasteInventoryPage'
 import { BranchInventoryPage } from '@/pages/admin/BranchInventoryPage'
-import { InventoryPage as ClinicInventoryPage } from '@/pages/admin/InventoryPage'
 import { ImajicaFormsPage } from '@/pages/admin/ImajicaFormsPage'
 import { RecruitmentLmsPage } from '@/pages/team/RecruitmentLmsPage'
 import { NewBranchPage } from '@/pages/team/NewBranchPage'
@@ -701,15 +700,18 @@ export default function App() {
                   element={<NewFranchiseOrderPage />}
                 />
                 <Route path="operations/waste" element={<WasteInventoryPage />} />
-                <Route path="operations/inventory" element={<ClinicInventoryPage />} />
                 <Route path="operations/branch-inventory" element={<BranchInventoryPage />} />
                 <Route
+                  path="operations/inventory"
+                  element={<Navigate to="/admin/operations/branch-inventory" replace />}
+                />
+                <Route
                   path="operations/warehouse/*"
-                  element={<Navigate to="/admin/operations/inventory" replace />}
+                  element={<Navigate to="/admin/operations/branch-inventory" replace />}
                 />
                 <Route
                   path="operations/stock-transfers/*"
-                  element={<Navigate to="/admin/operations/inventory" replace />}
+                  element={<Navigate to="/admin/operations/branch-inventory" replace />}
                 />
                 <Route path="forms/imajica" element={<ImajicaFormsPage />} />
                 <Route path="settings/*" element={<SettingsRoutes />} />
